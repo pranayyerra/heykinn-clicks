@@ -102,6 +102,12 @@ extension CatalogStore {
         ])
     }
 
+    /// Removes a queued unit of work. Only used to discard tasks that can be
+    /// re-queued on demand; it never touches replica state or files.
+    func deleteReplicationTask(id: UUID) throws {
+        try database.run("DELETE FROM replication_tasks WHERE id = ?;", [.text(id.uuidString)])
+    }
+
     func fetchReplicationTasks() throws -> [ReplicationTask] {
         try database.query("""
         SELECT id, asset_id, drive_id, action, state, queued_at, completed_at, error_message

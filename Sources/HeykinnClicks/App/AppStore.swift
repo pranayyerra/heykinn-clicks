@@ -1283,7 +1283,44 @@ final class AppStore: ObservableObject {
     }
 
     func backlogCount(for driveID: UUID) -> Int {
-        replicationTasks.filter { $0.driveID == driveID && $0.state == .queued }.count
+        backlogSummary(for: driveID).total
+    }
+
+    /// Describes the drive's pending work by action and estimated bytes, so
+    /// the UI can say "22,880 to verify (~120 GB)" instead of a bare number.
+    func backlogSummary(for driveID: UUID) -> BacklogSummary {
+        var summary = BacklogSummary()
+        for task in replicationTasks where task.driveID == driveID && task.state == .queued {
+            switch task.action {
+            case .copy: summary.copyCount += 1
+            case .verify: summary.verifyCount += 1
+            case .remove: summary.removeCount += 1
+            }
+            // Removals move no data; copies and verifies read the whole file.
+            if task.action != .remove, let asset = assetsByID[task.assetID] {
+                summary.estimatedBytes += asset.fileSize
+            }
+        }
+        return summary
+    }
+
+    /// Drops queued tasks of one action for a drive. Only ever discards work
+    /// that can be re-queued on demand — never replica state or files.
+    func clearQueuedTasks(for driveID: UUID, action: ReplicationAction) {
+        let doomed = replicationTasks.filter {
+            $0.driveID == driveID && $0.state == .queued && $0.action == action
+        }
+        guard !doomed.isEmpty else { return }
+        do {
+            try catalog.transaction {
+                for task in doomed { try catalog.deleteReplicationTask(id: task.id) }
+            }
+            let driveName = drivesByID[driveID]?.name ?? "drive"
+            audit(.replication, "Cleared \(doomed.count) queued \(action.rawValue) task(s) for \(driveName); they can be re-queued at any time.", driveID: driveID)
+            loadAll()
+        } catch {
+            lastError = "Could not clear queued tasks: \(error.localizedDescription)"
+        }
     }
 
     func lastCompletedSync(for driveID: UUID) -> Date? {
@@ -1408,14 +1445,54 @@ final class AppStore: ObservableObject {
             lastError = "Drive is not connected."
             return
         }
+        queueVerificationSweep(driveID, budget: .sweep)
+    }
+
+    /// Queues a bounded verification sweep: the stalest replicas first, up to
+    /// a file and byte budget. Re-hashing a whole archive in one go can mean
+    /// hours of drive reads, so a sweep takes a slice and the next sweep picks
+    /// up where this one left off. Replicas already queued are not re-queued.
+    func queueVerificationSweep(_ driveID: UUID, budget: VerificationBudget = .sweep) {
+        guard let drive = drivesByID[driveID], connectedMounts[driveID] != nil else {
+            lastError = "Drive is not connected."
+            return
+        }
+        let alreadyQueued = Set(
+            replicationTasks
+                .filter { $0.driveID == driveID && $0.state == .queued && $0.action == .verify }
+                .map(\.assetID)
+        )
+        // Oldest verification first; never-verified replicas come first of all.
+        let candidates = replicaStates
+            .filter {
+                $0.driveID == driveID
+                    && ($0.state == .present || $0.state == .stale || $0.state == .drift)
+                    && !alreadyQueued.contains($0.assetID)
+            }
+            .sorted { ($0.lastVerifiedAt ?? .distantPast) < ($1.lastVerifiedAt ?? .distantPast) }
+
+        var queued = 0
+        var bytes: Int64 = 0
         do {
-            let expected = replicaStates.filter {
-                $0.driveID == driveID && ($0.state == .present || $0.state == .stale || $0.state == .drift)
+            try catalog.transaction {
+                for replica in candidates {
+                    if queued >= budget.maxFiles || bytes >= budget.maxBytes { break }
+                    try enqueueTask(assetID: replica.assetID, driveID: driveID, action: .verify)
+                    queued += 1
+                    bytes += assetsByID[replica.assetID]?.fileSize ?? 0
+                }
             }
-            for replica in expected {
-                try enqueueTask(assetID: replica.assetID, driveID: driveID, action: .verify)
+            guard queued > 0 else {
+                audit(.drive, "Verification sweep on \(drive.name): nothing due.", driveID: driveID)
+                return
             }
-            audit(.drive, "Queued verification of \(expected.count) replica(s) on \(drive.name).", driveID: driveID)
+            let remaining = candidates.count - queued
+            audit(
+                .drive,
+                "Queued a verification sweep of \(queued) replica(s) (~\(Formatters.bytes.string(fromByteCount: bytes))) on \(drive.name)"
+                    + (remaining > 0 ? "; \(remaining) more will follow in later sweeps." : "."),
+                driveID: driveID
+            )
             loadAll()
             syncDrive(driveID)
         } catch {

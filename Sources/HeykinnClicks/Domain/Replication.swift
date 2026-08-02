@@ -51,6 +51,43 @@ enum ReplicationTaskState: String, Codable, Hashable {
     case failed
 }
 
+/// What a drive's pending backlog actually consists of. A bare task count
+/// hides the difference between "copy 3 files" and "re-read 120 GB", which are
+/// wildly different asks of the user's time and drive.
+struct BacklogSummary: Equatable {
+    var copyCount: Int = 0
+    var verifyCount: Int = 0
+    var removeCount: Int = 0
+    /// Bytes that must be read or written to drain the backlog.
+    var estimatedBytes: Int64 = 0
+
+    var total: Int { copyCount + verifyCount + removeCount }
+    var isEmpty: Bool { total == 0 }
+
+    /// Human description of the work, heaviest action first.
+    var description: String {
+        var parts: [String] = []
+        if copyCount > 0 { parts.append("\(copyCount) to copy") }
+        if verifyCount > 0 { parts.append("\(verifyCount) to verify") }
+        if removeCount > 0 { parts.append("\(removeCount) to remove") }
+        guard !parts.isEmpty else { return "nothing pending" }
+        let work = parts.joined(separator: ", ")
+        guard estimatedBytes > 0 else { return work }
+        return "\(work) (~\(ByteCountFormatter.string(fromByteCount: estimatedBytes, countStyle: .file)))"
+    }
+}
+
+/// Limits how much verification a single sweep queues. Re-hashing a whole
+/// archive is legitimate work but must never be dumped on the drive as one
+/// enormous burst; sweeps take the stalest replicas first and stop at a budget.
+struct VerificationBudget {
+    var maxFiles: Int
+    var maxBytes: Int64
+
+    static let sweep = VerificationBudget(maxFiles: 500, maxBytes: 4 * 1024 * 1024 * 1024)
+    static let unlimited = VerificationBudget(maxFiles: .max, maxBytes: .max)
+}
+
 /// Live progress of an in-flight sync against one drive. Present only while a
 /// sync runs; cancellation or disconnect simply leaves unprocessed tasks
 /// queued, so resuming is just running sync again.

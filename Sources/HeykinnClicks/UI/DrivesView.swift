@@ -143,6 +143,7 @@ struct DrivesView: View {
     private func driveRow(_ drive: ManagedDrive) -> some View {
         let isConnected = store.connectedMounts[drive.id] != nil
         let backlog = store.backlogCount(for: drive.id)
+        let summary = store.backlogSummary(for: drive.id)
         let driftCount = store.replicaStates.filter { $0.driveID == drive.id && $0.state == .drift }.count
         let progress = store.syncProgress?.driveID == drive.id ? store.syncProgress : nil
 
@@ -161,7 +162,7 @@ struct DrivesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 HStack(spacing: 12) {
-                    Label("\(backlog) pending", systemImage: "tray.full")
+                    Label(summary.isEmpty ? "nothing pending" : summary.description, systemImage: "tray.full")
                         .foregroundStyle(backlog > 0 ? .orange : .secondary)
                     Label("Last sync \(Formatters.relative(store.lastCompletedSync(for: drive.id)))", systemImage: "arrow.triangle.2.circlepath")
                         .foregroundStyle(.secondary)
@@ -176,11 +177,28 @@ struct DrivesView: View {
             if progress != nil {
                 Button("Cancel") { store.cancelSync() }
             } else if isConnected {
-                Button("Verify") { store.verifyDrive(drive.id) }
-                    .disabled(store.isSyncing)
-                Button("Sync now") { store.syncDrive(drive.id) }
+                Menu {
+                    Button("Verify a sample now") { store.queueVerificationSweep(drive.id) }
+                        .disabled(store.isSyncing)
+                    if summary.verifyCount > 0 {
+                        Button("Clear \(summary.verifyCount) queued verification(s)", role: .destructive) {
+                            store.clearQueuedTasks(for: drive.id, action: .verify)
+                        }
+                    }
+                } label: {
+                    Text("Verify")
+                } primaryAction: {
+                    store.queueVerificationSweep(drive.id)
+                }
+                .disabled(store.isSyncing)
+                .help("Re-hashes a bounded batch of the least recently verified replicas, oldest first.")
+
+                Button(syncButtonTitle(summary)) { store.syncDrive(drive.id) }
                     .buttonStyle(.borderedProminent)
                     .disabled(store.isSyncing || backlog == 0)
+                    .help(summary.isEmpty
+                          ? "Nothing pending for this drive."
+                          : "Works through this drive's queue: \(summary.description).")
             }
         }
         if let progress {
@@ -198,6 +216,15 @@ struct DrivesView: View {
         }
         .padding(10)
         .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+    }
+
+    /// Says what the run will actually do — "Sync now" reads like copying,
+    /// which is misleading when the queue is entirely verification.
+    private func syncButtonTitle(_ summary: BacklogSummary) -> String {
+        if summary.isEmpty { return "Sync now" }
+        if summary.copyCount == 0 && summary.removeCount == 0 { return "Verify \(summary.verifyCount) now" }
+        if summary.verifyCount == 0 && summary.removeCount == 0 { return "Copy \(summary.copyCount) now" }
+        return "Process \(summary.total) now"
     }
 
     private func registrationSheet(_ volume: VolumeInfo) -> some View {
