@@ -221,6 +221,40 @@ runs the zero-button pipeline: **scan → reconcile → extract → import**.
   replicas (it is storage then, not a redundant copy). Verification streams
   archive-backed content and detects drift like any managed replica.
 
+### Durability and catalog backup
+
+The media survives on the drives, but residency, replica state, duplicate
+grouping, and import history exist **only** in the catalog — so the catalog is
+protected on three levels.
+
+- **Atomic commits.** Each import chunk writes its assets, replica states,
+  batch counters, and resume checkpoint in one transaction. A crash can lose
+  at most the chunk in flight, never a half-written record.
+- **Resumable imports.** Archives carry a checkpoint (files processed / files
+  seen), so an interrupted part resumes rather than re-hashing gigabytes. The
+  index is only trusted while the file total still matches.
+- **Startup reconciliation.** Every launch requeues replication tasks that
+  were interrupted mid-flight, recovers missing import-batch records from
+  their assets, and deletes orphaned staged files, abandoned extraction
+  workspaces, and half-written `.extracting` folders. It only removes files
+  the catalog does not reference.
+- **Verified snapshots on the drives.** `VACUUM INTO` writes a consistent,
+  compacted copy of the catalog to `HeykinnClicksCatalogBackups/` at each
+  connected drive's root — outside the replica root, so replica cleanup can
+  never touch it. Every snapshot is written under a temporary name, read back
+  **read-only** (integrity check plus an asset count), and only then renamed
+  into place; a snapshot that fails verification is never published. The five
+  newest per drive are kept. Backups run at launch, after an import, and when
+  a drive connects, and freshness is judged from the snapshots actually
+  present on that drive rather than a remembered timestamp — so a drive whose
+  backups were deleted is caught immediately. Failures are written to the
+  audit log, not just shown once.
+
+**To restore**: quit the app and copy a snapshot over
+`~/Library/Application Support/HeykinnClicks/catalog.sqlite` (delete the
+`-wal` and `-shm` files beside it). A snapshot is an ordinary SQLite database —
+inspect one any time with `sqlite3 <snapshot> "SELECT count(*) FROM assets;"`.
+
 ### Drive-connect prompt
 
 When an unmanaged external volume mounts, the app asks what it should be:

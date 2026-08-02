@@ -153,6 +153,13 @@ final class CatalogStore {
         try? database.exec("ALTER TABLE takeout_archives ADD COLUMN imported_file_total INTEGER NOT NULL DEFAULT 0;")
     }
 
+    /// Writes a consistent, compacted copy of the whole catalog to `path`.
+    /// Safe to run while the catalog is in use; the destination must not exist.
+    func vacuumInto(path: String) throws {
+        let escaped = path.replacingOccurrences(of: "'", with: "''")
+        try database.exec("VACUUM INTO '\(escaped)';")
+    }
+
     /// Groups writes into one atomic unit; see `SQLiteDatabase.transaction`.
     func transaction<T>(_ body: () throws -> T) throws -> T {
         try database.transaction(body)

@@ -29,6 +29,45 @@ struct DrivesView: View {
                     }
                 }
 
+                GroupBox("Catalog backup") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text("The media survives on the drives, but residency, replica state, duplicate grouping, and import history exist only in the catalog. Verified snapshots are written to each connected drive so losing the Mac does not lose the metadata.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        HStack {
+                            if let latest = store.latestCatalogSnapshot {
+                                Label(
+                                    "Last snapshot \(Formatters.relative(latest.createdAt)) · \(Formatters.bytes.string(fromByteCount: latest.sizeBytes))",
+                                    systemImage: "checkmark.shield"
+                                )
+                                .font(.callout)
+                                .foregroundStyle(.green)
+                            } else {
+                                Label("No snapshot yet", systemImage: "exclamationmark.shield")
+                                    .font(.callout)
+                                    .foregroundStyle(.orange)
+                            }
+                            Spacer()
+                            Button("Back up now") { store.backupCatalog(force: true) }
+                                .disabled(store.connectedMounts.isEmpty)
+                        }
+                        ForEach(store.drives) { drive in
+                            let snapshots = store.catalogSnapshots[drive.id] ?? []
+                            if !snapshots.isEmpty {
+                                Text("\(drive.name): \(snapshots.count) snapshot(s), newest \(snapshots[0].displayName)")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                        }
+                        if store.connectedMounts.isEmpty {
+                            Text("Connect a managed drive to store a snapshot.")
+                                .font(.caption)
+                                .foregroundStyle(.orange)
+                        }
+                    }
+                    .padding(6)
+                }
+
                 GroupBox("Mac staging") {
                     VStack(alignment: .leading, spacing: 6) {
                         LabeledRow(label: "Location", value: store.staging.rootURL.path)

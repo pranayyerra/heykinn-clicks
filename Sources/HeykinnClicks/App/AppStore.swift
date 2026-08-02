@@ -127,6 +127,8 @@ final class AppStore: ObservableObject {
         rescanDrives()
         // Runs after the drive scan so drive-resident leftovers are visible.
         reconcileAfterRestart()
+        refreshCatalogSnapshots()
+        backupCatalog()
 
         // Volume mount notifications cover the common case; a slow poll covers
         // anything they miss (e.g. network volumes, missed events).
@@ -135,6 +137,66 @@ final class AppStore: ObservableObject {
                 self?.rescanDrives()
             }
         }
+    }
+
+    // MARK: - Catalog backup
+
+    /// Snapshots per drive, newest first — surfaced in Drives & Health.
+    @Published private(set) var catalogSnapshots: [UUID: [CatalogSnapshot]] = [:]
+
+    /// A drive is due a snapshot if it has none or its newest is older than this.
+    private static let catalogBackupInterval: TimeInterval = 3600
+
+    /// Backs up the catalog to every connected managed drive, verifying each
+    /// snapshot by reading it back. `force` bypasses the freshness check.
+    ///
+    /// Freshness is judged per drive from the snapshots actually present on
+    /// that drive — not from a remembered timestamp. A drive that has never
+    /// been backed up, or whose backups were deleted, is caught immediately
+    /// instead of waiting out an interval that has nothing to do with it.
+    func backupCatalog(force: Bool = false) {
+        guard !connectedMounts.isEmpty else { return }
+        let expected = assets.count
+        var wrote = false
+
+        for (driveID, mountURL) in connectedMounts {
+            let driveName = drivesByID[driveID]?.name ?? "drive"
+            if !force {
+                let newest = CatalogBackupService.listSnapshots(onMount: mountURL, driveID: driveID).first
+                if let newest, Date().timeIntervalSince(newest.createdAt) < Self.catalogBackupInterval {
+                    continue
+                }
+            }
+            do {
+                let snapshot = try CatalogBackupService.writeSnapshot(
+                    from: catalog, toMount: mountURL, driveID: driveID, expectedAssetCount: expected
+                )
+                wrote = true
+                audit(
+                    .system,
+                    "Catalog snapshot written to \(driveName): \(snapshot.displayName) (\(expected) assets, \(Formatters.bytes.string(fromByteCount: snapshot.sizeBytes))), verified.",
+                    driveID: driveID
+                )
+            } catch {
+                // Recorded, not just shown: a backup that silently stopped
+                // working is the failure mode that matters most here.
+                audit(.system, "Catalog backup to \(driveName) FAILED: \(error.localizedDescription)", driveID: driveID)
+                lastError = "Catalog backup to \(driveName) failed: \(error.localizedDescription)"
+            }
+        }
+        if wrote { refreshCatalogSnapshots() }
+    }
+
+    func refreshCatalogSnapshots() {
+        var found: [UUID: [CatalogSnapshot]] = [:]
+        for (driveID, mountURL) in connectedMounts {
+            found[driveID] = CatalogBackupService.listSnapshots(onMount: mountURL, driveID: driveID)
+        }
+        catalogSnapshots = found
+    }
+
+    var latestCatalogSnapshot: CatalogSnapshot? {
+        catalogSnapshots.values.flatMap { $0 }.max { $0.createdAt < $1.createdAt }
     }
 
     // MARK: - Startup integrity
@@ -728,6 +790,7 @@ final class AppStore: ObservableObject {
         isImporting = false
         takeoutActivity = nil
         loadAll()
+        backupCatalog(force: true)
     }
 
     /// Creates the covering GoogleCloud → Local job on the first chunk and
@@ -982,6 +1045,10 @@ final class AppStore: ObservableObject {
             // Local presence only — which is the one thing hashing proves.
             await performTakeoutImport(toImport.map(\.id), assumeStillInGoogle: false)
         }
+
+        // The catalog just changed materially (new assets, new replica
+        // claims); snapshot it onto the drive it describes.
+        backupCatalog()
 
         // Zips are deliberately NOT fingerprinted here: hashing every zip on a
         // drive is ~128 GB of reads for a benefit only a future second drive

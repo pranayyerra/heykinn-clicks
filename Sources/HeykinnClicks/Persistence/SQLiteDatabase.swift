@@ -52,12 +52,18 @@ enum SQLValue {
 final class SQLiteDatabase {
     private var handle: OpaquePointer?
 
-    init(path: String) throws {
-        let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
+    /// `readOnly` opens without creating or modifying anything — required when
+    /// inspecting a backup, since a read-write open would switch it to WAL and
+    /// leave `-shm`/`-wal` journals beside the snapshot.
+    init(path: String, readOnly: Bool = false) throws {
+        let flags = readOnly
+            ? SQLITE_OPEN_READONLY | SQLITE_OPEN_FULLMUTEX
+            : SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK else {
             let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
             throw SQLiteError.openFailed(message)
         }
+        guard !readOnly else { return }
         try exec("PRAGMA journal_mode = WAL;")
         try exec("PRAGMA foreign_keys = ON;")
     }
