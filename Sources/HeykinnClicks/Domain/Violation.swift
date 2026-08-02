@@ -20,7 +20,7 @@ enum ViolationKind: String, Codable, CaseIterable, Hashable {
         case .multiDomainCoexistence: return "Multi-domain coexistence"
         case .residencyPresenceMismatch: return "Residency/presence mismatch"
         case .migrationCleanupPending: return "Migration cleanup pending"
-        case .replicaDrift: return "Replica drift"
+        case .replicaDrift: return "File changed on disk"
         case .orphanReplica: return "Orphan replica"
         }
     }

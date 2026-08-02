@@ -831,7 +831,7 @@ final class AppStore: ObservableObject {
                 assetIDs: imported.map(\.id),
                 from: .googleCloud,
                 to: .local,
-                note: "Takeout import (\(label)). You stated these are still in Google Photos — the app cannot check that itself. Verify the local copies replicate to both drives, then delete the originals from Google to finish."
+                note: "Takeout import (\(label)). You stated these are still in Google Photos — the app cannot check that itself. Wait until the local copies have replicated to both drives, then delete the originals from Google to finish."
             )
             job = try MigrationService.start(job)
             let effect = try MigrationService.markTargetCopyComplete(job, assets: imported)
@@ -1483,13 +1483,13 @@ final class AppStore: ObservableObject {
                 }
             }
             guard queued > 0 else {
-                audit(.drive, "Verification sweep on \(drive.name): nothing due.", driveID: driveID)
+                audit(.drive, "File check on \(drive.name): nothing due.", driveID: driveID)
                 return
             }
             let remaining = candidates.count - queued
             audit(
                 .drive,
-                "Queued a verification sweep of \(queued) replica(s) (~\(Formatters.bytes.string(fromByteCount: bytes))) on \(drive.name)"
+                "Queued a file check of \(queued) file(s) (~\(Formatters.bytes.string(fromByteCount: bytes))) on \(drive.name)"
                     + (remaining > 0 ? "; \(remaining) more will follow in later sweeps." : "."),
                 driveID: driveID
             )

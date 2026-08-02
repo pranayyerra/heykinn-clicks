@@ -190,8 +190,8 @@ struct AssetDetailView: View {
             .compactMap { replica in
                 guard let drive = store.drivesByID[replica.driveID] else { return nil }
                 let connected = store.connectedMounts[drive.id] != nil ? "connected" : "offline"
-                let verified = replica.lastVerifiedAt.map { "verified \(Formatters.relative($0))" } ?? "never verified"
-                return (replica.id, "\(drive.name) (\(connected)): \(replica.state.displayName), \(verified)")
+                let checked = replica.lastVerifiedAt.map { "checked \(Formatters.relative($0))" } ?? "never checked"
+                return (replica.id, "\(drive.name) (\(connected)): \(replica.state.displayName), \(checked)")
             }
     }
 }

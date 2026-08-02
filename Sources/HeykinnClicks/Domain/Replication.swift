@@ -22,7 +22,7 @@ enum ReplicaFileState: String, Codable, Hashable {
         case .present: return "Present"
         case .stale: return "Stale"
         case .missing: return "Missing"
-        case .drift: return "Drift"
+        case .drift: return "Changed on disk"
         }
     }
 }
@@ -68,7 +68,7 @@ struct BacklogSummary: Equatable {
     var description: String {
         var parts: [String] = []
         if copyCount > 0 { parts.append("\(copyCount) to copy") }
-        if verifyCount > 0 { parts.append("\(verifyCount) to verify") }
+        if verifyCount > 0 { parts.append("\(verifyCount) to check") }
         if removeCount > 0 { parts.append("\(removeCount) to remove") }
         guard !parts.isEmpty else { return "nothing pending" }
         let work = parts.joined(separator: ", ")

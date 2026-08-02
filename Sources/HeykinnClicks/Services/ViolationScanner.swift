@@ -51,7 +51,7 @@ enum ViolationScanner {
                     assetID: replica.assetID,
                     driveID: replica.driveID,
                     migrationJobID: nil,
-                    detail: "\(asset.originalFilename) on \(driveName) no longer matches its catalog hash."
+                    detail: "\(asset.originalFilename) on \(driveName) is no longer byte-for-byte what was imported — the file on the drive may be damaged. Re-copy it from the other drive's good copy."
                 ))
             }
 

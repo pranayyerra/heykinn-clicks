@@ -13,6 +13,15 @@ struct DrivesView: View {
                 Toggle("Automatically sync a managed drive when it connects", isOn: $store.autoSyncOnConnect)
                     .toggleStyle(.switch)
 
+                Label {
+                    Text("**Checking for damage** re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It has to read every byte, so it runs in batches rather than all at once.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } icon: {
+                    Image(systemName: "checkmark.shield")
+                        .foregroundStyle(.secondary)
+                }
+
                 GroupBox("Managed drives") {
                     if store.drives.isEmpty {
                         Text("No drives registered yet. The archive still works — imports land in Mac staging — but Local assets stay Staged Only until you register two drives.")
@@ -178,20 +187,20 @@ struct DrivesView: View {
                 Button("Cancel") { store.cancelSync() }
             } else if isConnected {
                 Menu {
-                    Button("Verify a sample now") { store.queueVerificationSweep(drive.id) }
+                    Button("Check a batch now") { store.queueVerificationSweep(drive.id) }
                         .disabled(store.isSyncing)
                     if summary.verifyCount > 0 {
-                        Button("Clear \(summary.verifyCount) queued verification(s)", role: .destructive) {
+                        Button("Clear \(summary.verifyCount) queued check(s)", role: .destructive) {
                             store.clearQueuedTasks(for: drive.id, action: .verify)
                         }
                     }
                 } label: {
-                    Text("Verify")
+                    Text("Check for damage")
                 } primaryAction: {
                     store.queueVerificationSweep(drive.id)
                 }
                 .disabled(store.isSyncing)
-                .help("Re-hashes a bounded batch of the least recently verified replicas, oldest first.")
+                .help("Re-reads a batch of files on this drive and confirms they are still byte-for-byte what was imported. Starts with the ones checked longest ago.")
 
                 Button(syncButtonTitle(summary)) { store.syncDrive(drive.id) }
                     .buttonStyle(.borderedProminent)
@@ -222,7 +231,7 @@ struct DrivesView: View {
     /// which is misleading when the queue is entirely verification.
     private func syncButtonTitle(_ summary: BacklogSummary) -> String {
         if summary.isEmpty { return "Sync now" }
-        if summary.copyCount == 0 && summary.removeCount == 0 { return "Verify \(summary.verifyCount) now" }
+        if summary.copyCount == 0 && summary.removeCount == 0 { return "Check \(summary.verifyCount) files now" }
         if summary.verifyCount == 0 && summary.removeCount == 0 { return "Copy \(summary.copyCount) now" }
         return "Process \(summary.total) now"
     }

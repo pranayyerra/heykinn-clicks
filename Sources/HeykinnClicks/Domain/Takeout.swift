@@ -128,7 +128,7 @@ enum TakeoutPhase: String, Hashable {
     var displayName: String {
         switch self {
         case .scanning: return "Scanning"
-        case .reconciling: return "Verifying existing copies"
+        case .reconciling: return "Checking existing copies"
         case .extracting: return "Extracting"
         case .importing: return "Importing"
         case .fingerprinting: return "Fingerprinting"

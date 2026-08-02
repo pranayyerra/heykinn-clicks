@@ -23,8 +23,8 @@ enum ProtectionState: String, Codable, Hashable {
         case .stagedOnly: return "Staged only"
         case .replicatedToOneDrive: return "One drive"
         case .fullyReplicated: return "Fully replicated"
-        case .driftDetected: return "Drift detected"
-        case .verificationOverdue: return "Verification overdue"
+        case .driftDetected: return "Damaged copy found"
+        case .verificationOverdue: return "Not checked recently"
         case .notApplicable: return "—"
         }
     }

@@ -7,7 +7,7 @@ final class BacklogSummaryTests: XCTestCase {
         var summary = BacklogSummary(copyCount: 0, verifyCount: 22_880, removeCount: 0)
         summary.estimatedBytes = 120 * 1024 * 1024 * 1024
         let text = summary.description
-        XCTAssertTrue(text.contains("22880 to verify"), text)
+        XCTAssertTrue(text.contains("22880 to check"), text)
         XCTAssertTrue(text.contains("GB"), "Size must be stated so the cost is visible: \(text)")
         XCTAssertEqual(summary.total, 22_880)
         XCTAssertFalse(summary.isEmpty)
@@ -24,7 +24,7 @@ final class BacklogSummaryTests: XCTestCase {
         summary.estimatedBytes = 0
         let text = summary.description
         XCTAssertTrue(text.contains("3 to copy"), text)
-        XCTAssertTrue(text.contains("5 to verify"), text)
+        XCTAssertTrue(text.contains("5 to check"), text)
         XCTAssertTrue(text.contains("2 to remove"), text)
         XCTAssertFalse(text.contains("("), "No size shown when nothing is known: \(text)")
     }
