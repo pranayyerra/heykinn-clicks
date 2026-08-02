@@ -100,6 +100,28 @@ struct AssetDetailView: View {
                         .padding(6)
                     }
 
+                    if let motion = store.livePhotoMotion(for: asset) {
+                        GroupBox("Live Photo") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("The moving half is kept as its own file, so it gets the same residency and damage checking as the still.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                LabeledRow(label: "Motion file", value: motion.originalFilename)
+                                LabeledRow(label: "Size", value: Formatters.bytes.string(fromByteCount: motion.fileSize))
+                                HStack(spacing: 8) {
+                                    ResidencyBadge(domain: motion.residency)
+                                    ProtectionBadge(state: store.protectionStates[motion.id] ?? .notApplicable)
+                                }
+                                NavigationLink(value: motion.id) {
+                                    Text("Show the motion file")
+                                        .font(.caption)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(6)
+                        }
+                    }
+
                     if let group = store.duplicateGroups.first(where: { $0.assetIDs.contains(asset.id) }) {
                         GroupBox("Exact duplicates") {
                             VStack(alignment: .leading, spacing: 6) {

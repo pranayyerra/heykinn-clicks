@@ -66,6 +66,18 @@ struct Asset: Identifiable, Hashable {
     /// writes `.verified` without a connected account confirming it.
     var cloudPresenceEvidence: CloudPresenceEvidence = .none
     var cloudPresenceCheckedAt: Date?
+    /// Set on the *motion* half of a Live Photo, pointing at the still it
+    /// belongs to. Apple exports a Live Photo as a still plus a short movie
+    /// linked by a content identifier; Google Takeout preserves both files but
+    /// not the relationship, so they arrive as two unrelated assets.
+    ///
+    /// The pair is linked rather than merged so each file keeps its own
+    /// residency, replica state and protection tracking — the motion file is
+    /// real content that still has to live somewhere and be checked.
+    var livePhotoStillID: UUID?
+
+    /// True for the movie half, which the Library folds into its still.
+    var isLivePhotoMotion: Bool { livePhotoStillID != nil }
 
     var fileExtension: String {
         (originalFilename as NSString).pathExtension.lowercased()

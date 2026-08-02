@@ -8,6 +8,9 @@ struct LibraryView: View {
 
     private var filteredAssets: [Asset] {
         store.assets.filter { asset in
+            // The movie half of a Live Photo belongs to its still, not to the
+            // grid as a separate entry.
+            if asset.isLivePhotoMotion { return false }
             if let residencyFilter, asset.residency != residencyFilter { return false }
             if !searchText.isEmpty,
                !asset.originalFilename.localizedCaseInsensitiveContains(searchText) {
@@ -79,6 +82,15 @@ struct LibraryView: View {
                         }
                     }
                     .pickerStyle(.menu)
+                }
+                ToolbarItem {
+                    Button {
+                        store.pairLivePhotos()
+                    } label: {
+                        Label("Find Live Photos", systemImage: "livephoto")
+                    }
+                    .disabled(store.isImporting || store.takeoutActivity != nil)
+                    .help("Google Takeout exports a Live Photo as a still plus a short movie without linking them. This reunites the pairs, confirming each with Apple's content identifier.")
                 }
                 ToolbarItem {
                     Button {

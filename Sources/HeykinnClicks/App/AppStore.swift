@@ -108,6 +108,10 @@ final class AppStore: ObservableObject {
     private func rebuildIndexes() {
         assetsByID = Dictionary(assets.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         replicasByAssetID = Dictionary(grouping: replicaStates, by: \.assetID)
+        livePhotoMotionByStillID = Dictionary(
+            assets.compactMap { asset in asset.livePhotoStillID.map { ($0, asset) } },
+            uniquingKeysWith: { first, _ in first }
+        )
     }
 
     /// Where this asset's bytes can be read right now, for previews and
@@ -176,6 +180,73 @@ final class AppStore: ObservableObject {
             Task { @MainActor in
                 self?.rescanDrives()
             }
+        }
+    }
+
+    // MARK: - Live Photos
+
+    /// Motion halves keyed by the still they belong to.
+    @Published private(set) var livePhotoMotionByStillID: [UUID: Asset] = [:]
+
+    func livePhotoMotion(for asset: Asset) -> Asset? {
+        livePhotoMotionByStillID[asset.id]
+    }
+
+    /// Finds Live Photo pairs among unpaired assets and links them. Each half
+    /// keeps its own residency and replica tracking — the motion file is real
+    /// content that still has to live somewhere and be checked — but the
+    /// Library folds the movie into its still.
+    func pairLivePhotos() {
+        guard takeoutActivity == nil, !isImporting else { return }
+        let snapshot = assets
+        let resolve: (Asset) -> URL? = { [weak self] in self?.localFileURL(for: $0) }
+        let candidates = LivePhotoPairer.candidates(from: snapshot, sourceURL: resolve)
+        guard !candidates.isEmpty else {
+            audit(.system, "Live Photo scan: no unpaired candidates with reachable files.")
+            return
+        }
+
+        takeoutActivity = TakeoutActivity(
+            phase: .reconciling, detail: "Live Photos",
+            itemIndex: 0, itemCount: candidates.count,
+            note: "checking \(candidates.count) candidate pair(s)"
+        )
+
+        Task { @MainActor in
+            var linked = 0
+            var rejected = 0
+            for (index, candidate) in candidates.enumerated() {
+                let confirmed = await LivePhotoPairer.confirm(candidate)
+                if confirmed {
+                    do {
+                        try catalog.transaction {
+                            if var motion = assetsByID[candidate.motionAssetID] {
+                                motion.livePhotoStillID = candidate.stillAssetID
+                                motion.updatedDate = Date()
+                                try catalog.upsertAsset(motion)
+                            }
+                            if var still = assetsByID[candidate.stillAssetID] {
+                                still.kind = .livePhoto
+                                still.updatedDate = Date()
+                                try catalog.upsertAsset(still)
+                            }
+                        }
+                        linked += 1
+                    } catch {
+                        lastError = "Live Photo pairing failed: \(error.localizedDescription)"
+                        break
+                    }
+                } else {
+                    rejected += 1
+                }
+                if index % 50 == 0 {
+                    takeoutActivity?.itemIndex = index
+                    takeoutActivity?.note = "\(linked) paired, \(rejected) not Live Photos"
+                }
+            }
+            audit(.system, "Live Photos: linked \(linked) pair(s); \(rejected) same-name candidate(s) were not Live Photos and were left alone.")
+            takeoutActivity = nil
+            loadAll()
         }
     }
 

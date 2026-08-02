@@ -117,6 +117,19 @@ struct AssetThumbnailView: View {
                     .font(.title2)
                     .foregroundStyle(.secondary)
             }
+            if asset.kind == .livePhoto && image != nil {
+                VStack {
+                    HStack {
+                        Image(systemName: "livephoto")
+                            .font(.caption)
+                            .foregroundStyle(.white)
+                            .shadow(radius: 2)
+                            .padding(5)
+                        Spacer()
+                    }
+                    Spacer()
+                }
+            }
             // Once videos have real frames they look like stills, so mark them.
             if asset.kind == .video && image != nil {
                 VStack {
