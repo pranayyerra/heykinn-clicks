@@ -201,38 +201,6 @@ final class AppStore: ObservableObject {
         beginQuiesce(driveID, reason: "macOS is unmounting the volume")
     }
 
-    /// Stops work on the drive, then asks macOS to unmount and eject it.
-    /// Reports honestly rather than pretending: if something still holds the
-    /// volume, the error says so and the drive stays mounted.
-    func ejectDrive(_ driveID: UUID) {
-        guard let mountURL = connectedMounts[driveID] else { return }
-        let name = drivesByID[driveID]?.name ?? "drive"
-        beginQuiesce(driveID, reason: "you asked to eject it")
-
-        Task { @MainActor in
-            // Give in-flight work a moment to reach its next safe boundary.
-            for _ in 0..<40 where isBusy(driveID) || isImporting || isSyncing {
-                try? await Task.sleep(nanoseconds: 250_000_000)
-            }
-            if isBusy(driveID) {
-                lastError = "\(name) is still being read; try ejecting again in a moment."
-                audit(.drive, "Eject of \(name) deferred: work still in flight.", driveID: driveID)
-                endQuiesce(driveID)
-                return
-            }
-            do {
-                try NSWorkspace.shared.unmountAndEjectDevice(at: mountURL)
-                audit(.drive, "\(name) ejected cleanly; no work was left mid-file.", driveID: driveID)
-                takeoutPipelineCompletedDriveIDs.remove(driveID)
-                rescanDrives()
-            } catch {
-                lastError = "Could not eject \(name): \(error.localizedDescription). Close anything using the drive and try again."
-                audit(.drive, "Eject of \(name) failed: \(error.localizedDescription)", driveID: driveID)
-                endQuiesce(driveID)
-            }
-        }
-    }
-
     // MARK: - Catalog backup
 
     /// Snapshots per drive, newest first — surfaced in Drives & Health.
@@ -1554,9 +1522,9 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Queues a verify pass over every replica expected on the drive, then runs it.
+    /// Runs a bounded file check on the drive.
     func verifyDrive(_ driveID: UUID) {
-        guard let drive = drivesByID[driveID], connectedMounts[driveID] != nil else {
+        guard connectedMounts[driveID] != nil else {
             lastError = "Drive is not connected."
             return
         }

@@ -223,16 +223,6 @@ struct DrivesView: View {
                     .help(summary.isEmpty
                           ? "Nothing pending for this drive."
                           : "Works through this drive's queue: \(summary.description).")
-
-                Button {
-                    store.ejectDrive(drive.id)
-                } label: {
-                    Label("Eject", systemImage: "eject")
-                }
-                .help("Stops any work touching this drive, then unmounts it. Safe to unplug once it disappears.")
-                    .help(summary.isEmpty
-                          ? "Nothing pending for this drive."
-                          : "Works through this drive's queue: \(summary.description).")
             }
         }
         if let progress {
