@@ -112,6 +112,10 @@ final class AppStore: ObservableObject {
             assets.compactMap { asset in asset.livePhotoStillID.map { ($0, asset) } },
             uniquingKeysWith: { first, _ in first }
         )
+        editsByOriginalID = Dictionary(
+            grouping: assets.filter { $0.editedFromAssetID != nil },
+            by: { $0.editedFromAssetID! }
+        )
     }
 
     /// Where this asset's bytes can be read right now, for previews and
@@ -180,6 +184,118 @@ final class AppStore: ObservableObject {
             Task { @MainActor in
                 self?.rescanDrives()
             }
+        }
+    }
+
+    // MARK: - Capture dates
+
+    /// Edited derivatives keyed by the original they came from.
+    @Published private(set) var editsByOriginalID: [UUID: [Asset]] = [:]
+
+    func originalOf(_ asset: Asset) -> Asset? {
+        asset.editedFromAssetID.flatMap { assetsByID[$0] }
+    }
+
+    func editsOf(_ asset: Asset) -> [Asset] {
+        editsByOriginalID[asset.id] ?? []
+    }
+
+    /// Recovers capture dates for assets already imported, using the same
+    /// resolver the import pipeline uses, and links edited derivatives to the
+    /// originals they came from so the two sit together in the timeline.
+    ///
+    /// Runs after imports and on drive connect. Only fills gaps: an asset that
+    /// already has a date from the file or a sidecar is never overwritten.
+    func recoverCaptureDates() {
+        guard takeoutActivity == nil, !isImporting else { return }
+
+        // 1. Link edits to their originals, by filename within the same folder.
+        var originalByPath: [String: Asset] = [:]
+        for asset in assets {
+            guard let url = localFileURL(for: asset) else { continue }
+            originalByPath[url.path] = asset
+        }
+        var links: [(edit: Asset, original: Asset)] = []
+        for asset in assets where asset.editedFromAssetID == nil
+            && CaptureDateResolver.isEditedDerivative(asset.originalFilename) {
+            guard let url = localFileURL(for: asset),
+                  let originalURL = CaptureDateResolver.originalURL(forEdited: url),
+                  let original = originalByPath[originalURL.path]
+            else { continue }
+            links.append((asset, original))
+        }
+
+        // 2. Fill missing dates from whatever the archive still offers.
+        let needingDate = assets.filter {
+            $0.captureDate == nil || $0.captureDateSource == .unknown
+        }
+        guard !links.isEmpty || !needingDate.isEmpty else { return }
+
+        takeoutActivity = TakeoutActivity(
+            phase: .reconciling, detail: "Capture dates",
+            itemIndex: 0, itemCount: needingDate.count,
+            note: "\(links.count) edit(s) to link, \(needingDate.count) date(s) to recover"
+        )
+
+        Task { @MainActor in
+            var linked = 0
+            var recovered: [CaptureDateSource: Int] = [:]
+            do {
+                for link in links {
+                    var edit = link.edit
+                    edit.editedFromAssetID = link.original.id
+                    // An edit carries no metadata of its own; without the
+                    // original's date it drifts to the wrong end of the
+                    // timeline instead of sitting beside what it came from.
+                    if edit.captureDate == nil, let date = link.original.captureDate {
+                        edit.captureDate = date
+                        edit.captureDateSource = .originalSidecar
+                        recovered[.originalSidecar, default: 0] += 1
+                    }
+                    edit.updatedDate = Date()
+                    try catalog.upsertAsset(edit)
+                    assetsByID[edit.id] = edit
+                    linked += 1
+                }
+
+                for (index, asset) in needingDate.enumerated() {
+                    guard var updated = assetsByID[asset.id], updated.captureDate == nil else { continue }
+                    guard let url = localFileURL(for: updated) else { continue }
+
+                    var metadataDate: Date?
+                    if updated.kind == .video {
+                        metadataDate = await CaptureDateResolver.movieCreationDate(url)
+                    }
+                    let located = CaptureDateResolver.sidecar(for: url)
+                    let resolved = CaptureDateResolver.resolve(
+                        fileURL: url,
+                        metadataDate: metadataDate,
+                        sidecarDate: located?.0.takenDate,
+                        sidecarSource: located?.1
+                    )
+                    guard let date = resolved.date else { continue }
+                    updated.captureDate = date
+                    updated.captureDateSource = resolved.source
+                    updated.updatedDate = Date()
+                    try catalog.upsertAsset(updated)
+                    assetsByID[updated.id] = updated
+                    recovered[resolved.source, default: 0] += 1
+
+                    if index % 50 == 0 {
+                        takeoutActivity?.itemIndex = index
+                        takeoutActivity?.note = "\(recovered.values.reduce(0, +)) date(s) recovered"
+                    }
+                }
+            } catch {
+                lastError = "Capture date recovery failed: \(error.localizedDescription)"
+            }
+            let summary = recovered
+                .sorted { $0.value > $1.value }
+                .map { "\($0.value) \($0.key.displayName.lowercased())" }
+                .joined(separator: ", ")
+            audit(.system, "Capture dates: linked \(linked) edited photo(s) to their originals; recovered \(recovered.values.reduce(0, +)) date(s)\(summary.isEmpty ? "" : " (\(summary))").")
+            takeoutActivity = nil
+            loadAll()
         }
     }
 
@@ -932,7 +1048,7 @@ final class AppStore: ObservableObject {
                     }
                     let hashSnapshot = knownHashes
                     let result = await Task.detached(priority: .utility) {
-                        TakeoutImporter.importMedia(
+                        await TakeoutImporter.importMedia(
                             from: workspace,
                             archiveName: archive.displayName,
                             knownContentHashes: hashSnapshot,
@@ -1045,6 +1161,7 @@ final class AppStore: ObservableObject {
         // New assets are the only source of new pairs, so this is the natural
         // moment to reunite Live Photos — no user action required.
         reopenLivePhotoChecks(forNewlyImported: allImported)
+        recoverCaptureDates()
         pairLivePhotos()
         backupCatalog(force: true)
     }
@@ -1309,6 +1426,7 @@ final class AppStore: ObservableObject {
 
         // Takeout splits Live Photos into a still and a movie; reunite them so
         // the motion halves do not sit in the grid as standalone videos.
+        recoverCaptureDates()
         pairLivePhotos()
 
         // The catalog just changed materially (new assets, new replica

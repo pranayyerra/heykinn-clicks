@@ -204,7 +204,7 @@ final class TakeoutTests: XCTestCase {
         )
     }
 
-    func testExportSetGapDetection() {
+    func testExportSetGapDetection() async {
         func part(_ number: Int) -> TakeoutArchive {
             TakeoutArchive(
                 id: UUID(), path: "/x/takeout-\(number).zip", kind: .zip, sizeBytes: 0,
@@ -217,7 +217,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(TakeoutExportSet(setID: "S", parts: [part(1), part(2)]).missingPartNumbers, [])
     }
 
-    func testCrossPartDeduplicationWithSharedBatch() throws {
+    func testCrossPartDeduplicationWithSharedBatch() async throws {
         // Two parts share one file (Google can duplicate media across parts).
         let partA = try makeTempDirectory()
         let dirA = partA.appendingPathComponent("Takeout/Google Photos/Photos from 2021", isDirectory: true)
@@ -234,12 +234,12 @@ final class TakeoutTests: XCTestCase {
         let staging = StagingStore(rootURL: try makeTempDirectory())
         let batchID = UUID()
 
-        let first = TakeoutImporter.importMedia(
+        let first = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: partA, cleanupURL: nil),
             archiveName: "part 1", existingAssets: [], staging: staging,
             assumeStillInGoogle: true, batchID: batchID
         )
-        let second = TakeoutImporter.importMedia(
+        let second = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: partB, cleanupURL: nil),
             archiveName: "part 2", existingAssets: first.importedAssets, staging: staging,
             assumeStillInGoogle: true, batchID: batchID
@@ -255,13 +255,13 @@ final class TakeoutTests: XCTestCase {
 
     // MARK: - Archive-backed replicas
 
-    func testImportRecordsTakeoutFilesAsDriveReplica() throws {
+    func testImportRecordsTakeoutFilesAsDriveReplica() async throws {
         let mount = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: mount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
         let driveID = UUID()
 
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: true,
@@ -284,7 +284,7 @@ final class TakeoutTests: XCTestCase {
         }
     }
 
-    func testVerifyResolvesVolumeBackedReplicaAndDetectsDrift() throws {
+    func testVerifyResolvesVolumeBackedReplicaAndDetectsDrift() async throws {
         let mount = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: mount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
@@ -295,7 +295,7 @@ final class TakeoutTests: XCTestCase {
             replicaRootComponent: ManagedDrive.defaultReplicaRoot
         )
 
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: false,
@@ -329,7 +329,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(drifted.replica?.state, .drift)
     }
 
-    func testRemoveNeverDeletesVolumeBackedTakeoutFile() throws {
+    func testRemoveNeverDeletesVolumeBackedTakeoutFile() async throws {
         let mount = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: mount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
@@ -339,7 +339,7 @@ final class TakeoutTests: XCTestCase {
             registeredAt: Date(), lastSeenAt: nil,
             replicaRootComponent: ManagedDrive.defaultReplicaRoot
         )
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: false,
@@ -383,12 +383,12 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(entryHash, directHash)
     }
 
-    func testSecondDriveZipsBecomeReplicasWithoutCopying() throws {
+    func testSecondDriveZipsBecomeReplicasWithoutCopying() async throws {
         // Drive A: extracted folder, imported normally (assets exist).
         let driveAMount = try makeTempDirectory()
         let folderA = try makeFakeTakeoutTree(in: driveAMount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let importResult = TakeoutImporter.importMedia(
+        let importResult = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folderA, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: false
@@ -441,11 +441,11 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(verify.replica?.state, .present)
     }
 
-    func testReconcileFolderClaimsOnlyMatchingAssets() throws {
+    func testReconcileFolderClaimsOnlyMatchingAssets() async throws {
         let mount = try makeTempDirectory()
         let folder = try makeFakeTakeoutTree(in: mount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let imported = TakeoutImporter.importMedia(
+        let imported = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: false
@@ -466,14 +466,14 @@ final class TakeoutTests: XCTestCase {
 
     // MARK: - Regression fixes (no duplicate staging, cheap re-scan)
 
-    func testDriveResidentImportDoesNotDuplicateIntoMacStaging() throws {
+    func testDriveResidentImportDoesNotDuplicateIntoMacStaging() async throws {
         let mount = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: mount)
         let stagingRoot = try makeTempDirectory()
         let staging = StagingStore(rootURL: stagingRoot)
         let driveID = UUID()
 
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: true,
@@ -488,14 +488,14 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(staging.totalBytes, 0, "Staging must stay empty when the drive already holds the bytes")
     }
 
-    func testImportWithoutDriveContextStillStages() throws {
+    func testImportWithoutDriveContextStillStages() async throws {
         // Content with no drive-resident copy (e.g. a zip extracted to a Mac
         // workspace) must still be staged — it is the only local copy.
         let workspaceRoot = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: workspaceRoot)
         let staging = StagingStore(rootURL: try makeTempDirectory())
 
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: workspaceRoot),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: false,
@@ -507,14 +507,14 @@ final class TakeoutTests: XCTestCase {
         XCTAssertGreaterThan(staging.totalBytes, 0)
     }
 
-    func testCopyUsesAnyReachableSourceNotOnlyStaging() throws {
+    func testCopyUsesAnyReachableSourceNotOnlyStaging() async throws {
         // An asset that exists only on drive A (archive-backed, never staged)
         // must still be copyable to drive B.
         let driveAMount = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: driveAMount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
         let driveAID = UUID()
-        let imported = TakeoutImporter.importMedia(
+        let imported = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: false,
@@ -562,7 +562,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(second.first { $0.kind == .folder }?.sizeBytes, sentinel)
     }
 
-    func testChunkedImportMatchesWholePartImportAndDedupesAcrossChunks() throws {
+    func testChunkedImportMatchesWholePartImportAndDedupesAcrossChunks() async throws {
         let root = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: root)
         let workspace = TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil)
@@ -574,7 +574,7 @@ final class TakeoutTests: XCTestCase {
         let chunkedStaging = StagingStore(rootURL: try makeTempDirectory())
         var accumulated: [Asset] = []
         for file in files {
-            let result = TakeoutImporter.importMedia(
+            let result = await TakeoutImporter.importMedia(
                 from: workspace, archiveName: "Takeout", existingAssets: accumulated,
                 staging: chunkedStaging, assumeStillInGoogle: false, fileURLs: [file]
             )
@@ -582,7 +582,7 @@ final class TakeoutTests: XCTestCase {
         }
 
         let wholeStaging = StagingStore(rootURL: try makeTempDirectory())
-        let whole = TakeoutImporter.importMedia(
+        let whole = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "Takeout", existingAssets: [],
             staging: wholeStaging, assumeStillInGoogle: false
         )
@@ -595,7 +595,7 @@ final class TakeoutTests: XCTestCase {
         )
 
         // A repeated chunk must dedupe against what earlier chunks imported.
-        let repeated = TakeoutImporter.importMedia(
+        let repeated = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "Takeout", existingAssets: accumulated,
             staging: chunkedStaging, assumeStillInGoogle: false, fileURLs: [files[0]]
         )
@@ -603,7 +603,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(repeated.duplicateFilenames.count, 1)
     }
 
-    func testReconcileClaimsNothingWhenDriveAlreadyHasReplicas() throws {
+    func testReconcileClaimsNothingWhenDriveAlreadyHasReplicas() async throws {
         // The drive the content was imported from already backs its replicas;
         // reconciling its zip twin must be recognised as pointless (no assets
         // need a replica), which is what lets the pipeline skip the read.
@@ -612,7 +612,7 @@ final class TakeoutTests: XCTestCase {
         let staging = StagingStore(rootURL: try makeTempDirectory())
         let driveID = UUID()
 
-        let imported = TakeoutImporter.importMedia(
+        let imported = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: false,
@@ -705,16 +705,16 @@ final class TakeoutTests: XCTestCase {
         }
     }
 
-    func testParallelImportProducesSameAssetsAsSerial() throws {
+    func testParallelImportProducesSameAssetsAsSerial() async throws {
         let root = try makeTempDirectory()
         let folder = try makeFakeTakeoutTree(in: root)
         let workspace = TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil)
 
-        let a = TakeoutImporter.importMedia(
+        let a = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "T", existingAssets: [],
             staging: StagingStore(rootURL: try makeTempDirectory()), assumeStillInGoogle: false
         )
-        let b = TakeoutImporter.importMedia(
+        let b = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "T", existingAssets: [],
             staging: StagingStore(rootURL: try makeTempDirectory()), assumeStillInGoogle: false
         )
@@ -731,12 +731,12 @@ final class TakeoutTests: XCTestCase {
 
     // MARK: - Cloud presence is never assumed
 
-    func testImportRecordsNoCloudPresenceOrEvidenceByDefault() throws {
+    func testImportRecordsNoCloudPresenceOrEvidenceByDefault() async throws {
         let root = try makeTempDirectory()
         let folder = try makeFakeTakeoutTree(in: root)
         let staging = StagingStore(rootURL: try makeTempDirectory())
 
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: false
@@ -749,12 +749,12 @@ final class TakeoutTests: XCTestCase {
         }
     }
 
-    func testStatedCloudPresenceIsMarkedAsAssertionNotVerified() throws {
+    func testStatedCloudPresenceIsMarkedAsAssertionNotVerified() async throws {
         let root = try makeTempDirectory()
         let folder = try makeFakeTakeoutTree(in: root)
         let staging = StagingStore(rootURL: try makeTempDirectory())
 
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
             assumeStillInGoogle: true
@@ -844,7 +844,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(result.scannedFileCount, 2, "Mapping covered both known entries")
     }
 
-    func testFastReconcileRefusesMismatchedHash() {
+    func testFastReconcileRefusesMismatchedHash() async {
         let donor = TakeoutArchive(
             id: UUID(), path: "/Volumes/A/takeout-S-001.zip", kind: .zip, sizeBytes: 0,
             driveID: nil, discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
@@ -865,7 +865,7 @@ final class TakeoutTests: XCTestCase {
 
     // MARK: - In-place extraction
 
-    func testExtractInPlaceCreatesConventionNamedFolder() throws {
+    func testExtractInPlaceCreatesConventionNamedFolder() async throws {
         let root = try makeTempDirectory()
         let treeRoot = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: treeRoot)
@@ -887,7 +887,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(components?.part, 7)
         // ...and be importable with full sidecar pairing.
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folderURL, cleanupURL: nil),
             archiveName: folderURL.lastPathComponent, existingAssets: [],
             staging: staging, assumeStillInGoogle: true
@@ -919,13 +919,13 @@ final class TakeoutTests: XCTestCase {
 
     // MARK: - Importer
 
-    func testImportFromFolderPairsSidecarAndMarksPresence() throws {
+    func testImportFromFolderPairsSidecarAndMarksPresence() async throws {
         let root = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: root)
         let staging = StagingStore(rootURL: try makeTempDirectory())
 
         let workspace = TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil)
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: workspace,
             archiveName: "Takeout",
             existingAssets: [],
@@ -945,8 +945,16 @@ final class TakeoutTests: XCTestCase {
         XCTAssertTrue(withSidecar.presence.local)
         XCTAssertTrue(withSidecar.presence.googleCloud, "Overlap must be recorded while originals remain in Google")
 
+        XCTAssertEqual(withSidecar.captureDateSource, .sidecar)
+
+        // No sidecar: the folder still names the year, which beats having no
+        // date at all — but it is recorded as the weaker claim it is.
         let withoutSidecar = try XCTUnwrap(result.importedAssets.first { $0.originalFilename == "IMG_101.jpg" })
-        XCTAssertNil(withoutSidecar.captureDate)
+        XCTAssertEqual(withoutSidecar.captureDateSource, .folderYear)
+        XCTAssertFalse(withoutSidecar.captureDateSource.isExact)
+        let year = Calendar(identifier: .gregorian)
+            .component(.year, from: try XCTUnwrap(withoutSidecar.captureDate))
+        XCTAssertEqual(year, 2021, "Taken from the 'Photos from 2021' folder")
 
         // Staged copies must be real files with matching hashes.
         for asset in result.importedAssets {
@@ -955,12 +963,12 @@ final class TakeoutTests: XCTestCase {
         }
     }
 
-    func testImportWithoutGooglePresenceWhenAlreadyDeleted() throws {
+    func testImportWithoutGooglePresenceWhenAlreadyDeleted() async throws {
         let root = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: root)
         let staging = StagingStore(rootURL: try makeTempDirectory())
 
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout",
             existingAssets: [],
@@ -973,17 +981,17 @@ final class TakeoutTests: XCTestCase {
         }
     }
 
-    func testReimportSkipsExactDuplicates() throws {
+    func testReimportSkipsExactDuplicates() async throws {
         let root = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: root)
         let staging = StagingStore(rootURL: try makeTempDirectory())
         let workspace = TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil)
 
-        let first = TakeoutImporter.importMedia(
+        let first = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "Takeout", existingAssets: [],
             staging: staging, assumeStillInGoogle: true
         )
-        let second = TakeoutImporter.importMedia(
+        let second = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "Takeout", existingAssets: first.importedAssets,
             staging: staging, assumeStillInGoogle: true
         )
@@ -991,7 +999,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(second.duplicateFilenames.count, 2)
     }
 
-    func testImportFromZipViaWorkspaceExtraction() throws {
+    func testImportFromZipViaWorkspaceExtraction() async throws {
         let treeRoot = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: treeRoot)
         let zipURL = try makeTempDirectory().appendingPathComponent("takeout-20260101T000000Z-001.zip")
@@ -1016,7 +1024,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertNotNil(workspace.cleanupURL, "Zip extraction must use a disposable workspace")
 
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let result = TakeoutImporter.importMedia(
+        let result = await TakeoutImporter.importMedia(
             from: workspace, archiveName: archive.displayName, existingAssets: [],
             staging: staging, assumeStillInGoogle: true
         )

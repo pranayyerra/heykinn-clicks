@@ -4,6 +4,7 @@ import ImageIO
 struct ExtractedMetadata {
     var kind: AssetKind
     var captureDate: Date?
+    var captureDateSource: CaptureDateSource = .unknown
     var pixelWidth: Int?
     var pixelHeight: Int?
     var exifSummary: [String: String]
@@ -30,7 +31,7 @@ enum MetadataExtractor {
     static func extract(from url: URL) -> ExtractedMetadata {
         let kind = kind(forFileExtension: url.pathExtension)
         var metadata = ExtractedMetadata(kind: kind, captureDate: nil, pixelWidth: nil, pixelHeight: nil, exifSummary: [:])
-        guard kind == .photo,
+        guard kind == .photo || kind == .livePhoto,
               let source = CGImageSourceCreateWithURL(url as CFURL, nil),
               let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         else {

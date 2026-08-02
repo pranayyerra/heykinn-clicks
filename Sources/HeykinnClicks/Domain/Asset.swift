@@ -76,6 +76,15 @@ struct Asset: Identifiable, Hashable {
     /// real content that still has to live somewhere and be checked.
     var livePhotoStillID: UUID?
 
+    /// How `captureDate` was established. A folder-derived year must never
+    /// read as though it came from the camera.
+    var captureDateSource: CaptureDateSource = .unknown
+    /// Set on an edited derivative, pointing at the original it came from.
+    /// Google exports both `pic2.jpg` and `pic2-edited.jpg`; without the link
+    /// they are unrelated entries, and the edit — which carries no metadata of
+    /// its own — drifts to the wrong end of the timeline.
+    var editedFromAssetID: UUID?
+
     /// Set once a video has been shown to carry no Live Photo identifier, so
     /// later pairing runs skip it instead of re-reading it off the drive.
     var livePhotoCheckedAt: Date?

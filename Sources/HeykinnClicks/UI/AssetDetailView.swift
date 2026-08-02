@@ -43,7 +43,15 @@ struct AssetDetailView: View {
                         VStack(alignment: .leading, spacing: 6) {
                             LabeledRow(label: "Kind", value: asset.kind.displayName)
                             LabeledRow(label: "Origin", value: asset.importOrigin.displayName)
-                            LabeledRow(label: "Captured", value: asset.captureDate.map { Formatters.dateTime.string(from: $0) } ?? "Unknown")
+                            LabeledRow(
+                                label: "Captured",
+                                value: asset.captureDate.map {
+                                    asset.captureDateSource.isExact
+                                        ? Formatters.dateTime.string(from: $0)
+                                        : "\(Calendar.current.component(.year, from: $0)) (approximate)"
+                                } ?? "Unknown"
+                            )
+                            LabeledRow(label: "Date known from", value: asset.captureDateSource.displayName)
                             LabeledRow(label: "Imported", value: Formatters.dateTime.string(from: asset.importDate))
                             LabeledRow(label: "Size", value: Formatters.bytes.string(fromByteCount: asset.fileSize))
                             if let width = asset.pixelWidth, let height = asset.pixelHeight {
@@ -98,6 +106,34 @@ struct AssetDetailView: View {
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(6)
+                    }
+
+                    if let original = store.originalOf(asset) {
+                        GroupBox("Edited from") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                Text("Google exported this edit and its original as separate files. They are linked so the edit sits beside what it came from rather than drifting to the wrong end of the timeline.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                NavigationLink(value: original.id) {
+                                    Label(original.originalFilename, systemImage: "photo.on.rectangle.angled")
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(6)
+                        }
+                    }
+                    if !store.editsOf(asset).isEmpty {
+                        GroupBox("Edited versions") {
+                            VStack(alignment: .leading, spacing: 6) {
+                                ForEach(store.editsOf(asset)) { edit in
+                                    NavigationLink(value: edit.id) {
+                                        Label(edit.originalFilename, systemImage: "wand.and.stars")
+                                    }
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(6)
+                        }
                     }
 
                     if let motion = store.livePhotoMotion(for: asset) {

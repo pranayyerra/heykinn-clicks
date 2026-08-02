@@ -39,7 +39,9 @@ final class CatalogStore {
             cloud_evidence TEXT,
             cloud_checked_at REAL,
             live_photo_still_id TEXT,
-            live_photo_checked_at REAL
+            live_photo_checked_at REAL,
+            capture_date_source TEXT,
+            edited_from_asset_id TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(content_hash);
@@ -155,6 +157,8 @@ final class CatalogStore {
         try? database.exec("ALTER TABLE takeout_archives ADD COLUMN imported_file_total INTEGER NOT NULL DEFAULT 0;")
         try? database.exec("ALTER TABLE assets ADD COLUMN live_photo_still_id TEXT;")
         try? database.exec("ALTER TABLE assets ADD COLUMN live_photo_checked_at REAL;")
+        try? database.exec("ALTER TABLE assets ADD COLUMN capture_date_source TEXT;")
+        try? database.exec("ALTER TABLE assets ADD COLUMN edited_from_asset_id TEXT;")
     }
 
     /// Writes a consistent, compacted copy of the whole catalog to `path`.
@@ -187,8 +191,8 @@ final class CatalogStore {
         INSERT INTO assets (id, kind, original_filename, import_origin, capture_date,
             import_date, updated_date, file_size, pixel_width, pixel_height, content_hash,
             residency, residency_source, presence_local, presence_apple, presence_google,
-            staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at, capture_date_source, edited_from_asset_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             kind = excluded.kind,
             original_filename = excluded.original_filename,
@@ -211,7 +215,9 @@ final class CatalogStore {
             cloud_evidence = excluded.cloud_evidence,
             cloud_checked_at = excluded.cloud_checked_at,
             live_photo_still_id = excluded.live_photo_still_id,
-            live_photo_checked_at = excluded.live_photo_checked_at;
+            live_photo_checked_at = excluded.live_photo_checked_at,
+            capture_date_source = excluded.capture_date_source,
+            edited_from_asset_id = excluded.edited_from_asset_id;
         """, [
             .text(asset.id.uuidString),
             .text(asset.kind.rawValue),
@@ -236,6 +242,8 @@ final class CatalogStore {
             .date(asset.cloudPresenceCheckedAt),
             .uuid(asset.livePhotoStillID),
             .date(asset.livePhotoCheckedAt),
+            .text(asset.captureDateSource.rawValue),
+            .uuid(asset.editedFromAssetID),
         ])
     }
 
@@ -244,7 +252,7 @@ final class CatalogStore {
         SELECT id, kind, original_filename, import_origin, capture_date, import_date,
                updated_date, file_size, pixel_width, pixel_height, content_hash,
                residency, residency_source, presence_local, presence_apple, presence_google,
-               staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at
+               staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at, capture_date_source, edited_from_asset_id
         FROM assets ORDER BY COALESCE(capture_date, import_date) DESC;
         """) { row in
             Asset(
@@ -272,6 +280,8 @@ final class CatalogStore {
                 cloudPresenceEvidence: row.optionalText(19).flatMap(CloudPresenceEvidence.init(rawValue:)) ?? .none,
                 cloudPresenceCheckedAt: row.optionalDate(20),
                 livePhotoStillID: row.optionalUUID(21),
+                captureDateSource: row.optionalText(23).flatMap(CaptureDateSource.init(rawValue:)) ?? .unknown,
+                editedFromAssetID: row.optionalUUID(24),
                 livePhotoCheckedAt: row.optionalDate(22)
             )
         }

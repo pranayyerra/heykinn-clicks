@@ -97,7 +97,7 @@ enum TakeoutImporter {
         batchID: UUID = UUID(),
         replicaContext: (driveID: UUID, mountPath: String)? = nil,
         fileURLs: [URL]? = nil
-    ) -> ImportResult {
+    ) async -> ImportResult {
         var batch = ImportBatch(
             id: batchID,
             sourcePath: "Takeout: \(archiveName)",
@@ -120,6 +120,11 @@ enum TakeoutImporter {
         let targets = fileURLs ?? mediaFileURLs(in: workspace)
         let scanned = scanFilesInParallel(targets)
 
+        // Movies keep their capture time in container metadata, which needs an
+        // async read, so it happens here rather than in the parallel scan.
+        // Without this every video imports with no date at all.
+        let movieDates = await movieCreationDates(for: scanned)
+
         for scan in scanned {
             let fileURL = scan.fileURL
             let filename = fileURL.lastPathComponent
@@ -128,7 +133,18 @@ enum TakeoutImporter {
                 case .failure(let message):
                     failures.append((filename, message))
                     continue
-                case .success(let hash, let fileSize, let metadata):
+                case .success(let hash, let fileSize, var metadata):
+                    if metadata.captureDate == nil, let movieDate = movieDates[fileURL] {
+                        metadata.captureDate = movieDate
+                        metadata.captureDateSource = .fileMetadata
+                    } else if metadata.captureDate == nil {
+                        // Nothing in the file: fall back down the chain.
+                        let fallback = CaptureDateResolver.resolve(
+                            fileURL: fileURL, metadataDate: nil, sidecarDate: nil, sidecarSource: nil
+                        )
+                        metadata.captureDate = fallback.date
+                        metadata.captureDateSource = fallback.source
+                    }
                     if knownHashes.contains(hash) {
                         duplicates.append(filename)
                         continue
@@ -185,7 +201,8 @@ enum TakeoutImporter {
                     importBatchID: batch.id,
                     exifSummary: metadata.exifSummary,
                     cloudPresenceEvidence: assumeStillInGoogle ? .userAsserted : .none,
-                    cloudPresenceCheckedAt: nil
+                    cloudPresenceCheckedAt: nil,
+                    captureDateSource: metadata.captureDateSource
                 ))
                 knownHashes.insert(hash)
                 }
@@ -269,19 +286,44 @@ enum TakeoutImporter {
         }
     }
 
+    /// Reads container creation dates for the scanned movies, a few at a time
+    /// so a large chunk does not open hundreds of assets at once.
+    static func movieCreationDates(for scans: [FileScan], concurrency: Int = 6) async -> [URL: Date] {
+        let movies = scans.compactMap { scan -> URL? in
+            guard case .success(_, _, let metadata) = scan.outcome else { return nil }
+            guard metadata.kind == .video, metadata.captureDate == nil else { return nil }
+            return scan.fileURL
+        }
+        guard !movies.isEmpty else { return [:] }
+
+        var results: [URL: Date] = [:]
+        var index = 0
+        while index < movies.count {
+            let slice = movies[index..<min(index + concurrency, movies.count)]
+            await withTaskGroup(of: (URL, Date?).self) { group in
+                for url in slice {
+                    group.addTask { (url, await CaptureDateResolver.movieCreationDate(url)) }
+                }
+                for await (url, date) in group {
+                    if let date { results[url] = date }
+                }
+            }
+            index += concurrency
+        }
+        return results
+    }
+
     static func scanFile(_ fileURL: URL, directoryListings: [String: [String]] = [:]) -> FileScan.Outcome {
         do {
             let hash = try HashingService.sha256(of: fileURL)
             let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
             let fileSize = (attributes[.size] as? Int64) ?? 0
             var metadata = MetadataExtractor.extract(from: fileURL)
-            let sidecar = findSidecar(for: fileURL, directoryListings: directoryListings)
+            // Includes the original's sidecar for an edited derivative, which
+            // Google gives no sidecar of its own.
+            let located = CaptureDateResolver.sidecar(for: fileURL, directoryListings: directoryListings)
+            let sidecar = located?.0
 
-            // The sidecar's photoTakenTime is Google's authoritative record;
-            // it wins over (often stripped) EXIF in Takeout exports.
-            if let taken = sidecar?.takenDate {
-                metadata.captureDate = taken
-            }
             if let description = sidecar?.description, !description.isEmpty {
                 metadata.exifSummary["GoogleDescription"] = description
             }
@@ -291,6 +333,18 @@ enum TakeoutImporter {
                latitude != 0 || longitude != 0 {
                 metadata.exifSummary["GPS"] = String(format: "%.5f, %.5f", latitude, longitude)
             }
+
+            // Google's sidecar is more trustworthy than EXIF in a Takeout
+            // export, which is often stripped or rewritten — so it takes the
+            // place of "file metadata" for stills when present.
+            let resolved = CaptureDateResolver.resolve(
+                fileURL: fileURL,
+                metadataDate: sidecar?.takenDate ?? metadata.captureDate,
+                sidecarDate: sidecar?.takenDate,
+                sidecarSource: located?.1
+            )
+            metadata.captureDate = resolved.date
+            metadata.captureDateSource = sidecar?.takenDate != nil ? (located?.1 ?? .sidecar) : resolved.source
             return .success(hash: hash, fileSize: fileSize, metadata: metadata)
         } catch {
             return .failure(error.localizedDescription)
