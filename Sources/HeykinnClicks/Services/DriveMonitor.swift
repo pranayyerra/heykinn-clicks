@@ -22,6 +22,19 @@ final class DriveMonitor: ObservableObject {
             }
             mountObservers.append(observer)
         }
+        // macOS posts this *before* unmounting, which is the only chance to
+        // stop reading from the volume and let the eject succeed. Without it,
+        // ejecting from Finder while the app is hashing files fails with
+        // "disk in use" — or the volume is yanked out from under open handles.
+        let willUnmount = center.addObserver(
+            forName: NSWorkspace.willUnmountNotification, object: nil, queue: .main
+        ) { [weak self] notification in
+            let url = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL
+            Task { @MainActor in
+                self?.volumeWillUnmount?(url)
+            }
+        }
+        mountObservers.append(willUnmount)
     }
 
     deinit {
@@ -33,6 +46,8 @@ final class DriveMonitor: ObservableObject {
 
     /// Set by AppStore so mount events trigger a rescan with current drive registry.
     var rescanRequested: (() -> Void)?
+    /// Called just before a volume unmounts, so work touching it can stop.
+    var volumeWillUnmount: ((URL?) -> Void)?
 
     /// Seeds connected state directly; used by tests to simulate a drive that
     /// was already connected before a rescan.

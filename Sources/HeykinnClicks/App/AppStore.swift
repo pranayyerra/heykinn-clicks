@@ -133,6 +133,9 @@ final class AppStore: ObservableObject {
         driveMonitor.rescanRequested = { [weak self] in
             self?.rescanDrives()
         }
+        driveMonitor.volumeWillUnmount = { [weak self] url in
+            self?.handleWillUnmount(volumeURL: url)
+        }
         rescanDrives()
         // Runs after the drive scan so drive-resident leftovers are visible.
         reconcileAfterRestart()
@@ -144,6 +147,88 @@ final class AppStore: ObservableObject {
         Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor in
                 self?.rescanDrives()
+            }
+        }
+    }
+
+    // MARK: - Safe connect / disconnect
+
+    /// Drives the app has been asked to stop touching — either because macOS
+    /// announced an unmount, or because the user asked to eject. Long-running
+    /// loops check this at their next safe boundary and stop cleanly, leaving
+    /// resumable state behind rather than a wall of I/O errors.
+    @Published private(set) var quiescingDriveIDs: Set<UUID> = []
+    /// Drives with file work in flight right now. While true, the volume has
+    /// open handles and will refuse to eject.
+    @Published private(set) var busyDriveIDs: Set<UUID> = []
+
+    func isQuiescing(_ driveID: UUID) -> Bool { quiescingDriveIDs.contains(driveID) }
+    func isBusy(_ driveID: UUID) -> Bool { busyDriveIDs.contains(driveID) }
+
+    private func markBusy(_ driveID: UUID?, _ busy: Bool) {
+        guard let driveID else { return }
+        if busy { busyDriveIDs.insert(driveID) } else { busyDriveIDs.remove(driveID) }
+    }
+
+    /// Which managed drive, if any, owns this path.
+    func driveID(forPath path: String) -> UUID? {
+        connectedMounts.first { path.hasPrefix($0.value.path + "/") }?.key
+    }
+
+    /// Asks every running operation to let go of the drive. Returns without
+    /// waiting; callers poll `isBusy` to know when the volume is releasable.
+    func beginQuiesce(_ driveID: UUID, reason: String) {
+        guard !quiescingDriveIDs.contains(driveID) else { return }
+        quiescingDriveIDs.insert(driveID)
+        if syncProgress?.driveID == driveID { cancelSync() }
+        pendingSyncDriveIDs.removeAll { $0 == driveID }
+        let name = drivesByID[driveID]?.name ?? "drive"
+        audit(.drive, "Releasing \(name): \(reason). In-flight work will stop at its next safe point.", driveID: driveID)
+    }
+
+    func endQuiesce(_ driveID: UUID) {
+        quiescingDriveIDs.remove(driveID)
+    }
+
+    /// macOS is about to unmount a volume: stop using it immediately so the
+    /// eject can succeed instead of failing with "disk in use".
+    private func handleWillUnmount(volumeURL: URL?) {
+        guard let volumeURL else {
+            for driveID in connectedMounts.keys { beginQuiesce(driveID, reason: "a volume is unmounting") }
+            return
+        }
+        guard let driveID = connectedMounts.first(where: { $0.value.path == volumeURL.path })?.key else { return }
+        beginQuiesce(driveID, reason: "macOS is unmounting the volume")
+    }
+
+    /// Stops work on the drive, then asks macOS to unmount and eject it.
+    /// Reports honestly rather than pretending: if something still holds the
+    /// volume, the error says so and the drive stays mounted.
+    func ejectDrive(_ driveID: UUID) {
+        guard let mountURL = connectedMounts[driveID] else { return }
+        let name = drivesByID[driveID]?.name ?? "drive"
+        beginQuiesce(driveID, reason: "you asked to eject it")
+
+        Task { @MainActor in
+            // Give in-flight work a moment to reach its next safe boundary.
+            for _ in 0..<40 where isBusy(driveID) || isImporting || isSyncing {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+            }
+            if isBusy(driveID) {
+                lastError = "\(name) is still being read; try ejecting again in a moment."
+                audit(.drive, "Eject of \(name) deferred: work still in flight.", driveID: driveID)
+                endQuiesce(driveID)
+                return
+            }
+            do {
+                try NSWorkspace.shared.unmountAndEjectDevice(at: mountURL)
+                audit(.drive, "\(name) ejected cleanly; no work was left mid-file.", driveID: driveID)
+                takeoutPipelineCompletedDriveIDs.remove(driveID)
+                rescanDrives()
+            } catch {
+                lastError = "Could not eject \(name): \(error.localizedDescription). Close anything using the drive and try again."
+                audit(.drive, "Eject of \(name) failed: \(error.localizedDescription)", driveID: driveID)
+                endQuiesce(driveID)
             }
         }
     }
@@ -358,6 +443,8 @@ final class AppStore: ObservableObject {
         let newlyConnected = Set(driveMonitor.connectedMounts.keys).subtracting(previouslyConnected)
         for driveID in newlyConnected {
             let name = drivesByID[driveID]?.name ?? "drive"
+            endQuiesce(driveID)
+            busyDriveIDs.remove(driveID)
             audit(.drive, "\(name) connected.", driveID: driveID)
             if autoSyncOnConnect && backlogCount(for: driveID) > 0 {
                 syncDrive(driveID)
@@ -691,9 +778,24 @@ final class AppStore: ObservableObject {
                 }
                 var processedFiles = resumeFrom
 
+                // The archive may live on a managed drive; if that drive is
+                // unplugged or being released, stop at this chunk boundary.
+                // The checkpoint written by the previous chunk makes the part
+                // resumable, so stopping costs nothing but the current chunk.
+                let sourceDriveID = driveID(forPath: archive.path)
+                markBusy(sourceDriveID, true)
+                defer { markBusy(sourceDriveID, false) }
+
                 for chunk in stride(from: resumeFrom, to: partFiles.count, by: Self.importChunkSize).map({
                     Array(partFiles[$0..<min($0 + Self.importChunkSize, partFiles.count)])
                 }) {
+                    if let sourceDriveID,
+                       connectedMounts[sourceDriveID] == nil || isQuiescing(sourceDriveID) {
+                        let why = connectedMounts[sourceDriveID] == nil ? "disconnected" : "being released"
+                        audit(.importEvent, "Import of \(archive.displayName) stopped at \(processedFiles) of \(partFiles.count) file(s): the drive is \(why). It will resume from here.")
+                        abortedAt = archive.displayName
+                        break
+                    }
                     let hashSnapshot = knownHashes
                     let result = await Task.detached(priority: .utility) {
                         TakeoutImporter.importMedia(
@@ -858,6 +960,11 @@ final class AppStore: ObservableObject {
         guard !targets.isEmpty else { return }
 
         for (index, archive) in targets.enumerated() {
+            let archiveDriveID = driveID(forPath: archive.path)
+            if let archiveDriveID, isQuiescing(archiveDriveID) || connectedMounts[archiveDriveID] == nil {
+                audit(.importEvent, "Skipped extracting \(archive.displayName): its drive is unavailable.")
+                break
+            }
             let workers = ParallelZipExtraction.recommendedWorkerCount(destination: archive.url)
             takeoutActivity = TakeoutActivity(
                 phase: .extracting,
@@ -867,6 +974,8 @@ final class AppStore: ObservableObject {
                 note: "\(workers) parallel worker(s)"
             )
             do {
+                markBusy(archiveDriveID, true)
+                defer { markBusy(archiveDriveID, false) }
                 let folderURL = try await Task.detached(priority: .utility) {
                     try TakeoutExtractor.extractInPlace(zipURL: archive.url)
                 }.value
@@ -1376,6 +1485,8 @@ final class AppStore: ObservableObject {
         let replicasByKey = Dictionary(uniqueKeysWithValues: replicaStates.map { ($0.id, $0) })
 
         Task { @MainActor in
+            markBusy(driveID, true)
+            defer { markBusy(driveID, false) }
             var completed = 0
             var failed = 0
             var interruptionReason: String?
@@ -1389,6 +1500,10 @@ final class AppStore: ObservableObject {
                 // tasks, so an unplug mid-sync is noticed here.
                 guard connectedMounts[driveID] != nil else {
                     interruptionReason = "drive disconnected"
+                    break
+                }
+                if isQuiescing(driveID) {
+                    interruptionReason = "drive is being released"
                     break
                 }
                 let asset = assetsSnapshot[task.assetID]

@@ -170,6 +170,17 @@ struct DrivesView: View {
                      : "Not connected — last seen \(Formatters.relative(drive.lastSeenAt))")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if isConnected {
+                    if store.isBusy(drive.id) {
+                        Label("In use — do not unplug", systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else {
+                        Label("Idle — safe to eject", systemImage: "checkmark.circle")
+                            .font(.caption)
+                            .foregroundStyle(.green)
+                    }
+                }
                 HStack(spacing: 12) {
                     Label(summary.isEmpty ? "nothing pending" : summary.description, systemImage: "tray.full")
                         .foregroundStyle(backlog > 0 ? .orange : .secondary)
@@ -183,7 +194,11 @@ struct DrivesView: View {
                 .font(.caption)
             }
             Spacer()
-            if progress != nil {
+            if store.isQuiescing(drive.id) {
+                Label("Releasing…", systemImage: "hourglass")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            } else if progress != nil {
                 Button("Cancel") { store.cancelSync() }
             } else if isConnected {
                 Menu {
@@ -205,6 +220,16 @@ struct DrivesView: View {
                 Button(syncButtonTitle(summary)) { store.syncDrive(drive.id) }
                     .buttonStyle(.borderedProminent)
                     .disabled(store.isSyncing || backlog == 0)
+                    .help(summary.isEmpty
+                          ? "Nothing pending for this drive."
+                          : "Works through this drive's queue: \(summary.description).")
+
+                Button {
+                    store.ejectDrive(drive.id)
+                } label: {
+                    Label("Eject", systemImage: "eject")
+                }
+                .help("Stops any work touching this drive, then unmounts it. Safe to unplug once it disappears.")
                     .help(summary.isEmpty
                           ? "Nothing pending for this drive."
                           : "Works through this drive's queue: \(summary.description).")
