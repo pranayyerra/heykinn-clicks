@@ -285,6 +285,78 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Compares export parts by a fast partial checksum: a few megabytes
+    /// sampled from each copy rather than every byte.
+    ///
+    /// Reading two 10 GB archives in full to compare them takes minutes;
+    /// sampling takes seconds and still catches truncation, a partial
+    /// transfer, or the wrong file under the right name. It is recorded as a
+    /// spot check, never as proof — `verifyExportPartsByChecksum` remains for
+    /// when certainty is wanted.
+    func spotCheckExportParts() {
+        guard takeoutActivity == nil, !isImporting else { return }
+        let managedIDs = Set(drives.map(\.id))
+        archivePlan = ArchiveReplicationPlanner.plan(
+            archives: takeoutArchives, managedDriveIDs: managedIDs, policy: redundancyPolicy
+        )
+        let candidates = archivePlan.partsMeetingPolicy.filter { part in
+            part.copies.values.contains { $0.kind == .zip }
+                && part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+        }
+        guard !candidates.isEmpty else {
+            audit(.replication, "Spot check: no export part has all of its copies connected.")
+            return
+        }
+
+        Task { @MainActor in
+            var agreed = 0
+            var disagreed: [String] = []
+            var assetsConfirmed = 0
+
+            for (index, part) in candidates.enumerated() {
+                takeoutActivity = TakeoutActivity(
+                    phase: .fingerprinting,
+                    detail: part.displayName,
+                    stepIndex: index + 1,
+                    stepCount: candidates.count,
+                    note: "quick comparison"
+                )
+                var checksums: [UUID: String] = [:]
+                for (driveID, archiveConst) in part.copies where archiveConst.kind == .zip {
+                    var archive = archiveConst
+                    if archive.quickChecksum == nil {
+                        guard let value = try? await Task.detached(priority: .utility, operation: {
+                            try HashingService.quickChecksum(of: archive.url)
+                        }).value else { continue }
+                        archive.quickChecksum = value
+                        try? catalog.upsertTakeoutArchive(archive)
+                        if let at = takeoutArchives.firstIndex(where: { $0.id == archive.id }) {
+                            takeoutArchives[at] = archive
+                        }
+                    }
+                    checksums[driveID] = archive.quickChecksum
+                }
+                guard checksums.count >= redundancyPolicy.desiredCopies else { continue }
+
+                if Set(checksums.values).count == 1 {
+                    assetsConfirmed += markPartVerified(part, onDrives: Set(checksums.keys))
+                    agreed += 1
+                } else {
+                    disagreed.append(part.displayName)
+                    markPartMismatched(part, onDrives: Set(checksums.keys))
+                }
+            }
+
+            var message = "Spot check: \(agreed) export part(s) matched across drives on length and sampled content, covering \(assetsConfirmed) asset(s). This is a fast check, not a full byte-for-byte comparison."
+            if !disagreed.isEmpty {
+                message += " \(disagreed.count) part(s) DIFFER and are flagged: \(disagreed.joined(separator: ", "))."
+            }
+            audit(.replication, message)
+            takeoutActivity = nil
+            loadAll()
+        }
+    }
+
     /// Confirms redundancy by comparing whole-file checksums of the export
     /// parts, rather than reading every asset inside them.
     ///
@@ -2114,7 +2186,10 @@ final class AppStore: ObservableObject {
             return
         }
         if archiveChecksumCheckWouldHelp(driveID) {
-            verifyExportPartsByChecksum()
+            // Fast comparison first: seconds rather than minutes, and enough
+            // to catch the failures that actually befall archive copies. A
+            // full byte-for-byte comparison stays available in the menu.
+            spotCheckExportParts()
             return
         }
         queueVerificationSweep(driveID, budget: .sweep)

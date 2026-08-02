@@ -468,3 +468,95 @@ final class ShortfallReportingTests: XCTestCase {
         XCTAssertFalse(text.hasPrefix("Parts"), text)
     }
 }
+
+/// The fast comparison: a few megabytes sampled instead of every byte.
+final class QuickChecksumTests: XCTestCase {
+
+    private func makeFile(_ bytes: Int, fill: UInt8 = 0xAB, tweakAt: Int? = nil) throws -> URL {
+        let dir = FileManager.default.temporaryDirectory
+            .appendingPathComponent("quick-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: dir) }
+        var data = Data(repeating: fill, count: bytes)
+        if let tweakAt, tweakAt < bytes { data[tweakAt] = fill &+ 1 }
+        let url = dir.appendingPathComponent("part.zip")
+        try data.write(to: url)
+        return url
+    }
+
+    func testIdenticalFilesProduceTheSameQuickChecksum() throws {
+        let size = 12 * 1024 * 1024
+        let a = try makeFile(size)
+        let b = try makeFile(size)
+        XCTAssertEqual(
+            try HashingService.quickChecksum(of: a),
+            try HashingService.quickChecksum(of: b)
+        )
+    }
+
+    /// Truncation is the classic half-finished-copy failure, and length is
+    /// folded into the checksum precisely so it cannot slip through.
+    func testTruncatedCopyIsDetected() throws {
+        let full = try makeFile(12 * 1024 * 1024)
+        let short = try makeFile(11 * 1024 * 1024)
+        XCTAssertNotEqual(
+            try HashingService.quickChecksum(of: full),
+            try HashingService.quickChecksum(of: short)
+        )
+    }
+
+    func testCorruptionAtTheStartIsDetected() throws {
+        let size = 12 * 1024 * 1024
+        let good = try makeFile(size)
+        let bad = try makeFile(size, tweakAt: 1_000)
+        XCTAssertNotEqual(
+            try HashingService.quickChecksum(of: good),
+            try HashingService.quickChecksum(of: bad)
+        )
+    }
+
+    func testCorruptionAtTheEndIsDetected() throws {
+        let size = 12 * 1024 * 1024
+        let good = try makeFile(size)
+        let bad = try makeFile(size, tweakAt: size - 1_000)
+        XCTAssertNotEqual(
+            try HashingService.quickChecksum(of: good),
+            try HashingService.quickChecksum(of: bad)
+        )
+    }
+
+    /// Stated honestly rather than discovered later: a change between the
+    /// sampled windows is invisible. That is the trade being made, and why
+    /// the result is recorded as a spot check and not as proof.
+    func testAChangeBetweenSampledWindowsIsNotSeen() throws {
+        let size = 64 * 1024 * 1024
+        let good = try makeFile(size)
+        // Just past the head window, far from any interior probe.
+        let bad = try makeFile(size, tweakAt: HashingService.quickChecksumEdgeWindow + 4_000_000)
+        XCTAssertEqual(
+            try HashingService.quickChecksum(of: good),
+            try HashingService.quickChecksum(of: bad),
+            "A spot check samples; only a full hash can prove equality"
+        )
+        XCTAssertNotEqual(
+            try HashingService.sha256(of: good),
+            try HashingService.sha256(of: bad),
+            "…which the full hash does catch"
+        )
+    }
+
+    func testSmallFilesAreReadWholeSoSamplingNeverWeakensThem() throws {
+        let a = try makeFile(64 * 1024)
+        let b = try makeFile(64 * 1024, tweakAt: 30_000)
+        XCTAssertNotEqual(
+            try HashingService.quickChecksum(of: a),
+            try HashingService.quickChecksum(of: b)
+        )
+    }
+
+    func testSpotCheckedRedundancyRanksBelowFullVerification() {
+        XCTAssertTrue(PartRedundancy.redundantSpotChecked.meetsPolicy)
+        XCTAssertTrue(PartRedundancy.redundantVerified.meetsPolicy)
+        XCTAssertNotEqual(PartRedundancy.redundantSpotChecked, .redundantVerified)
+    }
+}

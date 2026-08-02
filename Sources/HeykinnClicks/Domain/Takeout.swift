@@ -48,6 +48,9 @@ struct TakeoutArchive: Identifiable, Hashable {
     /// drive's copy be claimed as replicas by mapping transfer instead of
     /// per-entry hashing.
     var contentHash: String? = nil
+    /// Fast partial fingerprint (see `HashingService.quickChecksum`). Kept
+    /// apart from `contentHash` so a spot check is never presented as proof.
+    var quickChecksum: String? = nil
 
     var displayName: String { (path as NSString).lastPathComponent }
     var url: URL { URL(fileURLWithPath: path) }

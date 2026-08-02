@@ -9,6 +9,10 @@ enum PartRedundancy: String, Codable, Hashable {
     /// Enough drives hold it, matched by name and byte size only. Enough to
     /// plan against; not yet proof the bytes agree.
     case redundantUnverified
+    /// Enough drives hold it and their quick checksums agree — the same
+    /// length and the same bytes at every sampled window. Near-certain, but
+    /// not a guarantee about the parts not sampled.
+    case redundantSpotChecked
     /// Enough drives hold it and their whole-file hashes agree.
     case redundantVerified
 
@@ -17,13 +21,14 @@ enum PartRedundancy: String, Codable, Hashable {
         case .absent: return "Not on any drive"
         case .singleCopy: return "One copy"
         case .redundantUnverified: return "Enough copies (sizes match)"
+        case .redundantSpotChecked: return "Enough copies, spot-checked"
         case .redundantVerified: return "Enough copies, verified"
         }
     }
 
     /// Whether this state satisfies the configured local redundancy policy.
     var meetsPolicy: Bool {
-        self == .redundantUnverified || self == .redundantVerified
+        self == .redundantUnverified || self == .redundantSpotChecked || self == .redundantVerified
     }
 }
 
@@ -57,6 +62,14 @@ struct ExportPart: Identifiable, Hashable {
 
     /// True when the copies are the same size — cheap evidence that they are
     /// the same part, short of hashing tens of gigabytes.
+    /// True when every quick checksum computed agrees, and at least the
+    /// policy's number have been.
+    var quickChecksumsAgree: Bool {
+        let checksums = copies.values.compactMap(\.quickChecksum)
+        guard checksums.count >= 2 else { return false }
+        return Set(checksums).count == 1
+    }
+
     var sizesAgree: Bool {
         let sizes = copies.values.map(\.sizeBytes).filter { $0 > 0 }
         guard sizes.count >= 2 else { return false }
@@ -71,6 +84,7 @@ struct ExportPart: Identifiable, Hashable {
         if holders.isEmpty { return .absent }
         guard policy.isSatisfied(byCopies: holders.count) else { return .singleCopy }
         if hashesAgree { return .redundantVerified }
+        if quickChecksumsAgree { return .redundantSpotChecked }
         if sizesAgree { return .redundantUnverified }
         // Enough drives hold a part with this number, but their sizes disagree,
         // so they are not the same bytes. Report the weaker truth rather than

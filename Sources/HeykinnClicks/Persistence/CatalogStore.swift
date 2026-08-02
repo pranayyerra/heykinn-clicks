@@ -132,7 +132,8 @@ final class CatalogStore {
             export_set_id TEXT,
             part_number INTEGER,
             imported_through_index INTEGER NOT NULL DEFAULT 0,
-            imported_file_total INTEGER NOT NULL DEFAULT 0
+            imported_file_total INTEGER NOT NULL DEFAULT 0,
+            quick_checksum TEXT
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_takeout_path ON takeout_archives(path);
@@ -161,6 +162,7 @@ final class CatalogStore {
         try? database.exec("ALTER TABLE assets ADD COLUMN capture_date_source TEXT;")
         try? database.exec("ALTER TABLE assets ADD COLUMN edited_from_asset_id TEXT;")
         try? database.exec("ALTER TABLE drives ADD COLUMN last_mount_path TEXT;")
+        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN quick_checksum TEXT;")
     }
 
     /// Writes a consistent, compacted copy of the whole catalog to `path`.

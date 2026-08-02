@@ -153,11 +153,17 @@ struct ExportSummary: Identifiable {
         let verified = parts.filter {
             $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy) == .redundantVerified
         }
-        if verified.count < parts.count {
-            let pending = parts.count - verified.count
-            return ("On every drive — \(pending) part(s) not yet compared by checksum", "checkmark.circle", .teal)
+        let spotChecked = parts.filter {
+            $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy) == .redundantSpotChecked
         }
-        return ("On every drive, checksums match", "checkmark.seal.fill", .green)
+        if verified.count == parts.count {
+            return ("On every drive, copies verified byte for byte", "checkmark.seal.fill", .green)
+        }
+        if verified.count + spotChecked.count == parts.count {
+            return ("On every drive, copies match on a quick check", "checkmark.seal", .green)
+        }
+        let pending = parts.count - verified.count - spotChecked.count
+        return ("On every drive — \(pending) part(s) not yet compared", "checkmark.circle", .teal)
     }
 }
 
@@ -192,7 +198,10 @@ private struct ExportCard: View {
                                 store.extractTakeoutZips(export.extractableZips.map(\.id))
                             }
                         }
-                        Button("Compare copies by checksum") {
+                        Button("Quick compare copies") {
+                            store.spotCheckExportParts()
+                        }
+                        Button("Compare copies byte for byte…") {
                             store.verifyExportPartsByChecksum()
                         }
                         Divider()
