@@ -39,7 +39,7 @@ struct DuplicatesView: View {
                 ForEach(group.assetIDs, id: \.self) { assetID in
                     if let asset = store.assetsByID[assetID] {
                         HStack {
-                            AssetThumbnailView(asset: asset)
+                            AssetThumbnailView(asset: asset, allowsHoverPreview: false)
                                 .frame(width: 44, height: 44)
                             NavigationLink(value: assetID) {
                                 VStack(alignment: .leading) {

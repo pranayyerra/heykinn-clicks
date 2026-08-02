@@ -101,8 +101,27 @@ struct ProtectionBadge: View {
 /// for assets with no local bytes (cloud-resident).
 struct AssetThumbnailView: View {
     let asset: Asset
+    /// Off for tiny thumbnails (duplicate rows), where a video preview would
+    /// be noise rather than help.
+    var allowsHoverPreview: Bool = true
     @EnvironmentObject private var store: AppStore
     @State private var image: NSImage?
+    @StateObject private var preview = HoverPreviewController()
+
+    /// The moving file behind this cell: a video plays itself, a Live Photo
+    /// plays its motion half. Nil when nothing is reachable — with the drive
+    /// unplugged the still simply stays put.
+    private var previewURL: URL? {
+        guard allowsHoverPreview else { return nil }
+        switch asset.kind {
+        case .video:
+            return store.localFileURL(for: asset)
+        case .livePhoto:
+            return store.livePhotoMotion(for: asset).flatMap { store.localFileURL(for: $0) }
+        case .photo, .unknown:
+            return nil
+        }
+    }
 
     private var placeholderSymbol: String {
         switch asset.kind {
@@ -116,7 +135,10 @@ struct AssetThumbnailView: View {
         ZStack {
             RoundedRectangle(cornerRadius: 8)
                 .fill(Color.secondary.opacity(0.12))
-            if let image {
+            if let player = preview.player {
+                HoverPreviewLayer(player: player)
+                    .transition(.opacity)
+            } else if let image {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFill()
@@ -127,7 +149,7 @@ struct AssetThumbnailView: View {
                     .font(.title2)
                     .foregroundStyle(.secondary)
             }
-            if asset.kind == .livePhoto && image != nil {
+            if asset.kind == .livePhoto && image != nil && preview.player == nil {
                 VStack {
                     HStack {
                         Image(systemName: "livephoto")
@@ -141,7 +163,7 @@ struct AssetThumbnailView: View {
                 }
             }
             // Once videos have real frames they look like stills, so mark them.
-            if asset.kind == .video && image != nil {
+            if asset.kind == .video && image != nil && preview.player == nil {
                 VStack {
                     Spacer()
                     HStack {
@@ -156,6 +178,15 @@ struct AssetThumbnailView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        .onHover { inside in
+            if inside {
+                preview.hoverBegan(url: previewURL)
+            } else {
+                preview.hoverEnded()
+            }
+        }
+        .onDisappear { preview.hoverEnded() }
+        .animation(.easeInOut(duration: 0.15), value: preview.player == nil)
         .task(id: asset.id) {
             // A cached thumbnail is applied without a hop, so a cell scrolling
             // back into view shows immediately instead of flashing a placeholder.
