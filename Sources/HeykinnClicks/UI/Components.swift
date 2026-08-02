@@ -120,9 +120,13 @@ struct AssetThumbnailView: View {
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .task(id: asset.id) {
-            guard let url = store.localFileURL(for: asset) else { return }
-            let loaded = await Task.detached(priority: .utility) { NSImage(contentsOf: url) }.value
-            image = loaded
+            // A cached thumbnail is applied without a hop, so a cell scrolling
+            // back into view shows immediately instead of flashing a placeholder.
+            if let cached = store.thumbnails.cachedInMemory(asset.id) {
+                image = cached
+                return
+            }
+            image = await store.thumbnail(for: asset)
         }
     }
 }

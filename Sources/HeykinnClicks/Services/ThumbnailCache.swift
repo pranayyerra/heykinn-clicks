@@ -1,0 +1,161 @@
+import Foundation
+import AppKit
+import ImageIO
+import UniformTypeIdentifiers
+
+/// Two-level thumbnail cache: an in-memory tier for scrolling, and a small
+/// on-disk tier so the Library stays browsable when the drives are unplugged.
+///
+/// Without it, every cell scrolling back into view re-read and re-decoded the
+/// original from the external drive. Thumbnails are stored downsampled — not
+/// for decode speed (a full decode of these files is already fast) but because
+/// caching full-size images would cost ~48 MB of RAM each.
+///
+/// The disk tier lives in `~/Library/Caches`, which is the correct home for
+/// data the app can regenerate: it is excluded from backups and macOS may
+/// purge it under disk pressure, in which case thumbnails are simply rebuilt.
+final class ThumbnailCache {
+
+    /// Longest edge of a stored thumbnail. Covers the Library grid at retina
+    /// density; detail views trade a little sharpness for working offline.
+    static let maxPixelSize = 320
+    /// Disk tier ceiling. Roughly 22 KB per thumbnail, so this holds a library
+    /// of ~25k assets; beyond it the least recently used are evicted.
+    static let diskBudgetBytes: Int64 = 600 * 1024 * 1024
+
+    private let memory = NSCache<NSString, NSImage>()
+    private let directory: URL
+    private let fileManager = FileManager.default
+
+    init(directory: URL) {
+        self.directory = directory
+        // Cost is the decoded byte estimate, so the limit means what it says.
+        memory.totalCostLimit = 128 * 1024 * 1024
+        try? fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+    }
+
+    static func defaultCache() -> ThumbnailCache {
+        let caches = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first!
+        return ThumbnailCache(directory: caches.appendingPathComponent("HeykinnClicks/Thumbnails", isDirectory: true))
+    }
+
+    // MARK: - Lookup
+
+    /// Memory-tier hit, cheap enough to call from a view body.
+    func cachedInMemory(_ assetID: UUID) -> NSImage? {
+        memory.object(forKey: assetID.uuidString as NSString)
+    }
+
+    /// Memory → disk → generate from `sourceURL`. Returns nil only when there
+    /// is no cached copy and no reachable source (e.g. drive unplugged and
+    /// never viewed before).
+    func thumbnail(for assetID: UUID, sourceURL: URL?) -> NSImage? {
+        if let hit = cachedInMemory(assetID) { return hit }
+
+        let fileURL = diskURL(for: assetID)
+        if let data = try? Data(contentsOf: fileURL), let image = NSImage(data: data) {
+            store(image, for: assetID)
+            // Touch it so eviction treats this as recently used.
+            try? fileManager.setAttributes([.modificationDate: Date()], ofItemAtPath: fileURL.path)
+            return image
+        }
+
+        guard let sourceURL, let image = Self.makeThumbnail(from: sourceURL) else { return nil }
+        store(image, for: assetID)
+        writeToDisk(image, for: assetID)
+        return image
+    }
+
+    private func store(_ image: NSImage, for assetID: UUID) {
+        let cost = Int(image.size.width * image.size.height * 4)
+        memory.setObject(image, forKey: assetID.uuidString as NSString, cost: max(cost, 1))
+    }
+
+    func clearMemory() {
+        memory.removeAllObjects()
+    }
+
+    // MARK: - Disk tier
+
+    /// Sharded by ID prefix so no single directory holds tens of thousands of
+    /// entries, mirroring the staging layout.
+    func diskURL(for assetID: UUID) -> URL {
+        let id = assetID.uuidString
+        return directory
+            .appendingPathComponent(String(id.prefix(2)).lowercased(), isDirectory: true)
+            .appendingPathComponent("\(id).jpg")
+    }
+
+    private func writeToDisk(_ image: NSImage, for assetID: UUID) {
+        guard let data = Self.jpegData(from: image) else { return }
+        let url = diskURL(for: assetID)
+        try? fileManager.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try? data.write(to: url, options: .atomic)
+    }
+
+    var diskUsageBytes: Int64 {
+        guard let enumerator = fileManager.enumerator(
+            at: directory, includingPropertiesForKeys: [.fileSizeKey], options: [.skipsHiddenFiles]
+        ) else { return 0 }
+        var total: Int64 = 0
+        for case let url as URL in enumerator {
+            total += Int64((try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
+        }
+        return total
+    }
+
+    /// Evicts least recently used thumbnails until the tier fits its budget.
+    /// Safe to run any time: everything here can be regenerated.
+    @discardableResult
+    func pruneDisk(budget: Int64? = nil) -> Int {
+        let limit = budget ?? Self.diskBudgetBytes
+        guard let enumerator = fileManager.enumerator(
+            at: directory,
+            includingPropertiesForKeys: [.fileSizeKey, .contentModificationDateKey],
+            options: [.skipsHiddenFiles]
+        ) else { return 0 }
+
+        var entries: [(url: URL, size: Int64, used: Date)] = []
+        var total: Int64 = 0
+        for case let url as URL in enumerator where url.pathExtension == "jpg" {
+            let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
+            let size = Int64(values?.fileSize ?? 0)
+            entries.append((url, size, values?.contentModificationDate ?? .distantPast))
+            total += size
+        }
+        guard total > limit else { return 0 }
+
+        var removed = 0
+        for entry in entries.sorted(by: { $0.used < $1.used }) {
+            if total <= limit { break }
+            try? fileManager.removeItem(at: entry.url)
+            total -= entry.size
+            removed += 1
+        }
+        return removed
+    }
+
+    // MARK: - Generation
+
+    /// Downsamples with ImageIO, preferring an embedded camera thumbnail when
+    /// one exists and decoding the full image only when it does not.
+    static func makeThumbnail(from url: URL) -> NSImage? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: true,
+            kCGImageSourceThumbnailMaxPixelSize: maxPixelSize,
+            kCGImageSourceCreateThumbnailWithTransform: true,
+            kCGImageSourceShouldCacheImmediately: true,
+        ]
+        guard let cgImage = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary) else {
+            return nil
+        }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
+    static func jpegData(from image: NSImage) -> Data? {
+        guard let tiff = image.tiffRepresentation,
+              let bitmap = NSBitmapImageRep(data: tiff) else { return nil }
+        return bitmap.representation(using: .jpeg, properties: [.compressionFactor: 0.72])
+    }
+}

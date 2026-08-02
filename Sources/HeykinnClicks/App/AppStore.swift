@@ -66,7 +66,31 @@ final class AppStore: ObservableObject {
 
     let staging: StagingStore
     let driveMonitor: DriveMonitor
+    let thumbnails: ThumbnailCache
     private let catalog: CatalogStore
+    /// Thumbnail work already running, keyed by asset. Fast scrolling asks for
+    /// the same image repeatedly; without this each ask would start its own
+    /// read of the original off the drive.
+    private var thumbnailTasks: [UUID: Task<NSImage?, Never>] = [:]
+
+    /// Cached thumbnail, generating it from a reachable copy if needed.
+    /// Returns nil only when nothing is cached and no source is reachable —
+    /// e.g. a drive-resident asset, never viewed, with the drive unplugged.
+    func thumbnail(for asset: Asset) async -> NSImage? {
+        if let hit = thumbnails.cachedInMemory(asset.id) { return hit }
+        if let running = thumbnailTasks[asset.id] { return await running.value }
+
+        let cache = thumbnails
+        let sourceURL = localFileURL(for: asset)
+        let assetID = asset.id
+        let task = Task.detached(priority: .userInitiated) { () -> NSImage? in
+            cache.thumbnail(for: assetID, sourceURL: sourceURL)
+        }
+        thumbnailTasks[asset.id] = task
+        let image = await task.value
+        thumbnailTasks[asset.id] = nil
+        return image
+    }
 
     var connectedMounts: [UUID: URL] { driveMonitor.connectedMounts }
     var availableVolumes: [VolumeInfo] { driveMonitor.availableVolumes }
@@ -117,6 +141,7 @@ final class AppStore: ObservableObject {
 
         staging = StagingStore(rootURL: appDirectory.appendingPathComponent("Staging", isDirectory: true))
         driveMonitor = DriveMonitor()
+        thumbnails = ThumbnailCache.defaultCache()
 
         do {
             catalog = try CatalogStore(databasePath: appDirectory.appendingPathComponent("catalog.sqlite").path)
@@ -141,6 +166,9 @@ final class AppStore: ObservableObject {
         reconcileAfterRestart()
         refreshCatalogSnapshots()
         backupCatalog()
+
+        let cache = thumbnails
+        Task.detached(priority: .background) { cache.pruneDisk() }
 
         // Volume mount notifications cover the common case; a slow poll covers
         // anything they miss (e.g. network volumes, missed events).
