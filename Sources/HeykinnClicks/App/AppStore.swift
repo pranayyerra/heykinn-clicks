@@ -212,24 +212,53 @@ final class AppStore: ObservableObject {
             note: "checking \(candidates.count) candidate pair(s)"
         )
 
+        // Positions so each confirmed pair can be published in O(1); waiting
+        // for the whole scan to finish would leave the grid unchanged for
+        // minutes while thousands of pairs were already linked in the catalog.
+        var positionByID: [UUID: Int] = [:]
+        for (index, asset) in assets.enumerated() { positionByID[asset.id] = index }
+
         Task { @MainActor in
             var linked = 0
             var rejected = 0
+            var strongMatches = 0
+            var inferredMatches = 0
             for (index, candidate) in candidates.enumerated() {
-                let confirmed = await LivePhotoPairer.confirm(candidate)
-                if confirmed {
+                // A stem can offer several combinations; once either half is
+                // linked, the rest of that stem's combinations are moot.
+                if assetsByID[candidate.motionAssetID]?.livePhotoStillID != nil { continue }
+                if livePhotoMotionByStillID[candidate.stillAssetID] != nil { continue }
+                let confidence = await LivePhotoPairer.confirm(candidate)
+                if confidence == .identifiersMatch { strongMatches += 1 }
+                if confidence == .motionIdentifierAndName { inferredMatches += 1 }
+                if confidence.isPair {
                     do {
+                        var updatedMotion: Asset?
+                        var updatedStill: Asset?
                         try catalog.transaction {
                             if var motion = assetsByID[candidate.motionAssetID] {
                                 motion.livePhotoStillID = candidate.stillAssetID
                                 motion.updatedDate = Date()
                                 try catalog.upsertAsset(motion)
+                                updatedMotion = motion
                             }
                             if var still = assetsByID[candidate.stillAssetID] {
                                 still.kind = .livePhoto
                                 still.updatedDate = Date()
                                 try catalog.upsertAsset(still)
+                                updatedStill = still
                             }
+                        }
+                        // Publish immediately: the movie leaves the grid and the
+                        // still gains its badge as each pair is confirmed.
+                        if let motion = updatedMotion {
+                            if let at = positionByID[motion.id] { assets[at] = motion }
+                            assetsByID[motion.id] = motion
+                            livePhotoMotionByStillID[candidate.stillAssetID] = motion
+                        }
+                        if let still = updatedStill {
+                            if let at = positionByID[still.id] { assets[at] = still }
+                            assetsByID[still.id] = still
                         }
                         linked += 1
                     } catch {
@@ -239,12 +268,12 @@ final class AppStore: ObservableObject {
                 } else {
                     rejected += 1
                 }
-                if index % 50 == 0 {
+                if index % 25 == 0 {
                     takeoutActivity?.itemIndex = index
                     takeoutActivity?.note = "\(linked) paired, \(rejected) not Live Photos"
                 }
             }
-            audit(.system, "Live Photos: linked \(linked) pair(s); \(rejected) same-name candidate(s) were not Live Photos and were left alone.")
+            audit(.system, "Live Photos: linked \(linked) pair(s) — \(strongMatches) confirmed by matching Apple identifiers, \(inferredMatches) by the movie's identifier plus filename (Google had stripped the still's). \(rejected) same-name candidate(s) were not Live Photos and were left alone.")
             takeoutActivity = nil
             loadAll()
         }
@@ -1235,6 +1264,10 @@ final class AppStore: ObservableObject {
             // Local presence only — which is the one thing hashing proves.
             await performTakeoutImport(toImport.map(\.id), assumeStillInGoogle: false)
         }
+
+        // Takeout splits Live Photos into a still and a movie; reunite them so
+        // the motion halves do not sit in the grid as standalone videos.
+        pairLivePhotos()
 
         // The catalog just changed materially (new assets, new replica
         // claims); snapshot it onto the drive it describes.

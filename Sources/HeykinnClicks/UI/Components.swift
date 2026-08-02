@@ -104,6 +104,14 @@ struct AssetThumbnailView: View {
     @EnvironmentObject private var store: AppStore
     @State private var image: NSImage?
 
+    private var placeholderSymbol: String {
+        switch asset.kind {
+        case .video: return "video"
+        case .livePhoto: return "livephoto"
+        case .photo, .unknown: return "photo"
+        }
+    }
+
     var body: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 8)
@@ -113,7 +121,9 @@ struct AssetThumbnailView: View {
                     .resizable()
                     .scaledToFill()
             } else {
-                Image(systemName: asset.kind == .video ? "video" : "photo")
+                // The placeholder names the kind too, so a Live Photo is
+                // identifiable before its thumbnail has loaded.
+                Image(systemName: placeholderSymbol)
                     .font(.title2)
                     .foregroundStyle(.secondary)
             }

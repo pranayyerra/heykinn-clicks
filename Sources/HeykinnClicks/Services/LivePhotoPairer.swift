@@ -52,53 +52,92 @@ enum LivePhotoPairer {
         return duration.seconds
     }
 
-    /// Confirms a candidate really is a Live Photo pair. Requires both files
-    /// to carry the same Apple content identifier; a shared filename alone is
-    /// never enough to merge two assets.
-    static func confirm(_ candidate: Candidate) async -> Bool {
-        if let duration = await motionDuration(candidate.motionURL), duration > maxMotionDuration {
-            return false
-        }
-        guard let stillID = stillContentIdentifier(candidate.stillURL), !stillID.isEmpty else {
-            return false
-        }
-        return await motionContentIdentifier(candidate.motionURL) == stillID
+    /// How firmly a pair was established.
+    enum Confidence: String {
+        /// Both files carry the same Apple content identifier.
+        case identifiersMatch
+        /// The movie is provably the motion half of *a* Live Photo (it carries
+        /// a QuickTime content identifier) and shares the still's filename
+        /// stem, but the still's identifier is gone. Google re-encodes some
+        /// stills and drops Apple's maker note, so the link survives on one
+        /// side only; without it these pairs would never reunite.
+        case motionIdentifierAndName
+        case notAPair
+
+        var isPair: Bool { self != .notAPair }
     }
 
-    /// Pairs a still with a movie of the same stem in the same folder. Only
-    /// photo/video pairs qualify, and neither may already be paired.
+    /// Confirms a candidate really is a Live Photo pair. A shared filename is
+    /// never sufficient on its own — at minimum the movie must prove it is a
+    /// Live Photo's motion half by carrying a content identifier.
+    static func confirm(_ candidate: Candidate) async -> Confidence {
+        if let duration = await motionDuration(candidate.motionURL), duration > maxMotionDuration {
+            return .notAPair
+        }
+        let motionID = await motionContentIdentifier(candidate.motionURL)
+        guard let motionID, !motionID.isEmpty else { return .notAPair }
+
+        if let stillID = stillContentIdentifier(candidate.stillURL), !stillID.isEmpty {
+            return stillID == motionID ? .identifiersMatch : .notAPair
+        }
+        // Still has no identifier to compare; the movie's presence plus the
+        // matching stem is the best evidence available.
+        return .motionIdentifierAndName
+    }
+
+    /// Most still/movie combinations tried per filename stem. Guards against a
+    /// stem shared by many unrelated files (phones reuse names like IMG_1588)
+    /// turning into a combinatorial scan.
+    static let maxCombinationsPerStem = 9
+
+    /// Pairs a still with a movie sharing its filename stem. Deliberately not
+    /// restricted to one folder: Google splits an export by size, so a Live
+    /// Photo's two halves routinely land in different parts, and duplicate
+    /// collapsing can keep the still from one album and the movie from
+    /// another. Matching across folders is safe only because a pair is
+    /// confirmed by Apple's content identifier, never by name alone.
+    ///
+    /// Same-folder pairs are offered first, since they are the likeliest match
+    /// and confirming one lets the rest of that stem be skipped.
     static func candidates(
         from assets: [Asset],
         sourceURL: (Asset) -> URL?
     ) -> [Candidate] {
-        var stillsByKey: [String: Asset] = [:]
-        var motionsByKey: [String: Asset] = [:]
+        var stillsByStem: [String: [(Asset, URL)]] = [:]
+        var motionsByStem: [String: [(Asset, URL)]] = [:]
 
         for asset in assets where asset.livePhotoStillID == nil {
             guard let url = sourceURL(asset) else { continue }
-            // Same folder + same stem: Apple's export convention.
-            let key = url.deletingPathExtension().path
+            let stem = url.deletingPathExtension().lastPathComponent.lowercased()
             switch asset.kind {
-            case .photo, .livePhoto:
-                if stillsByKey[key] == nil { stillsByKey[key] = asset }
-            case .video:
-                if motionsByKey[key] == nil { motionsByKey[key] = asset }
-            case .unknown:
-                break
+            case .photo, .livePhoto: stillsByStem[stem, default: []].append((asset, url))
+            case .video: motionsByStem[stem, default: []].append((asset, url))
+            case .unknown: break
             }
         }
 
-        return motionsByKey.compactMap { key, motion -> Candidate? in
-            guard let still = stillsByKey[key],
-                  let stillURL = sourceURL(still),
-                  let motionURL = sourceURL(motion)
-            else { return nil }
-            return Candidate(
-                stillAssetID: still.id,
-                motionAssetID: motion.id,
-                stillURL: stillURL,
-                motionURL: motionURL
-            )
+        var result: [Candidate] = []
+        for (stem, motions) in motionsByStem {
+            guard let stills = stillsByStem[stem] else { continue }
+            var pairs: [(still: (Asset, URL), motion: (Asset, URL))] = []
+            for motion in motions {
+                for still in stills { pairs.append((still, motion)) }
+            }
+            // Same directory first, then everything else.
+            pairs.sort { lhs, rhs in
+                let lhsSame = lhs.still.1.deletingLastPathComponent() == lhs.motion.1.deletingLastPathComponent()
+                let rhsSame = rhs.still.1.deletingLastPathComponent() == rhs.motion.1.deletingLastPathComponent()
+                return lhsSame && !rhsSame
+            }
+            for pair in pairs.prefix(maxCombinationsPerStem) {
+                result.append(Candidate(
+                    stillAssetID: pair.still.0.id,
+                    motionAssetID: pair.motion.0.id,
+                    stillURL: pair.still.1,
+                    motionURL: pair.motion.1
+                ))
+            }
         }
+        return result
     }
 }

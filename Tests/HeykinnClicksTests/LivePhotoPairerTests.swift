@@ -29,12 +29,43 @@ final class LivePhotoPairerTests: XCTestCase {
         XCTAssertEqual(found[0].motionAssetID, motion.id)
     }
 
-    func testDoesNotPairAcrossDifferentFolders() {
+    /// Takeout splits by size, so a Live Photo's halves routinely land in
+    /// different export parts. Cross-folder pairs must still be offered —
+    /// the content identifier, not the folder, decides.
+    func testPairsAcrossDifferentFolders() {
         let still = makeAsset("IMG_1.HEIC", .photo)
         let motion = makeAsset("IMG_1.MP4", .video)
-        // Same name, different albums — a coincidence, not a Live Photo.
-        let resolve = urls([still.id: "/d/Album A/IMG_1.HEIC", motion.id: "/d/Album B/IMG_1.MP4"])
-        XCTAssertTrue(LivePhotoPairer.candidates(from: [still, motion], sourceURL: resolve).isEmpty)
+        let resolve = urls([still.id: "/d/part-005/IMG_1.HEIC", motion.id: "/d/part-006/IMG_1.MP4"])
+        XCTAssertEqual(LivePhotoPairer.candidates(from: [still, motion], sourceURL: resolve).count, 1)
+    }
+
+    func testSameFolderPairIsOfferedBeforeCrossFolderOnes() {
+        let still = makeAsset("IMG_1.HEIC", .photo)
+        let sameFolderMotion = makeAsset("IMG_1.MP4", .video)
+        let otherFolderMotion = makeAsset("IMG_1.MOV", .video)
+        let resolve = urls([
+            still.id: "/d/A/IMG_1.HEIC",
+            sameFolderMotion.id: "/d/A/IMG_1.MP4",
+            otherFolderMotion.id: "/d/B/IMG_1.MOV",
+        ])
+        let found = LivePhotoPairer.candidates(
+            from: [still, sameFolderMotion, otherFolderMotion], sourceURL: resolve
+        )
+        XCTAssertEqual(found.first?.motionAssetID, sameFolderMotion.id)
+    }
+
+    func testCombinationsPerStemAreCapped() {
+        var assets: [Asset] = []
+        var map: [UUID: String] = [:]
+        for index in 0..<6 {
+            let still = makeAsset("IMG_9.HEIC", .photo)
+            let motion = makeAsset("IMG_9.MP4", .video)
+            assets.append(contentsOf: [still, motion])
+            map[still.id] = "/d/\(index)/IMG_9.HEIC"
+            map[motion.id] = "/d/\(index)/IMG_9.MP4"
+        }
+        let found = LivePhotoPairer.candidates(from: assets, sourceURL: urls(map))
+        XCTAssertLessThanOrEqual(found.count, LivePhotoPairer.maxCombinationsPerStem)
     }
 
     func testDoesNotPairTwoStillsOrTwoVideos() {
@@ -77,8 +108,9 @@ final class LivePhotoPairerTests: XCTestCase {
         let candidate = LivePhotoPairer.Candidate(
             stillAssetID: UUID(), motionAssetID: UUID(), stillURL: still, motionURL: motion
         )
-        let confirmed = await LivePhotoPairer.confirm(candidate)
-        XCTAssertFalse(confirmed)
+        let confidence = await LivePhotoPairer.confirm(candidate)
+        XCTAssertFalse(confidence.isPair, "Neither file carries a Live Photo identifier")
+        XCTAssertEqual(confidence, .notAPair)
     }
 
     func testMotionHalfIsFlaggedAndHiddenFromTheGrid() {
