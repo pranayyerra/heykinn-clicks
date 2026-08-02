@@ -751,12 +751,19 @@ final class AppStore: ObservableObject {
 
         Task {
             let files = ImportService.mediaFileURLs(under: urls)
-            let result = ImportService.importFiles(
+            // A folder chosen from a managed drive counts as that drive's copy.
+            let replicaContext = files.first
+                .flatMap { file in
+                    connectedMounts.first { file.path.hasPrefix($0.value.path + "/") }
+                }
+                .map { (driveID: $0.key, mountPath: $0.value.path) }
+            let result = await ImportService.importFiles(
                 files,
                 sourceDescription: sourceDescription,
                 existingAssets: existing,
                 policyRules: rules,
-                staging: stagingStore
+                staging: stagingStore,
+                replicaContext: replicaContext
             )
             applyImportResult(result)
         }
@@ -823,10 +830,11 @@ final class AppStore: ObservableObject {
     private func applyImportResult(_ result: ImportResult) {
         do {
             try catalog.upsertImportBatch(result.batch)
-            try persistImportedAssets(result.importedAssets)
+            try persistImportedAssets(result.importedAssets, archiveBacked: result.archiveBackedReplicas)
             audit(.importEvent, "Imported \(result.importedAssets.count) asset(s) from \(result.batch.sourcePath) (\(result.duplicateFilenames.count) exact duplicate(s) skipped, \(result.failures.count) failure(s)).")
             if !result.importedAssets.isEmpty {
                 reopenLivePhotoChecks(forNewlyImported: result.importedAssets)
+                recoverCaptureDates()
                 pairLivePhotos()
             }
             if !result.failures.isEmpty {

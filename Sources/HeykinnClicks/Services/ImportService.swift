@@ -45,13 +45,18 @@ enum ImportService {
 
     /// Imports one batch. `existingAssets` is the current catalog snapshot used
     /// for exact-duplicate rejection; duplicates are reported, never merged.
+    /// Shares the Takeout importer's machinery deliberately: parallel
+    /// scanning, the full capture-date precedence chain, and archive-backed
+    /// replicas. Anything learned about reading media should benefit every
+    /// import path, not only Takeout.
     static func importFiles(
         _ fileURLs: [URL],
         sourceDescription: String,
         existingAssets: [Asset],
         policyRules: [PolicyRule],
-        staging: StagingStore
-    ) -> ImportResult {
+        staging: StagingStore,
+        replicaContext: (driveID: UUID, mountPath: String)? = nil
+    ) async -> ImportResult {
         var batch = ImportBatch(
             id: UUID(),
             sourcePath: sourceDescription,
@@ -64,20 +69,41 @@ enum ImportService {
         var imported: [Asset] = []
         var duplicates: [String] = []
         var failures: [(String, String)] = []
+        var archiveBacked: [UUID: DriveReplicaState] = [:]
         var knownHashes = Set(existingAssets.map(\.contentHash))
 
-        for fileURL in fileURLs {
+        let scanned = TakeoutImporter.scanFilesInParallel(fileURLs)
+        let movieDates = await TakeoutImporter.movieCreationDates(for: scanned)
+
+        for scan in scanned {
+            let fileURL = scan.fileURL
             let filename = fileURL.lastPathComponent
             do {
-                let hash = try HashingService.sha256(of: fileURL)
+                let hash: String
+                let fileSize: Int64
+                var metadata: ExtractedMetadata
+                switch scan.outcome {
+                case .failure(let message):
+                    failures.append((filename, message))
+                    continue
+                case .success(let scannedHash, let scannedSize, let scannedMetadata):
+                    hash = scannedHash
+                    fileSize = scannedSize
+                    metadata = scannedMetadata
+                }
                 if knownHashes.contains(hash) {
                     duplicates.append(filename)
                     continue
                 }
 
-                let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-                let fileSize = (attributes[.size] as? Int64) ?? 0
-                let metadata = MetadataExtractor.extract(from: fileURL)
+                // The scan already ran the full precedence chain (file, then
+                // sidecar, then filename, then folder year). Only the movie
+                // container date is left, because it needs an async read.
+                if metadata.captureDate == nil, let movieDate = movieDates[fileURL] {
+                    metadata.captureDate = movieDate
+                    metadata.captureDateSource = .fileMetadata
+                }
+
                 let origin = PolicyEngine.classifyOrigin(
                     filename: filename,
                     folderHint: fileURL.deletingLastPathComponent().path
@@ -91,19 +117,29 @@ enum ImportService {
 
                 let assetID = UUID()
                 var presence = DomainPresence.none
-                var stagingPath: String?
-                // Every import lands in staging first — even for cloud-destined
-                // assets the file exists locally until the user completes the
-                // cloud upload workflow. For Local residency, staging *is* the
-                // authoritative first copy.
-                stagingPath = try staging.stage(
-                    fileAt: fileURL,
-                    assetID: assetID,
-                    fileExtension: fileURL.pathExtension.lowercased()
-                )
                 presence.local = true
-
                 let now = Date()
+
+                // A file already sitting on a managed drive is that drive's
+                // replica; staging a second copy would duplicate the source
+                // onto the Mac for no benefit.
+                var stagingPath: String?
+                if let context = replicaContext, fileURL.path.hasPrefix(context.mountPath + "/") {
+                    archiveBacked[assetID] = DriveReplicaState(
+                        assetID: assetID,
+                        driveID: context.driveID,
+                        state: .present,
+                        relativePath: ReplicationService.volumeBackedPrefix
+                            + String(fileURL.path.dropFirst(context.mountPath.count + 1)),
+                        lastVerifiedAt: now
+                    )
+                } else {
+                    stagingPath = try staging.stage(
+                        fileAt: fileURL,
+                        assetID: assetID,
+                        fileExtension: fileURL.pathExtension.lowercased()
+                    )
+                }
                 let asset = Asset(
                     id: assetID,
                     kind: metadata.kind,
@@ -121,7 +157,8 @@ enum ImportService {
                     presence: presence,
                     stagingRelativePath: stagingPath,
                     importBatchID: batch.id,
-                    exifSummary: metadata.exifSummary
+                    exifSummary: metadata.exifSummary,
+                    captureDateSource: metadata.captureDateSource
                 )
                 imported.append(asset)
                 knownHashes.insert(hash)
@@ -138,7 +175,8 @@ enum ImportService {
             batch: batch,
             importedAssets: imported,
             duplicateFilenames: duplicates,
-            failures: failures.map { (filename: $0.0, error: $0.1) }
+            failures: failures.map { (filename: $0.0, error: $0.1) },
+            archiveBackedReplicas: archiveBacked
         )
     }
 }
