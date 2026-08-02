@@ -70,6 +70,21 @@ final class SQLiteDatabase {
         handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
     }
 
+    /// Runs `body` inside a transaction, committing on success and rolling
+    /// back on any error. Groups related writes (an asset and its replica
+    /// state) so a crash can never leave one without the other.
+    func transaction<T>(_ body: () throws -> T) throws -> T {
+        try exec("BEGIN IMMEDIATE;")
+        do {
+            let result = try body()
+            try exec("COMMIT;")
+            return result
+        } catch {
+            try? exec("ROLLBACK;")
+            throw error
+        }
+    }
+
     func exec(_ sql: String) throws {
         guard sqlite3_exec(handle, sql, nil, nil, nil) == SQLITE_OK else {
             throw SQLiteError.execFailed(lastError, sql: sql)

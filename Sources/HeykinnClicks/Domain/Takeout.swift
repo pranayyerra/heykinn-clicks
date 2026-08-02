@@ -36,6 +36,13 @@ struct TakeoutArchive: Identifiable, Hashable {
     var exportSetID: String?
     /// 1-based part index within the export set (`-002` → 2).
     var partNumber: Int?
+    /// Resume checkpoint: how many of this archive's media files (in stable
+    /// sorted order) have already been committed, and how many were seen when
+    /// that count was recorded. An interrupted import resumes after this
+    /// point instead of re-hashing gigabytes it already processed. The count
+    /// is only trusted when the file total still matches.
+    var importedThroughIndex: Int = 0
+    var importedFileTotal: Int = 0
     /// Whole-file SHA-256 of a zip archive, fingerprinted opportunistically.
     /// Two zips with equal hashes are byte-identical, which lets a second
     /// drive's copy be claimed as replicas by mapping transfer instead of

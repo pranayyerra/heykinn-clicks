@@ -125,6 +125,8 @@ final class AppStore: ObservableObject {
             self?.rescanDrives()
         }
         rescanDrives()
+        // Runs after the drive scan so drive-resident leftovers are visible.
+        reconcileAfterRestart()
 
         // Volume mount notifications cover the common case; a slow poll covers
         // anything they miss (e.g. network volumes, missed events).
@@ -132,6 +134,98 @@ final class AppStore: ObservableObject {
             Task { @MainActor in
                 self?.rescanDrives()
             }
+        }
+    }
+
+    // MARK: - Startup integrity
+
+    /// Repairs whatever an abrupt termination left behind. Everything here is
+    /// idempotent and safe to run on every launch: it only removes files the
+    /// catalog does not reference, and only re-queues work that can be redone.
+    /// Never deletes anything the catalog depends on.
+    func reconcileAfterRestart() {
+        var repairs: [String] = []
+        do {
+            // 1. Replication tasks interrupted mid-flight would otherwise sit
+            // in a state the sync loop never picks up again.
+            let stuck = replicationTasks.filter { $0.state == .inProgress }
+            for var task in stuck {
+                task.state = .queued
+                task.errorMessage = "Requeued after an interrupted run"
+                try catalog.upsertReplicationTask(task)
+            }
+            if !stuck.isEmpty { repairs.append("requeued \(stuck.count) interrupted replication task(s)") }
+
+            // 2. Assets can reference a batch row that never got written by an
+            // older build; synthesise it so import history is not lost.
+            let knownBatchIDs = Set(importBatches.map(\.id))
+            let orphanBatchIDs = Set(assets.compactMap(\.importBatchID)).subtracting(knownBatchIDs)
+            for batchID in orphanBatchIDs {
+                let members = assets.filter { $0.importBatchID == batchID }
+                guard let earliest = members.map(\.importDate).min() else { continue }
+                try catalog.upsertImportBatch(ImportBatch(
+                    id: batchID,
+                    sourcePath: "Recovered import (\(members.first?.importOrigin.displayName ?? "unknown"))",
+                    startedAt: earliest,
+                    completedAt: members.map(\.updatedDate).max(),
+                    importedCount: members.count,
+                    duplicateCount: 0,
+                    failedCount: 0
+                ))
+            }
+            if !orphanBatchIDs.isEmpty {
+                repairs.append("recovered \(orphanBatchIDs.count) import batch record(s) covering \(assets.filter { $0.importBatchID.map(orphanBatchIDs.contains) ?? false }.count) asset(s)")
+            }
+
+            // 3. Staged files no asset points at: bytes copied in just before
+            // the process died. Reclaimable, and nothing references them.
+            let referenced = Set(assets.compactMap(\.stagingRelativePath))
+            var orphanedStaging = 0
+            if let enumerator = FileManager.default.enumerator(
+                at: staging.rootURL, includingPropertiesForKeys: nil, options: [.skipsHiddenFiles]
+            ) {
+                for case let fileURL as URL in enumerator {
+                    guard (try? fileURL.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+                    let relative = fileURL.path.replacingOccurrences(of: staging.rootURL.path + "/", with: "")
+                    if !referenced.contains(relative) {
+                        try? FileManager.default.removeItem(at: fileURL)
+                        orphanedStaging += 1
+                    }
+                }
+            }
+            if orphanedStaging > 0 { repairs.append("removed \(orphanedStaging) orphaned staged file(s)") }
+
+            // 4. Abandoned zip-extraction workspaces on the Mac (each can be
+            // many GB) and half-written `.extracting` folders on drives.
+            let workArea = staging.rootURL.deletingLastPathComponent()
+                .appendingPathComponent("TakeoutWork", isDirectory: true)
+            if let leftovers = try? FileManager.default.contentsOfDirectory(at: workArea, includingPropertiesForKeys: nil),
+               !leftovers.isEmpty {
+                for item in leftovers { try? FileManager.default.removeItem(at: item) }
+                repairs.append("cleared \(leftovers.count) abandoned extraction workspace(s)")
+            }
+            // Only look where extractions actually happen — beside a known
+            // archive. Walking whole volumes at launch would cost a full-drive
+            // directory traversal on every start.
+            var partials = 0
+            let extractionParents = Set(
+                takeoutArchives.map { URL(fileURLWithPath: $0.path).deletingLastPathComponent().path }
+            )
+            for parent in extractionParents {
+                guard let entries = try? FileManager.default.contentsOfDirectory(atPath: parent) else { continue }
+                for entry in entries where entry.hasSuffix(".extracting") {
+                    try? FileManager.default.removeItem(at: URL(fileURLWithPath: parent).appendingPathComponent(entry))
+                    partials += 1
+                }
+            }
+            if partials > 0 { repairs.append("removed \(partials) incomplete extraction folder(s)") }
+
+            if !repairs.isEmpty {
+                audit(.system, "Startup reconciliation: " + repairs.joined(separator: "; ") + ".")
+                loadAll()
+            }
+        } catch {
+            lastError = "Startup reconciliation failed: \(error.localizedDescription)"
         }
     }
 
@@ -225,7 +319,14 @@ final class AppStore: ObservableObject {
 
     private func audit(_ category: AuditCategory, _ message: String, assetID: UUID? = nil, driveID: UUID? = nil) {
         let event = AuditEvent(id: UUID(), at: Date(), category: category, message: message, assetID: assetID, driveID: driveID)
-        try? catalog.appendAuditEvent(event)
+        do {
+            try catalog.appendAuditEvent(event)
+        } catch {
+            // The audit log is the record of what the app did to the archive;
+            // losing entries silently would hide exactly the history a user
+            // needs after an interrupted run.
+            lastError = "Could not record audit event: \(error.localizedDescription)"
+        }
         auditEvents.insert(event, at: 0)
     }
 
@@ -451,6 +552,26 @@ final class AppStore: ObservableObject {
         /// Covers the temporary Google+Local overlap; grown chunk by chunk.
         var overlapJobID: UUID?
 
+        // Write the batch row before any asset references it. Previously this
+        // happened only after every part finished, so an interrupted import
+        // left thousands of assets pointing at a batch that did not exist.
+        var batch = ImportBatch(
+            id: batchID,
+            sourcePath: setLabel,
+            startedAt: startedAt,
+            completedAt: nil,
+            importedCount: 0,
+            duplicateCount: 0,
+            failedCount: 0
+        )
+        do {
+            try catalog.upsertImportBatch(batch)
+        } catch {
+            lastError = "Could not open import batch: \(error.localizedDescription)"
+            isImporting = false
+            return
+        }
+
         for (index, archiveConst) in targets.enumerated() {
             var archive = archiveConst
             takeoutActivity = TakeoutActivity(
@@ -478,12 +599,21 @@ final class AppStore: ObservableObject {
                 let partFiles = await Task.detached(priority: .utility) {
                     TakeoutImporter.mediaFileURLs(in: workspace)
                 }.value
-                var partImported = 0
-                var partDuplicates = 0
+                var partImported = archive.importedAssetCount
+                var partDuplicates = archive.skippedDuplicateCount
                 var partArchiveBackedCount = 0
-                var processedFiles = 0
+                // Resume from the checkpoint when the part's file list is
+                // unchanged; otherwise start over rather than trust an index
+                // into a list that may have shifted.
+                let resumeFrom = (archive.importedFileTotal == partFiles.count)
+                    ? min(archive.importedThroughIndex, partFiles.count)
+                    : 0
+                if resumeFrom > 0 {
+                    audit(.importEvent, "Resuming \(archive.displayName) after \(resumeFrom) already-processed file(s); \(partFiles.count - resumeFrom) remain.")
+                }
+                var processedFiles = resumeFrom
 
-                for chunk in stride(from: 0, to: partFiles.count, by: Self.importChunkSize).map({
+                for chunk in stride(from: resumeFrom, to: partFiles.count, by: Self.importChunkSize).map({
                     Array(partFiles[$0..<min($0 + Self.importChunkSize, partFiles.count)])
                 }) {
                     let hashSnapshot = knownHashes
@@ -500,10 +630,33 @@ final class AppStore: ObservableObject {
                         )
                     }.value
 
-                    let replicas = try persistImportedAssets(
-                        result.importedAssets,
-                        archiveBacked: result.archiveBackedReplicas
-                    )
+                    processedFiles += chunk.count
+                    partImported += result.importedAssets.count
+                    partDuplicates += result.duplicateFilenames.count
+
+                    // One transaction per chunk: assets, their replica states,
+                    // the batch counters, and the resume checkpoint either all
+                    // land or none do. A crash mid-chunk can then only lose
+                    // that chunk's work, never leave a half-written record.
+                    var checkpoint = archive
+                    checkpoint.importedThroughIndex = processedFiles
+                    checkpoint.importedFileTotal = partFiles.count
+                    checkpoint.importedAssetCount = partImported
+                    checkpoint.skippedDuplicateCount = partDuplicates
+                    batch.importedCount = allImported.count + result.importedAssets.count
+                    batch.duplicateCount = duplicateTotal + result.duplicateFilenames.count
+                    batch.failedCount = failureTotal + result.failures.count
+                    let batchSnapshot = batch
+                    let replicas = try catalog.transaction { () -> [DriveReplicaState] in
+                        let written = try persistImportedAssets(
+                            result.importedAssets,
+                            archiveBacked: result.archiveBackedReplicas
+                        )
+                        try catalog.upsertImportBatch(batchSnapshot)
+                        try catalog.upsertTakeoutArchive(checkpoint)
+                        return written
+                    }
+                    archive = checkpoint
                     // When the user has stated the content is still in Google,
                     // the two-domain overlap must be covered by a migration job
                     // from the moment the first asset lands — otherwise an
@@ -520,12 +673,9 @@ final class AppStore: ObservableObject {
 
                     knownHashes.formUnion(result.importedAssets.map(\.contentHash))
                     allImported.append(contentsOf: result.importedAssets)
-                    partImported += result.importedAssets.count
-                    partDuplicates += result.duplicateFilenames.count
                     partArchiveBackedCount += result.archiveBackedReplicas.count
                     duplicateTotal += result.duplicateFilenames.count
                     failureTotal += result.failures.count
-                    processedFiles += chunk.count
 
                     takeoutActivity = TakeoutActivity(
                         phase: .importing,
@@ -560,15 +710,12 @@ final class AppStore: ObservableObject {
         }
 
         do {
-            try catalog.upsertImportBatch(ImportBatch(
-                id: batchID,
-                sourcePath: setLabel,
-                startedAt: startedAt,
-                completedAt: Date(),
-                importedCount: allImported.count,
-                duplicateCount: duplicateTotal,
-                failedCount: failureTotal
-            ))
+            // Finalise the batch opened before the first chunk.
+            batch.completedAt = Date()
+            batch.importedCount = allImported.count
+            batch.duplicateCount = duplicateTotal
+            batch.failedCount = failureTotal
+            try catalog.upsertImportBatch(batch)
             var message = "Imported \(allImported.count) asset(s) from \(setLabel) (\(duplicateTotal) duplicate(s) skipped, \(failureTotal) failure(s))."
             if let abortedAt {
                 message += " Aborted at \(abortedAt); already-imported parts are kept."

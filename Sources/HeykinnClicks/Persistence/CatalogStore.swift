@@ -125,7 +125,9 @@ final class CatalogStore {
             skipped_duplicate_count INTEGER NOT NULL DEFAULT 0,
             note TEXT,
             export_set_id TEXT,
-            part_number INTEGER
+            part_number INTEGER,
+            imported_through_index INTEGER NOT NULL DEFAULT 0,
+            imported_file_total INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_takeout_path ON takeout_archives(path);
@@ -147,6 +149,13 @@ final class CatalogStore {
         try? database.exec("ALTER TABLE takeout_archives ADD COLUMN content_hash TEXT;")
         try? database.exec("ALTER TABLE assets ADD COLUMN cloud_evidence TEXT;")
         try? database.exec("ALTER TABLE assets ADD COLUMN cloud_checked_at REAL;")
+        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN imported_through_index INTEGER NOT NULL DEFAULT 0;")
+        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN imported_file_total INTEGER NOT NULL DEFAULT 0;")
+    }
+
+    /// Groups writes into one atomic unit; see `SQLiteDatabase.transaction`.
+    func transaction<T>(_ body: () throws -> T) throws -> T {
+        try database.transaction(body)
     }
 
     // MARK: - JSON helpers

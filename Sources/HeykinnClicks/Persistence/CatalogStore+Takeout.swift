@@ -6,8 +6,8 @@ extension CatalogStore {
         try database.run("""
         INSERT INTO takeout_archives (id, path, kind, size_bytes, drive_id, discovered_at,
             imported_at, import_batch_id, imported_asset_count, skipped_duplicate_count, note,
-            export_set_id, part_number, content_hash)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            export_set_id, part_number, content_hash, imported_through_index, imported_file_total)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             path = excluded.path,
             kind = excluded.kind,
@@ -21,7 +21,9 @@ extension CatalogStore {
             note = excluded.note,
             export_set_id = excluded.export_set_id,
             part_number = excluded.part_number,
-            content_hash = excluded.content_hash;
+            content_hash = excluded.content_hash,
+            imported_through_index = excluded.imported_through_index,
+            imported_file_total = excluded.imported_file_total;
         """, [
             .text(archive.id.uuidString),
             .text(archive.path),
@@ -37,6 +39,8 @@ extension CatalogStore {
             .optionalText(archive.exportSetID),
             .optionalInt(archive.partNumber.map(Int64.init)),
             .optionalText(archive.contentHash),
+            .int(Int64(archive.importedThroughIndex)),
+            .int(Int64(archive.importedFileTotal)),
         ])
     }
 
@@ -44,7 +48,7 @@ extension CatalogStore {
         try database.query("""
         SELECT id, path, kind, size_bytes, drive_id, discovered_at, imported_at,
                import_batch_id, imported_asset_count, skipped_duplicate_count, note,
-               export_set_id, part_number, content_hash
+               export_set_id, part_number, content_hash, imported_through_index, imported_file_total
         FROM takeout_archives ORDER BY discovered_at DESC;
         """) { row in
             TakeoutArchive(
@@ -61,6 +65,8 @@ extension CatalogStore {
                 note: row.optionalText(10),
                 exportSetID: row.optionalText(11),
                 partNumber: row.optionalInt(12).map(Int.init),
+                importedThroughIndex: Int(row.int(14)),
+                importedFileTotal: Int(row.int(15)),
                 contentHash: row.optionalText(13)
             )
         }
