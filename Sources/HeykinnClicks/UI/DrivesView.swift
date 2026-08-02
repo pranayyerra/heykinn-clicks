@@ -10,8 +10,18 @@ struct DrivesView: View {
             VStack(alignment: .leading, spacing: 20) {
                 connectionSummary
 
+                // Both automation settings live together rather than one being
+                // stranded on the Takeout screen.
                 Toggle("Automatically sync a managed drive when it connects", isOn: $store.autoSyncOnConnect)
                     .toggleStyle(.switch)
+
+                VStack(alignment: .leading, spacing: 4) {
+                    Toggle("Handle Google exports on a drive automatically", isOn: $store.autoManageTakeout)
+                        .toggleStyle(.switch)
+                    Text("Finds exports on a connected drive, unpacks and imports what is new, and recognises copies the drive already holds instead of copying them again.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
 
                 Label {
                     Text("**Checking for damage** re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It has to read every byte, so it runs in batches rather than all at once.")

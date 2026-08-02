@@ -1,101 +1,55 @@
 import SwiftUI
 
+/// One row per export, not per file.
+///
+/// Scanning, extracting, importing, pairing and redundancy all happen on their
+/// own now, so the screen's job is to answer one question — is this export
+/// safe? — and keep the manual escapes out of the way.
 struct TakeoutView: View {
     @EnvironmentObject private var store: AppStore
     @State private var isFolderPickerPresented = false
     @State private var importRequest: TakeoutImportRequest?
-    @State private var deleteCandidate: TakeoutArchive?
-
-    /// Multi-part zips grouped by export session; everything else listed singly.
-    private var grouped: (sets: [TakeoutExportSet], singles: [TakeoutArchive]) {
-        let bySet = Dictionary(grouping: store.takeoutArchives.filter { $0.exportSetID != nil }) {
-            $0.exportSetID!
-        }
-        let sets = bySet
-            .filter { $0.value.count > 1 }
-            .map { TakeoutExportSet(setID: $0.key, parts: $0.value.sorted { ($0.partNumber ?? 0) < ($1.partNumber ?? 0) }) }
-            .sorted { $0.setID > $1.setID }
-        let multiPartSetIDs = Set(sets.map(\.setID))
-        let singles = store.takeoutArchives.filter {
-            $0.exportSetID == nil || !multiPartSetIDs.contains($0.exportSetID!)
-        }
-        return (sets, singles)
-    }
 
     var body: some View {
         ScrollView {
-            VStack(alignment: .leading, spacing: 20) {
-                Text("Google Takeout exports found on your drives can be imported into the archive. The archive files themselves are never modified or deleted — media is copied into staging, paired with Google's JSON sidecars for capture dates and locations, and deduplicated against the catalog. Split downloads (takeout-…-001.zip, -002.zip, …) are grouped into export sets and imported together.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Automatically manage Takeout on managed drives", isOn: $store.autoManageTakeout)
-                        .toggleStyle(.switch)
-                    Text("On connect, a managed drive is scanned, zips are extracted in place, and everything is imported — with the drive's Takeout files counting as its replica copy. The second drive's copy fills in when it connects.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-
+            VStack(alignment: .leading, spacing: 16) {
                 if let activity = store.takeoutActivity {
                     TakeoutActivityBanner(activity: activity)
                 }
 
-                GroupBox("Scan for Takeout archives") {
-                    VStack(alignment: .leading, spacing: 8) {
-                        let connectedDrives = store.drives.filter { store.connectedMounts[$0.id] != nil }
-                        if connectedDrives.isEmpty {
-                            Text("No managed drives connected. Connect a drive to scan it, or scan any folder.")
-                                .font(.callout)
-                                .foregroundStyle(.secondary)
-                        }
-                        ForEach(connectedDrives) { drive in
-                            HStack {
-                                Label(drive.name, systemImage: "externaldrive")
-                                Spacer()
-                                Button("Scan \(drive.name)") {
-                                    if let mount = store.connectedMounts[drive.id] {
-                                        store.scanForTakeout(rootURL: mount, driveID: drive.id)
-                                    }
-                                }
-                                .disabled(store.takeoutActivity != nil)
-                            }
-                        }
-                        HStack {
-                            Label("Any folder", systemImage: "folder")
-                            Spacer()
-                            Button("Scan a folder…") { isFolderPickerPresented = true }
-                                .disabled(store.takeoutActivity != nil)
-                        }
-                    }
-                    .padding(6)
-                }
-
-                let (sets, singles) = grouped
-
-                ForEach(sets) { set in
-                    exportSetBox(set)
-                }
-
-                GroupBox(sets.isEmpty ? "Archives" : "Other archives") {
-                    if singles.isEmpty {
-                        Text(sets.isEmpty ? "Nothing discovered yet. Scan a drive or folder above." : "No standalone archives.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(6)
-                    } else {
-                        VStack(spacing: 10) {
-                            ForEach(singles) { archive in
-                                archiveRow(archive, showImportButton: true)
-                            }
-                        }
-                        .padding(6)
+                if exports.isEmpty {
+                    ContentUnavailableView(
+                        "No Google exports found",
+                        systemImage: "shippingbox",
+                        description: Text("Connect a drive holding a Takeout download, or look in a folder. Exports are found, unpacked and imported without further prompting.")
+                    )
+                    .padding(.top, 40)
+                } else {
+                    ForEach(exports) { export in
+                        ExportCard(export: export, importRequest: $importRequest)
                     }
                 }
             }
             .padding()
         }
         .navigationTitle("Google Takeout")
+        .toolbar {
+            ToolbarItem {
+                Menu {
+                    ForEach(store.drives.filter { store.connectedMounts[$0.id] != nil }) { drive in
+                        Button("Look on \(drive.name)") {
+                            if let mount = store.connectedMounts[drive.id] {
+                                store.scanForTakeout(rootURL: mount, driveID: drive.id)
+                            }
+                        }
+                    }
+                    Button("Look in a folder…") { isFolderPickerPresented = true }
+                } label: {
+                    Label("Look for exports", systemImage: "magnifyingglass")
+                }
+                .disabled(store.takeoutActivity != nil)
+            }
+        }
         .fileImporter(
             isPresented: $isFolderPickerPresented,
             allowedContentTypes: [.folder],
@@ -105,168 +59,157 @@ struct TakeoutView: View {
                 store.scanForTakeout(rootURL: url, driveID: nil)
             }
         }
-        .sheet(item: $importRequest) { request in
-            TakeoutImportSheet(request: request)
-        }
-        .confirmationDialog(
-            "Delete extracted folder?",
-            isPresented: Binding(
-                get: { deleteCandidate != nil },
-                set: { if !$0 { deleteCandidate = nil } }
-            )
-        ) {
-            if let candidate = deleteCandidate {
-                Button("Delete \(candidate.displayName)", role: .destructive) {
-                    store.deleteExtractedTakeoutFolder(candidate.id)
-                    deleteCandidate = nil
-                }
-            }
-            Button("Cancel", role: .cancel) { deleteCandidate = nil }
-        } message: {
-            if let candidate = deleteCandidate {
-                Text("Its \(candidate.importedAssetCount) imported asset(s) are fully replicated to both managed drives, and the zip original stays on the drive. This only reclaims the extracted copy's space.")
-            }
-        }
+        .sheet(item: $importRequest) { TakeoutImportSheet(request: $0) }
     }
 
-    private func exportSetBox(_ set: TakeoutExportSet) -> some View {
-        let toImport = set.unimportedPreferredParts
-        let allAccessible = toImport.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
-        let totalBytes = set.parts.reduce(Int64(0)) { $0 + $1.sizeBytes }
-        let hasFolderTwins = set.representativesByPartNumber.values.contains { $0.count > 1 }
+    /// Archives grouped into the exports they belong to, newest first.
+    private var exports: [ExportSummary] {
+        let grouped = Dictionary(grouping: store.takeoutArchives) { $0.exportSetID ?? "" }
+        return grouped
+            .map { ExportSummary(setID: $0.key, archives: $0.value, plan: store.archivePlan) }
+            .sorted { $0.setID > $1.setID }
+    }
+}
 
-        return GroupBox("Export set \(set.setID) — \(set.uniquePartCount) parts, \(Formatters.bytes.string(fromByteCount: totalBytes))") {
-            VStack(alignment: .leading, spacing: 10) {
-                if !set.missingPartNumbers.isEmpty {
+/// Everything the screen needs to say about one export, derived once.
+struct ExportSummary: Identifiable {
+    var setID: String
+    var archives: [TakeoutArchive]
+    var plan: ArchiveReplicationPlan
+
+    var id: String { setID.isEmpty ? "loose" : setID }
+
+    var title: String {
+        guard !setID.isEmpty else { return "Individual archives" }
+        // Google names an export with the moment it was produced.
+        let stamp = setID.prefix(8)
+        guard stamp.count == 8, let year = Int(stamp.prefix(4)),
+              let month = Int(stamp.dropFirst(4).prefix(2)), let day = Int(stamp.suffix(2)),
+              let date = Calendar(identifier: .gregorian)
+                  .date(from: DateComponents(year: year, month: month, day: day))
+        else { return "Export \(setID)" }
+        return "Export of \(Formatters.dateOnly.string(from: date))"
+    }
+
+    var parts: [ExportPart] { plan.parts.filter { $0.setID == setID } }
+    var partCount: Int {
+        parts.isEmpty ? Set(archives.compactMap(\.partNumber)).count : parts.count
+    }
+    var totalBytes: Int64 {
+        parts.isEmpty
+            ? archives.reduce(0) { $0 + $1.sizeBytes }
+            : parts.reduce(0) { $0 + $1.sizeBytes }
+    }
+    var importedAssetCount: Int { archives.reduce(0) { $0 + $1.importedAssetCount } }
+    var unimported: [TakeoutArchive] {
+        TakeoutExportSet(setID: setID, parts: archives).unimportedPreferredParts
+    }
+    var extractableZips: [TakeoutArchive] {
+        archives.filter {
+            $0.kind == .zip
+                && FileManager.default.fileExists(atPath: $0.path)
+                && !FileManager.default.fileExists(atPath: TakeoutExtractor.destinationURL(forZip: $0.url).path)
+        }
+    }
+    var missingPartNumbers: [Int] {
+        TakeoutExportSet(setID: setID, parts: archives).missingPartNumbers
+    }
+
+    /// Plain answer to "is this safe?".
+    var protection: (text: String, symbol: String, tint: Color) {
+        guard !parts.isEmpty else {
+            return ("Not part of a tracked export", "questionmark.circle", .secondary)
+        }
+        let satisfied = parts.filter { $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy).meetsPolicy }
+        let verified = parts.filter { $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy) == .redundantVerified }
+        if satisfied.count < parts.count {
+            let short = parts.count - satisfied.count
+            let bytes = Formatters.bytes.string(fromByteCount: plan.bytesOutstanding)
+            return ("\(short) of \(parts.count) parts need another copy (\(bytes) to move)", "exclamationmark.triangle.fill", .orange)
+        }
+        if verified.count < parts.count {
+            return ("On every drive — copies not yet compared", "checkmark.circle", .teal)
+        }
+        return ("On every drive, checksums match", "checkmark.seal.fill", .green)
+    }
+}
+
+/// A single export: what it is, whether it is safe, and a menu for the rare
+/// occasions the automatic handling needs overriding.
+private struct ExportCard: View {
+    let export: ExportSummary
+    @Binding var importRequest: TakeoutImportRequest?
+    @EnvironmentObject private var store: AppStore
+
+    var body: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(alignment: .firstTextBaseline) {
+                    Text(export.title)
+                        .font(.headline)
+                    Spacer()
+                    Menu {
+                        if !export.unimported.isEmpty {
+                            Button("Import \(export.unimported.count) remaining part(s)…") {
+                                importRequest = TakeoutImportRequest(
+                                    archives: export.unimported, setID: export.setID
+                                )
+                            }
+                        }
+                        if !export.extractableZips.isEmpty {
+                            Button("Unpack \(export.extractableZips.count) zip(s) onto the drive") {
+                                store.extractTakeoutZips(export.extractableZips.map(\.id))
+                            }
+                        }
+                        Button("Compare copies by checksum") {
+                            store.verifyExportPartsByChecksum()
+                        }
+                        Divider()
+                        Button("Forget this export", role: .destructive) {
+                            for archive in export.archives { store.forgetTakeoutArchive(archive.id) }
+                        }
+                    } label: {
+                        Image(systemName: "ellipsis.circle")
+                    }
+                    .menuStyle(.borderlessButton)
+                    .fixedSize()
+                    .disabled(store.takeoutActivity != nil || store.isImporting)
+                }
+
+                Text(subtitle)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+
+                Label(export.protection.text, systemImage: export.protection.symbol)
+                    .font(.callout)
+                    .foregroundStyle(export.protection.tint)
+
+                if !export.missingPartNumbers.isEmpty {
                     Label(
-                        "Parts missing from this set: \(set.missingPartNumbers.map(String.init).joined(separator: ", ")). Import will proceed with the parts found, but the export may be incomplete.",
+                        "Parts \(export.missingPartNumbers.map(String.init).joined(separator: ", ")) were never found — this export looks incomplete.",
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.caption)
                     .foregroundStyle(.orange)
                 }
-                HStack {
-                    Text(toImport.isEmpty
-                         ? "All parts imported."
-                         : "\(toImport.count) of \(set.uniquePartCount) part(s) not yet imported.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                    Spacer()
-                    if !toImport.isEmpty {
-                        Button("Import set…") {
-                            importRequest = TakeoutImportRequest(archives: toImport, setID: set.setID)
-                        }
-                        .buttonStyle(.borderedProminent)
-                        .disabled(!allAccessible || store.isImporting || store.takeoutActivity != nil)
-                    }
-                }
-                if hasFolderTwins {
-                    Text("Parts available both as zip and extracted folder import from the folder — no extraction needed.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                let extractable = set.parts.filter { part in
-                    part.kind == .zip
-                        && FileManager.default.fileExists(atPath: part.path)
-                        && !FileManager.default.fileExists(atPath: TakeoutExtractor.destinationURL(forZip: part.url).path)
-                }
-                if !extractable.isEmpty {
-                    HStack {
-                        Text("Pre-extracting on the drive makes imports faster and avoids Mac scratch space.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        Spacer()
-                        Button("Extract \(extractable.count) zip part(s) on drive") {
-                            store.extractTakeoutZips(extractable.map(\.id))
-                        }
-                        .disabled(store.isImporting || store.takeoutActivity != nil)
-                    }
-                }
-                if !allAccessible {
-                    Text("Some parts are on an offline drive — connect it to import the set.")
-                        .font(.caption)
-                        .foregroundStyle(.orange)
-                }
-                ForEach(set.parts) { part in
-                    archiveRow(part, showImportButton: false)
-                }
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
             .padding(6)
         }
     }
 
-    private func archiveRow(_ archive: TakeoutArchive, showImportButton: Bool) -> some View {
-        let accessible = FileManager.default.fileExists(atPath: archive.path)
-        let driveName = archive.driveID.flatMap { store.drivesByID[$0]?.name }
-
-        return HStack(alignment: .top) {
-            Image(systemName: archive.kind == .zip ? "doc.zipper" : "folder")
-                .font(.title3)
-                .foregroundStyle(.secondary)
-                .frame(width: 26)
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(archive.displayName)
-                        .font(.headline)
-                    if let part = archive.partNumber {
-                        Text("part \(part)")
-                            .font(.caption)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.secondary.opacity(0.12), in: Capsule())
-                    }
-                }
-                Text(archive.path)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                HStack(spacing: 10) {
-                    Text("\(archive.kind.displayName) · \(Formatters.bytes.string(fromByteCount: archive.sizeBytes))")
-                    if let driveName {
-                        Text("on \(driveName)\(accessible ? "" : " (offline)")")
-                            .foregroundStyle(accessible ? Color.secondary : .orange)
-                    } else if !accessible {
-                        Text("not accessible")
-                            .foregroundStyle(.orange)
-                    }
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                if archive.isImported {
-                    Label(
-                        "Imported \(Formatters.relative(archive.importedAt)) — \(archive.importedAssetCount) asset(s), \(archive.skippedDuplicateCount) duplicate(s) skipped",
-                        systemImage: "checkmark.circle.fill"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.green)
-                }
-            }
-            Spacer()
-            if archive.kind == .zip, accessible,
-               !FileManager.default.fileExists(atPath: TakeoutExtractor.destinationURL(forZip: archive.url).path) {
-                Button("Extract on drive") { store.extractTakeoutZips([archive.id]) }
-                    .disabled(store.isImporting || store.takeoutActivity != nil)
-                    .help("Extracts next to the zip (named without .zip) so imports skip the extraction step. The zip is kept.")
-            }
-            if archive.kind == .folder, archive.isImported, accessible {
-                Button("Delete folder…", role: .destructive) { deleteCandidate = archive }
-                    .disabled(!store.isBatchFullyReplicated(archive.importBatchID))
-                    .help(store.isBatchFullyReplicated(archive.importBatchID)
-                          ? "Reclaims the extracted copy's space. The zip original is kept."
-                          : "Available once every imported asset is fully replicated to both managed drives.")
-            }
-            if archive.isImported {
-                Button("Forget") { store.forgetTakeoutArchive(archive.id) }
-                    .help("Removes this record from the catalog. The archive file and imported assets are untouched.")
-            } else if showImportButton {
-                Button("Import…") { importRequest = TakeoutImportRequest(archives: [archive], setID: nil) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(!accessible || store.isImporting || store.takeoutActivity != nil)
-            }
+    private var subtitle: String {
+        var pieces = ["\(export.partCount) part(s)"]
+        if export.totalBytes > 0 {
+            pieces.append(Formatters.bytes.string(fromByteCount: export.totalBytes))
         }
-        .padding(10)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
+        if export.importedAssetCount > 0 {
+            pieces.append("\(export.importedAssetCount) photos and videos")
+        }
+        if !export.unimported.isEmpty {
+            pieces.append("\(export.unimported.count) part(s) still to import")
+        }
+        return pieces.joined(separator: " · ")
     }
 }
 
@@ -320,47 +263,35 @@ struct TakeoutImportRequest: Identifiable {
     var setID: String?
 }
 
+/// The one question importing cannot answer for itself.
 struct TakeoutImportSheet: View {
     let request: TakeoutImportRequest
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    // Defaults to off: the app cannot check Google, so it must not pre-tick a
+    // Off by default: the app cannot check Google, so it must not pre-tick a
     // claim on the user's behalf.
     @State private var stillInGoogle = false
 
-    private var title: String {
-        if let setID = request.setID {
-            return "Import export set \(setID) (\(request.archives.count) parts)"
-        }
-        return "Import \(request.archives[0].displayName)"
-    }
-
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(title)
+            Text("Import \(request.archives.count) part(s)")
                 .font(.title3)
                 .bold()
-            Text("Media will be copied into staging as Local-resident assets (queued for drive replication), with capture dates and locations from Google's sidecar files. Exact duplicates already in the catalog\(request.archives.count > 1 ? " — including across parts —" : "") are skipped.")
+            Text("Photos and videos are added to the library with their dates and locations from Google's metadata. Anything already in the library is skipped.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            Toggle("I know these photos are still in Google Photos", isOn: $stillInGoogle)
+            Toggle("I know these are still in Google Photos", isOn: $stillInGoogle)
             Text(stillInGoogle
-                 ? "Recorded as your statement, not a verified fact — the app has no Google account connection and cannot check. A GoogleCloud → Local migration job\(request.archives.count > 1 ? " for the whole set" : "") will track the overlap: verify replication, then confirm you've deleted the originals from Google to complete it."
-                 : "The assets will be recorded as present only in the Local domain — the only thing the app can prove by hashing the files. Leave this off if you're unsure.")
+                 ? "Recorded as your statement, not a verified fact — the app has no Google account connection. A migration job will track the overlap until you confirm you have deleted them from Google."
+                 : "They will be recorded as living only on your own drives. Leave this off if you are unsure.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
-
-            if request.archives.contains(where: { $0.kind == .zip }) {
-                Label("Zips are extracted to a temporary workspace one part at a time; large archives take a while and need matching free disk space.", systemImage: "info.circle")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
 
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }
-                Button(request.archives.count > 1 ? "Import \(request.archives.count) parts" : "Import") {
+                Button("Import") {
                     store.importTakeoutArchives(request.archives.map(\.id), assumeStillInGoogle: stillInGoogle)
                     dismiss()
                 }
@@ -368,6 +299,6 @@ struct TakeoutImportSheet: View {
             }
         }
         .padding(24)
-        .frame(width: 500)
+        .frame(width: 460)
     }
 }
