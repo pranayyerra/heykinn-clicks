@@ -149,15 +149,50 @@ enum CaptureDateResolver {
 
     /// Google files un-albumed media under `Photos from YYYY`. That fixes only
     /// the year, so the result is deliberately mid-year and marked as such.
+    /// How far up from the file to look for a year. The immediate folder is
+    /// the album or year folder; beyond a couple of levels the names belong to
+    /// the export or the user's own filing, not to when the photo was taken.
+    static let folderYearSearchDepth = 2
+
     static func yearFromFolder(_ url: URL) -> Date? {
-        for component in url.pathComponents.reversed() {
-            let lowered = component.lowercased()
-            guard lowered.hasPrefix("photos from ") else { continue }
-            guard let year = Int(lowered.dropFirst("photos from ".count).trimmingCharacters(in: .whitespaces)),
+        // Deliberately structural rather than matching "Photos from". Google
+        // localises that folder name — "Fotos de 2016", "Photos de 2016",
+        // "Fotos von 2016" — so keying on the English wording silently gives
+        // non-English exports no year at all. A four-digit year in the folder
+        // name is the part that survives translation, and it also picks up
+        // album folders that name their year ("Spring 2016").
+        var components = url.pathComponents.dropLast()  // drop the filename
+        var examined = 0
+        while let component = components.last, examined < folderYearSearchDepth {
+            components = components.dropLast()
+            // An export part folder carries the *export* timestamp, which says
+            // nothing about when anything inside it was taken.
+            if TakeoutArchive.parseExportComponents(filename: component) == nil,
+               let year = standaloneYear(in: component) {
+                var parts = DateComponents()
+                // Mid-year: the year is known, the day is not, and pretending
+                // otherwise would put everything on 1 January.
+                parts.year = year; parts.month = 7; parts.day = 1; parts.hour = 12
+                return Calendar(identifier: .gregorian).date(from: parts)
+            }
+            examined += 1
+        }
+        return nil
+    }
+
+    /// A plausible four-digit year that is not part of a longer number, so
+    /// identifiers like `1795690_725110877499486` are not read as dates.
+    static func standaloneYear(in text: String) -> Int? {
+        let characters = Array(text)
+        var index = 0
+        while index + 4 <= characters.count {
+            defer { index += 1 }
+            guard characters[index...(index + 3)].allSatisfy(\.isNumber) else { continue }
+            if index > 0, characters[index - 1].isNumber { continue }
+            if index + 4 < characters.count, characters[index + 4].isNumber { continue }
+            guard let year = Int(String(characters[index...(index + 3)])),
                   (1970...2100).contains(year) else { continue }
-            var components = DateComponents()
-            components.year = year; components.month = 7; components.day = 1; components.hour = 12
-            return Calendar(identifier: .gregorian).date(from: components)
+            return year
         }
         return nil
     }
