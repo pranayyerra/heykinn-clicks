@@ -198,26 +198,29 @@ final class AppStore: ObservableObject {
     @Published private(set) var archivePlan: ArchiveReplicationPlan =
         ArchiveReplicationPlan(parts: [], managedDriveIDs: [])
 
-    /// Assets whose bytes live inside an export part that already exists on
-    /// two drives. Copying such an asset individually would duplicate content
-    /// the policy already considers protected.
-    private func assetIDsProtectedByArchive() -> Set<UUID> {
+    /// Which assets live inside which export part, keyed by part stem.
+    ///
+    /// Deliberately per-part rather than one combined set: an asset is only
+    /// present on a drive that holds *its own* part. Treating every covered
+    /// asset as present on every drive holding *any* satisfied part would
+    /// claim redundancy that does not exist the moment the drives hold
+    /// different subsets of the export.
+    private func assetIDsByExportPart() -> [String: Set<UUID>] {
         // Identify a part by its stem — `takeout-<set>-<part>`. That appears
         // both in the zip's filename and in the path of the folder extracted
         // from it, so it matches a replica however that replica is stored.
         // Comparing full filenames fails: a replica extracted to a folder
         // records no `.zip`.
-        let protectedStems = archivePlan.partsMeetingPolicy.map(\.displayName)
-        guard !protectedStems.isEmpty else { return [] }
+        let stems = archivePlan.parts.map(\.displayName)
+        guard !stems.isEmpty else { return [:] }
 
-        var protectedAssets: Set<UUID> = []
+        var byPart: [String: Set<UUID>] = [:]
         for replica in replicaStates where replica.state == .present {
             guard let relative = replica.relativePath else { continue }
-            if protectedStems.contains(where: { relative.contains($0) }) {
-                protectedAssets.insert(replica.assetID)
-            }
+            guard let stem = stems.first(where: { relative.contains($0) }) else { continue }
+            byPart[stem, default: []].insert(replica.assetID)
         }
-        return protectedAssets
+        return byPart
     }
 
     /// Cancels per-asset copies for content whose export part is already on
@@ -231,21 +234,23 @@ final class AppStore: ObservableObject {
         )
         guard !archivePlan.partsMeetingPolicy.isEmpty else { return }
 
-        let covered = assetIDsProtectedByArchive()
-        guard !covered.isEmpty else { return }
+        let assetsByPart = assetIDsByExportPart()
+        var covered: Set<UUID> = []
 
-        // A drive holding a satisfied part holds the assets inside it. Record
-        // that against the part rather than inventing a per-file path, and
-        // withdraw the copy work the per-asset model had queued.
+        // A drive holding a satisfied part holds the assets inside *that*
+        // part. Record it against the part rather than inventing a per-file
+        // path, and withdraw the copy work the per-asset model had queued.
         var claimed = 0
         var cancelled = 0
         var pendingCleared = 0
         do {
             try catalog.transaction {
                 for part in archivePlan.partsMeetingPolicy {
+                    guard let assetIDs = assetsByPart[part.displayName], !assetIDs.isEmpty else { continue }
+                    covered.formUnion(assetIDs)
                     let backing = ReplicationService.archivePartPrefix + part.displayName
                     for driveID in part.driveIDs where managedIDs.contains(driveID) {
-                        for assetID in covered {
+                        for assetID in assetIDs {
                             let existing = replicasByAssetID[assetID]?.first { $0.driveID == driveID }
                             // Never overwrite a replica already established by
                             // reading the bytes; this is the weaker claim.
@@ -262,12 +267,14 @@ final class AppStore: ObservableObject {
                         }
                     }
                 }
+                guard !covered.isEmpty else { return }
                 for task in replicationTasks where task.state == .queued
                     && task.action == .copy && covered.contains(task.assetID) {
                     try catalog.deleteReplicationTask(id: task.id)
                     cancelled += 1
                 }
             }
+            guard !covered.isEmpty else { return }
             audit(
                 .replication,
                 "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist on two drives, covering \(covered.count) asset(s). Recorded \(claimed) second cop(ies) against the parts holding them, replacing \(pendingCleared) pending entr(ies), and withdrew \(cancelled) file copies that are no longer needed."
@@ -540,8 +547,19 @@ final class AppStore: ObservableObject {
     }
 
     /// Which managed drive, if any, owns this path.
+    ///
+    /// Falls back to each drive's last known mount point so content recorded
+    /// while a drive was attached is still attributed to it once unplugged —
+    /// otherwise an archive on an absent drive counts towards no drive at all,
+    /// and its copy silently stops counting towards the redundancy policy.
     func driveID(forPath path: String) -> UUID? {
-        connectedMounts.first { path.hasPrefix($0.value.path + "/") }?.key
+        if let connected = connectedMounts.first(where: { path.hasPrefix($0.value.path + "/") })?.key {
+            return connected
+        }
+        return drives.first { drive in
+            guard let mount = drive.lastMountPath else { return false }
+            return path.hasPrefix(mount + "/")
+        }?.id
     }
 
     /// Asks every running operation to let go of the drive. Returns without
@@ -664,7 +682,23 @@ final class AppStore: ObservableObject {
             }
             if !stuck.isEmpty { repairs.append("requeued \(stuck.count) interrupted replication task(s)") }
 
-            // 2. Assets can reference a batch row that never got written by an
+            // 2. Archives recorded without a drive — scanned as a plain folder,
+            // or discovered by an older build — count towards no drive at all,
+            // so their copy silently stops satisfying the redundancy policy.
+            // Attribute any whose path sits on a drive we know the mount of.
+            let unattributed = takeoutArchives.filter { $0.driveID == nil }
+            var attributed = 0
+            for var archive in unattributed {
+                guard let resolved = driveID(forPath: archive.path) else { continue }
+                archive.driveID = resolved
+                try catalog.upsertTakeoutArchive(archive)
+                attributed += 1
+            }
+            if attributed > 0 {
+                repairs.append("attributed \(attributed) archive(s) to the drive holding them")
+            }
+
+            // 3. Assets can reference a batch row that never got written by an
             // older build; synthesise it so import history is not lost.
             let knownBatchIDs = Set(importBatches.map(\.id))
             let orphanBatchIDs = Set(assets.compactMap(\.importBatchID)).subtracting(knownBatchIDs)
@@ -784,9 +818,10 @@ final class AppStore: ObservableObject {
         let previouslyConnected = Set(driveMonitor.connectedMounts.keys)
         driveMonitor.rescan(managedDrives: drives)
         let now = Date()
-        for driveID in driveMonitor.connectedMounts.keys {
+        for (driveID, mountURL) in driveMonitor.connectedMounts {
             if let index = drives.firstIndex(where: { $0.id == driveID }) {
                 drives[index].lastSeenAt = now
+                drives[index].lastMountPath = mountURL.path
                 try? catalog.upsertDrive(drives[index])
             }
         }
@@ -1001,6 +1036,13 @@ final class AppStore: ObservableObject {
         var refreshedCount = 0
         do {
             for discovered in found {
+                    // Attribute the archive to whichever managed drive its path
+                    // sits on, rather than trusting what the caller passed.
+                    // Scanning a folder rather than a drive passes no drive at
+                    // all, and an archive with no drive is invisible to
+                    // replication planning — its copy simply does not count.
+                    let attributedDriveID = self.driveID(forPath: discovered.path) ?? driveID
+
                     if var existing = knownByPath[discovered.path] {
                         // Re-scan refreshes what detection can learn (size,
                         // export-set grouping added after first discovery)
@@ -1008,10 +1050,12 @@ final class AppStore: ObservableObject {
                         let changed = existing.sizeBytes != discovered.sizeBytes
                             || existing.exportSetID != discovered.exportSetID
                             || existing.partNumber != discovered.partNumber
+                            || (existing.driveID == nil && attributedDriveID != nil)
                         if changed {
                             existing.sizeBytes = discovered.sizeBytes
                             existing.exportSetID = discovered.exportSetID
                             existing.partNumber = discovered.partNumber
+                            existing.driveID = existing.driveID ?? attributedDriveID
                             try catalog.upsertTakeoutArchive(existing)
                             refreshedCount += 1
                         }
@@ -1021,7 +1065,7 @@ final class AppStore: ObservableObject {
                             path: discovered.path,
                             kind: discovered.kind,
                             sizeBytes: discovered.sizeBytes,
-                            driveID: driveID,
+                            driveID: attributedDriveID,
                             discoveredAt: Date(),
                             importedAt: nil,
                             importBatchID: nil,
@@ -1759,6 +1803,7 @@ final class AppStore: ObservableObject {
                 markerToken: token,
                 registeredAt: Date(),
                 lastSeenAt: Date(),
+                lastMountPath: volume.url.path,
                 replicaRootComponent: ManagedDrive.defaultReplicaRoot
             )
             try catalog.upsertDrive(drive)

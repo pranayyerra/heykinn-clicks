@@ -11,6 +11,11 @@ struct ManagedDrive: Identifiable, Hashable {
     var markerToken: String
     var registeredAt: Date
     var lastSeenAt: Date?
+    /// Where this drive was last mounted. Mount paths are never used as
+    /// identity — that is what the marker file is for — but they let content
+    /// recorded by path still be attributed to its drive while that drive is
+    /// unplugged.
+    var lastMountPath: String?
     /// Directory name at the volume root that holds this drive's replicas.
     var replicaRootComponent: String
 

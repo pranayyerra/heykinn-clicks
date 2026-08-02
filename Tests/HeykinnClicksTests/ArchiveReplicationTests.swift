@@ -194,3 +194,141 @@ final class ArchiveReplicationTests: XCTestCase {
         XCTAssertEqual(plan.bytesOutstanding, 3_000)
     }
 }
+
+/// An asset is only protected by the drives holding *its own* part. Treating
+/// every covered asset as present wherever any satisfied part lives would
+/// claim redundancy that does not exist.
+final class PerPartCoverageTests: XCTestCase {
+
+    /// Mirrors the mapping the store builds from replica paths.
+    private func assetsByPart(
+        replicas: [(assetID: UUID, path: String)],
+        stems: [String]
+    ) -> [String: Set<UUID>] {
+        var byPart: [String: Set<UUID>] = [:]
+        for replica in replicas {
+            guard let stem = stems.first(where: { replica.path.contains($0) }) else { continue }
+            byPart[stem, default: []].insert(replica.assetID)
+        }
+        return byPart
+    }
+
+    func testAssetsAreAttributedToTheirOwnPartOnly() {
+        let fromPart1 = UUID(), fromPart7 = UUID()
+        let stems = ["takeout-S-001", "takeout-S-007"]
+        let mapping = assetsByPart(
+            replicas: [
+                (fromPart1, "volume:Backup/takeout-S-001/Google Photos/a.jpg"),
+                (fromPart7, "volume:Backup/takeout-S-007/Google Photos/b.jpg"),
+            ],
+            stems: stems
+        )
+        XCTAssertEqual(mapping["takeout-S-001"], [fromPart1])
+        XCTAssertEqual(mapping["takeout-S-007"], [fromPart7])
+        XCTAssertFalse(
+            mapping["takeout-S-001"]?.contains(fromPart7) ?? false,
+            "A drive holding part 1 says nothing about part 7's contents"
+        )
+    }
+
+    /// The case the bug would have got wrong: drives holding different
+    /// subsets. Only the part they both hold is redundant.
+    func testDrivesHoldingDifferentPartsOnlyShareWhatTheyBothHave() {
+        let a = UUID(), b = UUID()
+        func archive(_ part: Int, _ drive: UUID) -> TakeoutArchive {
+            TakeoutArchive(
+                id: UUID(), path: "/V/takeout-S-\(String(format: "%03d", part)).zip",
+                kind: .zip, sizeBytes: 100, driveID: drive, discoveredAt: Date(),
+                importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+                skippedDuplicateCount: 0, note: nil, exportSetID: "S", partNumber: part
+            )
+        }
+        // Both hold part 1; only A holds 2, only B holds 3.
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [archive(1, a), archive(1, b), archive(2, a), archive(3, b)],
+            managedDriveIDs: [a, b]
+        )
+        XCTAssertEqual(plan.partsMeetingPolicy.map(\.partNumber), [1])
+        XCTAssertEqual(plan.partsNeedingWork.map(\.partNumber).sorted(), [2, 3])
+        XCTAssertFalse(plan.isSatisfied)
+    }
+}
+
+/// Content is attributed to a drive by path. Getting that wrong makes a copy
+/// invisible to the redundancy policy, which then reports work that is already
+/// done — or worse, reports protection that is missing.
+final class DriveAttributionTests: XCTestCase {
+
+    private func drive(name: String, mount: String?) -> ManagedDrive {
+        ManagedDrive(
+            id: UUID(), name: name, volumeUUID: nil, markerToken: "t",
+            registeredAt: Date(), lastSeenAt: nil, lastMountPath: mount,
+            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+        )
+    }
+
+    /// Mirrors the store's resolution: connected mounts first, then each
+    /// drive's last known mount point.
+    private func resolve(
+        path: String, connected: [UUID: URL], drives: [ManagedDrive]
+    ) -> UUID? {
+        if let hit = connected.first(where: { path.hasPrefix($0.value.path + "/") })?.key {
+            return hit
+        }
+        return drives.first {
+            guard let mount = $0.lastMountPath else { return false }
+            return path.hasPrefix(mount + "/")
+        }?.id
+    }
+
+    func testConnectedDriveIsMatchedByItsMountPoint() {
+        let d = drive(name: "A", mount: nil)
+        let resolved = resolve(
+            path: "/Volumes/A/Backup/takeout-S-001.zip",
+            connected: [d.id: URL(fileURLWithPath: "/Volumes/A")],
+            drives: [d]
+        )
+        XCTAssertEqual(resolved, d.id)
+    }
+
+    /// The case that made copies vanish from the plan: the drive is unplugged,
+    /// so there is no mount to match, but its content is still its content.
+    func testDisconnectedDriveIsStillMatchedByItsLastMountPoint() {
+        let d = drive(name: "A", mount: "/Volumes/A")
+        let resolved = resolve(
+            path: "/Volumes/A/Backup/takeout-S-001.zip",
+            connected: [:],
+            drives: [d]
+        )
+        XCTAssertEqual(resolved, d.id, "An unplugged drive's archives must still count")
+    }
+
+    func testPathsOutsideAnyDriveAreNotAttributed() {
+        let d = drive(name: "A", mount: "/Volumes/A")
+        XCTAssertNil(resolve(path: "/Users/me/Downloads/takeout-S-001.zip", connected: [:], drives: [d]))
+        XCTAssertNil(resolve(path: "/Volumes/Another/takeout-S-001.zip", connected: [:], drives: [d]))
+    }
+
+    /// An archive with no drive is invisible to planning, so a part with an
+    /// unattributed copy must not be reported as redundant.
+    func testUnattributedArchivesDoNotCountTowardsRedundancy() {
+        let a = UUID()
+        let attributed = TakeoutArchive(
+            id: UUID(), path: "/V/A/takeout-S-001.zip", kind: .zip, sizeBytes: 10,
+            driveID: a, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
+            importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
+            exportSetID: "S", partNumber: 1
+        )
+        var orphan = attributed
+        orphan.driveID = nil
+        orphan.path = "/V/B/takeout-S-001.zip"
+
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [attributed, orphan], managedDriveIDs: [a, UUID()]
+        )
+        XCTAssertEqual(
+            plan.parts.first?.redundancy(acrossManagedDrives: plan.managedDriveIDs), .singleCopy,
+            "A copy that belongs to no known drive cannot be counted as protection"
+        )
+    }
+}

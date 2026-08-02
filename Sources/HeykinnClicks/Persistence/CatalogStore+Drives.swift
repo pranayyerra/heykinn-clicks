@@ -6,15 +6,16 @@ extension CatalogStore {
 
     func upsertDrive(_ drive: ManagedDrive) throws {
         try database.run("""
-        INSERT INTO drives (id, name, volume_uuid, marker_token, registered_at, last_seen_at, replica_root)
-        VALUES (?,?,?,?,?,?,?)
+        INSERT INTO drives (id, name, volume_uuid, marker_token, registered_at, last_seen_at, replica_root, last_mount_path)
+        VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             name = excluded.name,
             volume_uuid = excluded.volume_uuid,
             marker_token = excluded.marker_token,
             registered_at = excluded.registered_at,
             last_seen_at = excluded.last_seen_at,
-            replica_root = excluded.replica_root;
+            replica_root = excluded.replica_root,
+            last_mount_path = excluded.last_mount_path;
         """, [
             .text(drive.id.uuidString),
             .text(drive.name),
@@ -23,12 +24,13 @@ extension CatalogStore {
             .date(drive.registeredAt),
             .date(drive.lastSeenAt),
             .text(drive.replicaRootComponent),
+            .optionalText(drive.lastMountPath),
         ])
     }
 
     func fetchDrives() throws -> [ManagedDrive] {
         try database.query("""
-        SELECT id, name, volume_uuid, marker_token, registered_at, last_seen_at, replica_root
+        SELECT id, name, volume_uuid, marker_token, registered_at, last_seen_at, replica_root, last_mount_path
         FROM drives ORDER BY registered_at;
         """) { row in
             ManagedDrive(
@@ -38,6 +40,7 @@ extension CatalogStore {
                 markerToken: row.text(3),
                 registeredAt: row.date(4),
                 lastSeenAt: row.optionalDate(5),
+                lastMountPath: row.optionalText(7),
                 replicaRootComponent: row.text(6)
             )
         }

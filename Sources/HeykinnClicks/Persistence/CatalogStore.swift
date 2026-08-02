@@ -61,7 +61,8 @@ final class CatalogStore {
             marker_token TEXT NOT NULL,
             registered_at REAL NOT NULL,
             last_seen_at REAL,
-            replica_root TEXT NOT NULL
+            replica_root TEXT NOT NULL,
+            last_mount_path TEXT
         );
 
         CREATE TABLE IF NOT EXISTS replica_states (
@@ -159,6 +160,7 @@ final class CatalogStore {
         try? database.exec("ALTER TABLE assets ADD COLUMN live_photo_checked_at REAL;")
         try? database.exec("ALTER TABLE assets ADD COLUMN capture_date_source TEXT;")
         try? database.exec("ALTER TABLE assets ADD COLUMN edited_from_asset_id TEXT;")
+        try? database.exec("ALTER TABLE drives ADD COLUMN last_mount_path TEXT;")
     }
 
     /// Writes a consistent, compacted copy of the whole catalog to `path`.
