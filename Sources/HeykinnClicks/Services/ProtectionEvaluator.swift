@@ -6,14 +6,39 @@ enum ProtectionEvaluator {
     /// Replicas verified longer ago than this are considered stale.
     static let verificationMaxAge: TimeInterval = 30 * 24 * 3600
 
+    /// Computes protection for every asset in one pass. Indexing the replicas
+    /// once turns what was an O(assets × replicas) scan into O(assets +
+    /// replicas): with tens of thousands of each, the per-asset `filter` cost
+    /// hundreds of millions of struct copies and stalled the main thread.
+    static func protectionStates(
+        for assets: [Asset],
+        replicaStates: [DriveReplicaState],
+        now: Date = Date()
+    ) -> [UUID: ProtectionState] {
+        let byAsset = Dictionary(grouping: replicaStates, by: \.assetID)
+        var result = [UUID: ProtectionState](minimumCapacity: assets.count)
+        for asset in assets {
+            result[asset.id] = protectionState(
+                for: asset,
+                replicaStates: byAsset[asset.id] ?? [],
+                alreadyFiltered: true,
+                now: now
+            )
+        }
+        return result
+    }
+
+    /// `alreadyFiltered` means `replicaStates` holds only this asset's
+    /// replicas, letting batch callers skip the per-asset scan.
     static func protectionState(
         for asset: Asset,
         replicaStates: [DriveReplicaState],
+        alreadyFiltered: Bool = false,
         now: Date = Date()
     ) -> ProtectionState {
         guard asset.residency == .local else { return .notApplicable }
 
-        let states = replicaStates.filter { $0.assetID == asset.id }
+        let states = alreadyFiltered ? replicaStates : replicaStates.filter { $0.assetID == asset.id }
 
         if states.contains(where: { $0.state == .drift }) {
             return .driftDetected

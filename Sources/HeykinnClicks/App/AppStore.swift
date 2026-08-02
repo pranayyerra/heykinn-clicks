@@ -22,6 +22,8 @@ final class AppStore: ObservableObject {
     @Published private(set) var duplicateGroups: [DuplicateGroup] = []
     @Published private(set) var violations: [Violation] = []
     @Published private(set) var protectionStates: [UUID: ProtectionState] = [:]
+    /// Batches whose every asset is safe without its source archive.
+    @Published private(set) var fullyReplicatedBatchIDs: Set<UUID> = []
 
     // Operational state
     @Published private(set) var syncProgress: SyncProgress?
@@ -69,12 +71,19 @@ final class AppStore: ObservableObject {
     var connectedMounts: [UUID: URL] { driveMonitor.connectedMounts }
     var availableVolumes: [VolumeInfo] { driveMonitor.availableVolumes }
 
-    var assetsByID: [UUID: Asset] {
-        Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
-    }
+    /// Maintained alongside `assets`/`replicaStates` rather than rebuilt on
+    /// access: these are read from view bodies, and rebuilding a
+    /// tens-of-thousands-entry dictionary per read stalled rendering.
+    @Published private(set) var assetsByID: [UUID: Asset] = [:]
+    @Published private(set) var replicasByAssetID: [UUID: [DriveReplicaState]] = [:]
 
     var drivesByID: [UUID: ManagedDrive] {
         Dictionary(uniqueKeysWithValues: drives.map { ($0.id, $0) })
+    }
+
+    private func rebuildIndexes() {
+        assetsByID = Dictionary(assets.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
+        replicasByAssetID = Dictionary(grouping: replicaStates, by: \.assetID)
     }
 
     /// Where this asset's bytes can be read right now, for previews and
@@ -86,7 +95,7 @@ final class AppStore: ObservableObject {
         if let relative = asset.stagingRelativePath, staging.exists(relativePath: relative) {
             return staging.url(forRelativePath: relative)
         }
-        for replica in replicaStates where replica.assetID == asset.id && replica.state == .present {
+        for replica in replicasByAssetID[asset.id] ?? [] where replica.state == .present {
             guard let mountURL = connectedMounts[replica.driveID],
                   let drive = drivesByID[replica.driveID],
                   !ReplicationService.isZipMemberBacked(replica)
@@ -311,6 +320,7 @@ final class AppStore: ObservableObject {
     }
 
     func recomputeDerivedState() {
+        rebuildIndexes()
         duplicateGroups = DuplicateDetector.groups(in: assets)
         violations = ViolationScanner.scan(
             assets: assets,
@@ -318,14 +328,18 @@ final class AppStore: ObservableObject {
             migrationJobs: migrationJobs,
             drivesByID: drivesByID
         )
-        var protection: [UUID: ProtectionState] = [:]
+        protectionStates = ProtectionEvaluator.protectionStates(
+            for: assets,
+            replicaStates: replicaStates
+        )
+
+        var batchSafe: [UUID: Bool] = [:]
         for asset in assets {
-            protection[asset.id] = ProtectionEvaluator.protectionState(
-                for: asset,
-                replicaStates: replicaStates
-            )
+            guard let batchID = asset.importBatchID else { continue }
+            let safe = asset.residency != .local || protectionStates[asset.id] == .fullyReplicated
+            batchSafe[batchID] = (batchSafe[batchID] ?? true) && safe
         }
-        protectionStates = protection
+        fullyReplicatedBatchIDs = Set(batchSafe.filter { $0.value }.keys)
     }
 
     func rescanDrives() {
@@ -462,6 +476,8 @@ final class AppStore: ObservableObject {
         guard !imported.isEmpty else { return }
         assets.append(contentsOf: imported)
         replicaStates.append(contentsOf: replicas)
+        for asset in imported { assetsByID[asset.id] = asset }
+        for replica in replicas { replicasByAssetID[replica.assetID, default: []].append(replica) }
         let replicasByAsset = Dictionary(grouping: replicas, by: \.assetID)
         for asset in imported {
             protectionStates[asset.id] = ProtectionEvaluator.protectionState(
@@ -888,13 +904,11 @@ final class AppStore: ObservableObject {
     /// True when every asset of the batch is safe without its source archive:
     /// Local assets fully replicated to both drives (cloud-resident assets
     /// don't depend on local copies).
+    /// O(1): the set is derived once per catalog change rather than scanning
+    /// every asset per call — this is read from view bodies, once per row.
     func isBatchFullyReplicated(_ batchID: UUID?) -> Bool {
         guard let batchID else { return false }
-        let batchAssets = assets.filter { $0.importBatchID == batchID }
-        guard !batchAssets.isEmpty else { return false }
-        return batchAssets.allSatisfy { asset in
-            asset.residency != .local || protectionStates[asset.id] == .fullyReplicated
-        }
+        return fullyReplicatedBatchIDs.contains(batchID)
     }
 
     /// Deletes an imported, fully-replicated extracted folder from its drive
