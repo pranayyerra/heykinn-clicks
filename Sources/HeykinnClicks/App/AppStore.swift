@@ -54,9 +54,11 @@ final class AppStore: ObservableObject {
     /// reconnect and restart the whole (very expensive) pipeline.
     private var takeoutPipelineActiveDriveIDs: Set<UUID> = []
     private var takeoutPipelineCompletedDriveIDs: Set<UUID> = []
-    /// Files per import chunk. Small enough that the Library visibly fills in
-    /// during a long import, large enough that per-chunk overhead is noise.
-    private static let importChunkSize = 200
+    /// Files per import chunk. Each chunk is scanned in parallel and then
+    /// committed, so this also sets how often the Library and progress bar
+    /// refresh — small enough to feel live, large enough to amortise the
+    /// per-chunk commit.
+    private static let importChunkSize = 100
     private var ignoredVolumeKeys: Set<String> =
         Set(UserDefaults.standard.stringArray(forKey: "ignoredVolumeKeys") ?? [])
 
@@ -439,7 +441,9 @@ final class AppStore: ObservableObject {
         let workArea = staging.rootURL.deletingLastPathComponent().appendingPathComponent("TakeoutWork", isDirectory: true)
         let startedAt = Date()
 
-        var existing = assets
+        // Maintained incrementally across chunks: rebuilding it per chunk from
+        // the whole library made import cost quadratic in catalog size.
+        var knownHashes = Set(assets.map(\.contentHash))
         var allImported: [Asset] = []
         var duplicateTotal = 0
         var failureTotal = 0
@@ -482,12 +486,12 @@ final class AppStore: ObservableObject {
                 for chunk in stride(from: 0, to: partFiles.count, by: Self.importChunkSize).map({
                     Array(partFiles[$0..<min($0 + Self.importChunkSize, partFiles.count)])
                 }) {
-                    let chunkSnapshot = existing
+                    let hashSnapshot = knownHashes
                     let result = await Task.detached(priority: .utility) {
                         TakeoutImporter.importMedia(
                             from: workspace,
                             archiveName: archive.displayName,
-                            existingAssets: chunkSnapshot,
+                            knownContentHashes: hashSnapshot,
                             staging: stagingStore,
                             assumeStillInGoogle: assumeStillInGoogle,
                             batchID: batchID,
@@ -514,7 +518,7 @@ final class AppStore: ObservableObject {
                     }
                     publishImportedAssets(result.importedAssets, replicas: replicas)
 
-                    existing.append(contentsOf: result.importedAssets)
+                    knownHashes.formUnion(result.importedAssets.map(\.contentHash))
                     allImported.append(contentsOf: result.importedAssets)
                     partImported += result.importedAssets.count
                     partDuplicates += result.duplicateFilenames.count
@@ -528,6 +532,8 @@ final class AppStore: ObservableObject {
                         detail: archive.displayName,
                         stepIndex: index + 1,
                         stepCount: targets.count,
+                        itemIndex: processedFiles,
+                        itemCount: partFiles.count,
                         note: "\(processedFiles) of \(partFiles.count) files · \(allImported.count) imported so far"
                     )
                 }

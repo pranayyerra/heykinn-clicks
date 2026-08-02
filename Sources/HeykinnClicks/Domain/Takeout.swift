@@ -142,9 +142,14 @@ enum TakeoutPhase: String, Hashable {
 struct TakeoutActivity: Equatable {
     var phase: TakeoutPhase
     var detail: String
-    /// 1-based position within a multi-item phase.
+    /// 1-based position within a multi-item phase (e.g. part 3 of 12).
     var stepIndex: Int?
     var stepCount: Int?
+    /// Progress *within* the current step (e.g. files processed of this part).
+    /// Without this the bar would sit still for the whole of a long step and
+    /// then jump, which reads as a stall.
+    var itemIndex: Int?
+    var itemCount: Int?
     var note: String?
 
     var stepText: String? {
@@ -152,9 +157,18 @@ struct TakeoutActivity: Equatable {
         return "\(stepIndex) of \(stepCount)"
     }
 
+    /// Fraction of the current step that is done, if known.
+    var stepFraction: Double {
+        guard let itemIndex, let itemCount, itemCount > 0 else { return 0 }
+        return min(1, max(0, Double(itemIndex) / Double(itemCount)))
+    }
+
+    /// Overall progress, blending completed steps with progress inside the
+    /// step currently running.
     var fractionComplete: Double? {
         guard let stepIndex, let stepCount, stepCount > 0 else { return nil }
-        return Double(stepIndex - 1) / Double(stepCount)
+        let completed = Double(stepIndex - 1)
+        return min(1, (completed + stepFraction) / Double(stepCount))
     }
 }
 

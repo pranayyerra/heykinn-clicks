@@ -297,8 +297,14 @@ struct TakeoutActivityBanner: View {
                     .lineLimit(1)
                     .truncationMode(.middle)
                 if let fraction = activity.fractionComplete {
-                    ProgressView(value: fraction)
-                        .frame(maxWidth: 320)
+                    HStack(spacing: 8) {
+                        ProgressView(value: fraction)
+                            .frame(maxWidth: 320)
+                        Text("\(Int(fraction * 100))%")
+                            .font(.caption2)
+                            .monospacedDigit()
+                            .foregroundStyle(.secondary)
+                    }
                 }
             }
             Spacer()

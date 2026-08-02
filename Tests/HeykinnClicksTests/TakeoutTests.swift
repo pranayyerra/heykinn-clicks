@@ -628,6 +628,107 @@ final class TakeoutTests: XCTestCase {
         XCTAssertTrue(result.claimedReplicas.isEmpty)
     }
 
+    // MARK: - Progress reporting and parallel scanning
+
+    func testProgressBlendsStepAndWithinStepProgress() {
+        // Part 3 of 12, halfway through its files: the bar must sit between
+        // the 2/12 and 3/12 marks rather than freezing at 2/12.
+        var activity = TakeoutActivity(
+            phase: .importing, detail: "part", stepIndex: 3, stepCount: 12,
+            itemIndex: 50, itemCount: 100
+        )
+        XCTAssertEqual(activity.stepFraction, 0.5, accuracy: 0.0001)
+        XCTAssertEqual(activity.fractionComplete ?? 0, (2.0 + 0.5) / 12.0, accuracy: 0.0001)
+
+        // Start of a step: exactly the completed-steps fraction.
+        activity.itemIndex = 0
+        XCTAssertEqual(activity.fractionComplete ?? 0, 2.0 / 12.0, accuracy: 0.0001)
+
+        // End of the final step: complete, never above 1.
+        activity.stepIndex = 12
+        activity.itemIndex = 100
+        XCTAssertEqual(activity.fractionComplete ?? 0, 1.0, accuracy: 0.0001)
+
+        // Overshooting item counts must still clamp.
+        activity.itemIndex = 500
+        XCTAssertLessThanOrEqual(activity.fractionComplete ?? 0, 1.0)
+
+        // Without item counts it degrades to step-level progress.
+        let coarse = TakeoutActivity(phase: .extracting, detail: "x", stepIndex: 2, stepCount: 4)
+        XCTAssertEqual(coarse.fractionComplete ?? 0, 0.25, accuracy: 0.0001)
+    }
+
+    func testParallelScanPreservesOrderAndMatchesSerialResults() throws {
+        let root = try makeTempDirectory()
+        let dir = root.appendingPathComponent("Takeout/Google Photos/Photos from 2021", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        var urls: [URL] = []
+        for index in 0..<40 {
+            let file = dir.appendingPathComponent(String(format: "IMG_%03d.jpg", index))
+            try Data("content number \(index)".utf8).write(to: file)
+            urls.append(file)
+        }
+
+        let parallel = TakeoutImporter.scanFilesInParallel(urls, concurrency: 8)
+        let serial = TakeoutImporter.scanFilesInParallel(urls, concurrency: 1)
+
+        XCTAssertEqual(parallel.count, urls.count)
+        XCTAssertEqual(parallel.map(\.fileURL), urls, "Input order must be preserved")
+
+        func hashes(_ scans: [TakeoutImporter.FileScan]) -> [String] {
+            scans.map { scan in
+                if case .success(let hash, _, _) = scan.outcome { return hash }
+                return "FAILED"
+            }
+        }
+        XCTAssertEqual(hashes(parallel), hashes(serial), "Parallel scan must match serial results")
+        XCTAssertFalse(hashes(parallel).contains("FAILED"))
+        // Hashes must match direct computation.
+        for (index, url) in urls.enumerated() {
+            XCTAssertEqual(hashes(parallel)[index], try HashingService.sha256(of: url))
+        }
+    }
+
+    func testParallelScanReportsPerFileFailuresWithoutLosingOthers() throws {
+        let root = try makeTempDirectory()
+        let good = root.appendingPathComponent("good.jpg")
+        try Data("fine".utf8).write(to: good)
+        let missing = root.appendingPathComponent("gone.jpg")
+
+        let scans = TakeoutImporter.scanFilesInParallel([good, missing, good], concurrency: 4)
+        XCTAssertEqual(scans.count, 3)
+        if case .failure = scans[1].outcome {} else {
+            XCTFail("A missing file must surface as a per-file failure")
+        }
+        if case .success = scans[0].outcome {} else {
+            XCTFail("A readable file must still succeed alongside a failure")
+        }
+    }
+
+    func testParallelImportProducesSameAssetsAsSerial() throws {
+        let root = try makeTempDirectory()
+        let folder = try makeFakeTakeoutTree(in: root)
+        let workspace = TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil)
+
+        let a = TakeoutImporter.importMedia(
+            from: workspace, archiveName: "T", existingAssets: [],
+            staging: StagingStore(rootURL: try makeTempDirectory()), assumeStillInGoogle: false
+        )
+        let b = TakeoutImporter.importMedia(
+            from: workspace, archiveName: "T", existingAssets: [],
+            staging: StagingStore(rootURL: try makeTempDirectory()), assumeStillInGoogle: false
+        )
+        XCTAssertEqual(
+            a.importedAssets.map(\.originalFilename), b.importedAssets.map(\.originalFilename),
+            "Parallel scanning must not make import order nondeterministic"
+        )
+        XCTAssertEqual(a.importedAssets.count, 2)
+        // Sidecar metadata must survive the parallel path.
+        let withSidecar = try XCTUnwrap(a.importedAssets.first { $0.originalFilename == "IMG_100.jpg" })
+        XCTAssertEqual(withSidecar.captureDate, Date(timeIntervalSince1970: 1_600_000_000))
+        XCTAssertEqual(withSidecar.exifSummary["GPS"], "12.34567, 76.54321")
+    }
+
     // MARK: - Cloud presence is never assumed
 
     func testImportRecordsNoCloudPresenceOrEvidenceByDefault() throws {

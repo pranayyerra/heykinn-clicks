@@ -87,7 +87,11 @@ enum TakeoutImporter {
     static func importMedia(
         from workspace: Workspace,
         archiveName: String,
-        existingAssets: [Asset],
+        existingAssets: [Asset] = [],
+        /// Prebuilt dedupe set. Chunked imports pass this and maintain it
+        /// incrementally: rebuilding it from every asset on each chunk makes
+        /// import cost grow with the square of the library size.
+        knownContentHashes: Set<String>? = nil,
         staging: StagingStore,
         assumeStillInGoogle: Bool,
         batchID: UUID = UUID(),
@@ -107,37 +111,28 @@ enum TakeoutImporter {
         var duplicates: [String] = []
         var failures: [(String, String)] = []
         var archiveBacked: [UUID: DriveReplicaState] = [:]
-        var knownHashes = Set(existingAssets.map(\.contentHash))
+        var knownHashes = knownContentHashes ?? Set(existingAssets.map(\.contentHash))
 
-        for fileURL in fileURLs ?? mediaFileURLs(in: workspace) {
+        // Phase 1 (parallel): hash + read metadata/sidecar for every file.
+        // This is the expensive part and it is per-file independent, so it
+        // fans out across cores. Phase 2 stays serial to keep duplicate
+        // resolution deterministic — the first file in path order wins.
+        let targets = fileURLs ?? mediaFileURLs(in: workspace)
+        let scanned = scanFilesInParallel(targets)
+
+        for scan in scanned {
+            let fileURL = scan.fileURL
             let filename = fileURL.lastPathComponent
             do {
-                let hash = try HashingService.sha256(of: fileURL)
-                if knownHashes.contains(hash) {
-                    duplicates.append(filename)
+                switch scan.outcome {
+                case .failure(let message):
+                    failures.append((filename, message))
                     continue
-                }
-
-                let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
-                let fileSize = (attributes[.size] as? Int64) ?? 0
-                var metadata = MetadataExtractor.extract(from: fileURL)
-                let sidecar = findSidecar(for: fileURL)
-
-                // The sidecar's photoTakenTime is Google's authoritative record;
-                // it wins over (often stripped) EXIF in Takeout exports.
-                if let taken = sidecar?.takenDate {
-                    metadata.captureDate = taken
-                }
-                if let description = sidecar?.description, !description.isEmpty {
-                    metadata.exifSummary["GoogleDescription"] = description
-                }
-                if metadata.exifSummary["GPS"] == nil,
-                   let latitude = sidecar?.geoData?.latitude,
-                   let longitude = sidecar?.geoData?.longitude,
-                   latitude != 0 || longitude != 0 {
-                    metadata.exifSummary["GPS"] = String(format: "%.5f, %.5f", latitude, longitude)
-                }
-
+                case .success(let hash, let fileSize, let metadata):
+                    if knownHashes.contains(hash) {
+                        duplicates.append(filename)
+                        continue
+                    }
                 let assetID = UUID()
                 var presence = DomainPresence.localOnly
                 // A Takeout export proves the content WAS in Google at export
@@ -193,6 +188,7 @@ enum TakeoutImporter {
                     cloudPresenceCheckedAt: nil
                 ))
                 knownHashes.insert(hash)
+                }
             } catch {
                 failures.append((filename, error.localizedDescription))
             }
@@ -211,13 +207,103 @@ enum TakeoutImporter {
         )
     }
 
+    // MARK: - Parallel scan phase
+
+    /// Per-file work that is independent of every other file: hashing the
+    /// bytes, reading EXIF, and pairing the Google sidecar.
+    struct FileScan {
+        enum Outcome {
+            case success(hash: String, fileSize: Int64, metadata: ExtractedMetadata)
+            case failure(String)
+        }
+        var fileURL: URL
+        var outcome: Outcome
+    }
+
+    /// Concurrency for the scan phase. Hashing is CPU work overlapped with
+    /// reads, so cores set the ceiling; a spinning/USB source is kept low
+    /// because parallel reads there cause seek-thrashing.
+    static func recommendedScanConcurrency(for sourceURL: URL) -> Int {
+        let cores = ProcessInfo.processInfo.activeProcessorCount
+        switch ParallelZipExtraction.isSolidState(volumeContaining: sourceURL) {
+        case .some(true): return max(2, min(cores, 8))
+        case .some(false): return 2
+        case .none: return max(2, min(cores, 4))
+        }
+    }
+
+    /// Hashes and reads metadata for many files concurrently, preserving the
+    /// input order in the result so downstream duplicate resolution stays
+    /// deterministic.
+    static func scanFilesInParallel(_ fileURLs: [URL], concurrency: Int? = nil) -> [FileScan] {
+        guard !fileURLs.isEmpty else { return [] }
+        // List each directory once up front. Sidecar lookup previously listed
+        // the containing directory per file, which is quadratic inside an
+        // album folder (these run to ~950 entries) and hit the drive for every
+        // single media file.
+        var listings: [String: [String]] = [:]
+        for directory in Set(fileURLs.map { $0.deletingLastPathComponent().path }) {
+            listings[directory] = (try? FileManager.default.contentsOfDirectory(atPath: directory)) ?? []
+        }
+
+        let width = concurrency ?? recommendedScanConcurrency(for: fileURLs[0])
+        guard width > 1, fileURLs.count > 1 else {
+            return fileURLs.map { FileScan(fileURL: $0, outcome: scanFile($0, directoryListings: listings)) }
+        }
+
+        var outcomes = [FileScan.Outcome?](repeating: nil, count: fileURLs.count)
+        let lock = NSLock()
+        let stride = min(width, fileURLs.count)
+        DispatchQueue.concurrentPerform(iterations: stride) { worker in
+            var index = worker
+            while index < fileURLs.count {
+                let outcome = scanFile(fileURLs[index], directoryListings: listings)
+                lock.lock()
+                outcomes[index] = outcome
+                lock.unlock()
+                index += stride
+            }
+        }
+        return fileURLs.enumerated().map { index, url in
+            FileScan(fileURL: url, outcome: outcomes[index] ?? .failure("Scan produced no result"))
+        }
+    }
+
+    static func scanFile(_ fileURL: URL, directoryListings: [String: [String]] = [:]) -> FileScan.Outcome {
+        do {
+            let hash = try HashingService.sha256(of: fileURL)
+            let attributes = try FileManager.default.attributesOfItem(atPath: fileURL.path)
+            let fileSize = (attributes[.size] as? Int64) ?? 0
+            var metadata = MetadataExtractor.extract(from: fileURL)
+            let sidecar = findSidecar(for: fileURL, directoryListings: directoryListings)
+
+            // The sidecar's photoTakenTime is Google's authoritative record;
+            // it wins over (often stripped) EXIF in Takeout exports.
+            if let taken = sidecar?.takenDate {
+                metadata.captureDate = taken
+            }
+            if let description = sidecar?.description, !description.isEmpty {
+                metadata.exifSummary["GoogleDescription"] = description
+            }
+            if metadata.exifSummary["GPS"] == nil,
+               let latitude = sidecar?.geoData?.latitude,
+               let longitude = sidecar?.geoData?.longitude,
+               latitude != 0 || longitude != 0 {
+                metadata.exifSummary["GPS"] = String(format: "%.5f, %.5f", latitude, longitude)
+            }
+            return .success(hash: hash, fileSize: fileSize, metadata: metadata)
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+    }
+
     // MARK: - Sidecar pairing
 
     /// Google's sidecar naming varies across export vintages:
     /// `IMG.jpg.json`, `IMG.jpg.supplemental-metadata.json` (possibly
     /// truncated), or `IMG.json`. Tries exact candidates first, then a prefix
     /// match for the truncated supplemental-metadata form.
-    static func findSidecar(for mediaURL: URL) -> TakeoutSidecar? {
+    static func findSidecar(for mediaURL: URL, directoryListings: [String: [String]] = [:]) -> TakeoutSidecar? {
         let directory = mediaURL.deletingLastPathComponent()
         let filename = mediaURL.lastPathComponent
         let stem = mediaURL.deletingPathExtension().lastPathComponent
@@ -227,7 +313,12 @@ enum TakeoutImporter {
             "\(filename).supplemental-metadata.json",
             "\(stem).json",
         ]
-        if let contents = try? FileManager.default.contentsOfDirectory(atPath: directory.path) {
+        // Only consult a directory listing for the truncated
+        // supplemental-metadata form, and prefer a precomputed listing so the
+        // drive is not re-read once per file.
+        let contents = directoryListings[directory.path]
+            ?? (try? FileManager.default.contentsOfDirectory(atPath: directory.path))
+        if let contents {
             let truncatedPrefix = "\(filename).suppl"
             candidates.append(contentsOf: contents.filter {
                 $0.hasPrefix(truncatedPrefix) && $0.hasSuffix(".json")
