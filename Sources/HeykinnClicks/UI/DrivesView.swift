@@ -10,6 +10,12 @@ struct DrivesView: View {
             VStack(alignment: .leading, spacing: 20) {
                 connectionSummary
 
+                // A transfer can be started from this screen, so its progress
+                // has to be visible here rather than only on the Takeout one.
+                if store.isTransferringParts, let activity = store.takeoutActivity {
+                    TakeoutActivityBanner(activity: activity)
+                }
+
                 // Both automation settings live together rather than one being
                 // stranded on the Takeout screen.
                 Toggle("Automatically sync a managed drive when it connects", isOn: $store.autoSyncOnConnect)
@@ -85,6 +91,45 @@ struct DrivesView: View {
                         }
                     }
                     .padding(6)
+                }
+
+                if !store.heldExportParts.isEmpty || !store.partTransferPlan.transfers.isEmpty {
+                    GroupBox("Export parts in transit") {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("When the drive that has a part and the drive that needs it are never plugged in at the same time, the part waits here on the Mac in between. It is deleted as soon as it reaches the other drive.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            ForEach(store.heldExportParts) { part in
+                                HStack {
+                                    Label(part.displayName, systemImage: "shippingbox")
+                                        .font(.callout)
+                                    Text(Formatters.bytes.string(fromByteCount: part.sizeBytes))
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    Text("waiting since \(Formatters.relative(part.stagedAt))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            if !store.partTransferPlan.transfers.isEmpty {
+                                HStack {
+                                    Text("\(store.partTransferPlan.transfers.count) part(s) can move now — \(Formatters.bytes.string(fromByteCount: store.partTransferPlan.bytesToMove)).")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                    Spacer()
+                                    if store.isTransferringParts {
+                                        Button("Stop") { store.cancelExportPartTransfers() }
+                                    } else {
+                                        Button("Move them now") { store.transferExportParts() }
+                                            .disabled(store.isSyncing || store.isImporting || store.takeoutActivity != nil)
+                                    }
+                                }
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .padding(6)
+                    }
                 }
 
                 GroupBox("Mac staging") {

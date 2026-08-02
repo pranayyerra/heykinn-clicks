@@ -2,6 +2,12 @@ import Foundation
 import CryptoKit
 
 enum HashingService {
+    /// Hex encoding for a finished digest, so callers that hash a stream
+    /// themselves format the result the same way the catalog stores it.
+    static func hex<D: Sequence>(_ digest: D) -> String where D.Element == UInt8 {
+        digest.map { String(format: "%02x", $0) }.joined()
+    }
+
     /// Streaming SHA-256 of a file's contents, hex-encoded.
     static func sha256(of url: URL) throws -> String {
         let handle = try FileHandle(forReadingFrom: url)

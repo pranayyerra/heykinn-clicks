@@ -127,6 +127,7 @@ enum TakeoutPhase: String, Hashable {
     case extracting
     case importing
     case fingerprinting
+    case transferring
 
     var displayName: String {
         switch self {
@@ -135,6 +136,7 @@ enum TakeoutPhase: String, Hashable {
         case .extracting: return "Extracting"
         case .importing: return "Importing"
         case .fingerprinting: return "Fingerprinting"
+        case .transferring: return "Copying export parts"
         }
     }
 
@@ -145,6 +147,7 @@ enum TakeoutPhase: String, Hashable {
         case .extracting: return "shippingbox"
         case .importing: return "square.and.arrow.down"
         case .fingerprinting: return "number"
+        case .transferring: return "arrow.left.arrow.right"
         }
     }
 }

@@ -69,6 +69,9 @@ final class AppStore: ObservableObject {
         Set(UserDefaults.standard.stringArray(forKey: "ignoredVolumeKeys") ?? [])
 
     let staging: StagingStore
+    /// Where export parts wait while travelling between drives that are never
+    /// plugged in at the same time.
+    let relay: ExportPartRelay
     let driveMonitor: DriveMonitor
     let thumbnails: ThumbnailCache
     private let catalog: CatalogStore
@@ -152,6 +155,7 @@ final class AppStore: ObservableObject {
         try? FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
 
         staging = StagingStore(rootURL: appDirectory.appendingPathComponent("Staging", isDirectory: true))
+        relay = ExportPartRelay(rootURL: appDirectory.appendingPathComponent("ExportPartRelay", isDirectory: true))
         driveMonitor = DriveMonitor()
         thumbnails = ThumbnailCache.defaultCache()
 
@@ -197,6 +201,277 @@ final class AppStore: ObservableObject {
     /// of, and whether each part exists twice.
     @Published private(set) var archivePlan: ArchiveReplicationPlan =
         ArchiveReplicationPlan(parts: [], managedDriveIDs: [])
+
+    /// What can be moved right now to get every part onto enough drives.
+    /// Recomputed whenever drives connect or the archive changes, so the UI
+    /// can say what is possible without starting anything.
+    @Published private(set) var partTransferPlan = ExportPartTransferPlan()
+    /// Parts currently parked on the Mac mid-journey.
+    @Published private(set) var heldExportParts: [HeldExportPart] = []
+    @Published private(set) var isTransferringParts = false
+    private var transferCancelRequested = false
+    /// Control handle for the copy currently running, so a cancel reaches it
+    /// mid-file rather than only between parts.
+    private var activeTransferControl: TransferControl?
+
+    /// Recomputes the transfer plan from the drives connected at this moment.
+    func refreshPartTransferPlan() {
+        heldExportParts = relay.heldParts()
+        partTransferPlan = ExportPartTransferPlanner.plan(
+            replication: archivePlan,
+            connectedDriveIDs: Set(connectedMounts.keys),
+            heldParts: heldExportParts,
+            availableHoldingBytes: relay.availableBytes
+        )
+    }
+
+    func cancelExportPartTransfers() {
+        transferCancelRequested = true
+        activeTransferControl?.cancel()
+    }
+
+    /// Moves export parts until every part lives on as many drives as the
+    /// policy asks for, using whatever drives are plugged in right now.
+    ///
+    /// The two-drive case is the whole point: a part that exists only on drive
+    /// A can reach drive B directly when both are connected, and by way of the
+    /// Mac's holding area when they never are. Parked parts are delivered and
+    /// deleted on the next connection, so the corridor drains itself.
+    func transferExportParts() {
+        guard !isTransferringParts, !isImporting, !isSyncing, takeoutActivity == nil else { return }
+        Task { await performExportPartTransfers() }
+    }
+
+    private func performExportPartTransfers() async {
+        isTransferringParts = true
+        transferCancelRequested = false
+        defer {
+            isTransferringParts = false
+            takeoutActivity = nil
+            refreshPartTransferPlan()
+        }
+
+        let discarded = relay.discardIncompleteCopies()
+        if discarded > 0 {
+            audit(.replication, "Discarded \(discarded) incomplete part cop(ies) left by an interrupted transfer.")
+        }
+        applyArchiveLevelRedundancy()
+        refreshPartTransferPlan()
+
+        // The corridor should hold nothing that is already safe elsewhere.
+        for held in partTransferPlan.discardable {
+            do {
+                try relay.remove(held)
+                audit(.replication, "\(held.displayName) is on every managed drive; cleared it from the Mac's holding area, freeing \(Formatters.bytes.string(fromByteCount: held.sizeBytes)).")
+            } catch {
+                lastError = "Could not clear \(held.displayName) from the holding area: \(error.localizedDescription)"
+            }
+        }
+
+        let transfers = partTransferPlan.transfers
+        guard !transfers.isEmpty else {
+            if !partTransferPlan.stranded.isEmpty {
+                audit(.replication, "\(partTransferPlan.stranded.count) export part(s) still need another copy, but no drive holding one is connected. Connect the drive that has them to continue.")
+            }
+            return
+        }
+
+        var moved = 0
+        var failed = 0
+        for (index, transfer) in transfers.enumerated() {
+            if transferCancelRequested { break }
+            guard let step = resolveTransfer(transfer) else {
+                failed += 1
+                continue
+            }
+            takeoutActivity = TakeoutActivity(
+                phase: .transferring,
+                detail: "\(transfer.displayName) → \(step.destinationLabel)",
+                stepIndex: index + 1,
+                stepCount: transfers.count,
+                itemIndex: 0,
+                itemCount: Int(max(transfer.sizeBytes, 1)),
+                note: step.explanation
+            )
+            markBusy(step.donorDriveID, true)
+            markBusy(transfer.route.recipient, true)
+            do {
+                let outcome = try await copyPartOffMainActor(step: step, transfer: transfer)
+                try applyTransferOutcome(transfer, step: step, outcome: outcome)
+                moved += 1
+            } catch {
+                failed += 1
+                if case ExportPartRelay.TransferError.cancelled = error { }
+                else {
+                    lastError = "Could not copy \(transfer.displayName): \(error.localizedDescription)"
+                    audit(.replication, "Copying \(transfer.displayName) to \(step.destinationLabel) failed: \(error.localizedDescription)")
+                }
+            }
+            markBusy(step.donorDriveID, false)
+            markBusy(transfer.route.recipient, false)
+            if transferCancelRequested { break }
+        }
+
+        applyArchiveLevelRedundancy()
+        loadAll()
+        if moved > 0 || failed > 0 {
+            audit(.replication, "Export part transfer: \(moved) part(s) moved, \(failed) failed\(transferCancelRequested ? ", stopped early at your request" : "").")
+        }
+        backupCatalog()
+    }
+
+    /// One transfer resolved against the filesystem: where the bytes are and
+    /// where they are going. Returns nil when the move is no longer possible —
+    /// the donor was unplugged, or the part vanished between planning and now.
+    private struct ResolvedTransfer {
+        var sourceURL: URL
+        var destinationURL: URL
+        var destinationLabel: String
+        var donorDriveID: UUID?
+        /// Recorded in the catalog when the copy lands, so the receiving drive
+        /// keeps the part as a first-class archive.
+        var recipientDriveID: UUID?
+        /// The archive the bytes came from, when it is one the catalog knows.
+        var sourceArchiveID: UUID?
+        var heldPart: HeldExportPart?
+        var explanation: String
+    }
+
+    private func resolveTransfer(_ transfer: ExportPartTransfer) -> ResolvedTransfer? {
+        let partID = "\(transfer.setID)-\(transfer.partNumber)"
+        let part = archivePlan.parts.first { $0.id == partID }
+
+        func driveDestination(_ driveID: UUID) -> URL? {
+            guard let mount = connectedMounts[driveID] else { return nil }
+            return ExportPartRelay.destinationDirectory(onMount: mount)
+                .appendingPathComponent("\(transfer.displayName).zip")
+        }
+
+        switch transfer.route {
+        case .driveToDrive(let from, let to):
+            guard let source = part?.copies[from], FileManager.default.fileExists(atPath: source.path),
+                  let destination = driveDestination(to)
+            else { return nil }
+            return ResolvedTransfer(
+                sourceURL: source.url,
+                destinationURL: destination,
+                destinationLabel: drivesByID[to]?.name ?? "the other drive",
+                donorDriveID: from,
+                recipientDriveID: to,
+                sourceArchiveID: source.id,
+                heldPart: nil,
+                explanation: "Both drives are connected, so the part goes straight across."
+            )
+
+        case .driveToHoldingArea(let from, let intendedFor):
+            guard let source = part?.copies[from], FileManager.default.fileExists(atPath: source.path)
+            else { return nil }
+            return ResolvedTransfer(
+                sourceURL: source.url,
+                destinationURL: relay.url(setID: transfer.setID, partNumber: transfer.partNumber),
+                destinationLabel: "the Mac's holding area",
+                donorDriveID: from,
+                recipientDriveID: nil,
+                sourceArchiveID: source.id,
+                heldPart: nil,
+                explanation: "\(drivesByID[intendedFor]?.name ?? "The other drive") is not connected, so the part waits on the Mac and moves across when it is."
+            )
+
+        case .holdingAreaToDrive(let to):
+            guard let held = heldExportParts.first(where: { $0.id == partID }),
+                  FileManager.default.fileExists(atPath: held.path),
+                  let destination = driveDestination(to)
+            else { return nil }
+            return ResolvedTransfer(
+                sourceURL: held.url,
+                destinationURL: destination,
+                destinationLabel: drivesByID[to]?.name ?? "the drive",
+                donorDriveID: nil,
+                recipientDriveID: to,
+                sourceArchiveID: nil,
+                heldPart: held,
+                explanation: "Delivering a part that has been waiting on the Mac; it is deleted from there once it lands."
+            )
+        }
+    }
+
+    /// Runs the copy off the main actor so the UI keeps painting during a
+    /// multi-gigabyte transfer, reporting bytes back as they land.
+    private func copyPartOffMainActor(
+        step: ResolvedTransfer,
+        transfer: ExportPartTransfer
+    ) async throws -> ExportPartRelay.TransferOutcome {
+        let source = step.sourceURL
+        let destination = step.destinationURL
+        let expected = transfer.sizeBytes
+        let control = TransferControl { bytes in
+            Task { @MainActor [weak self] in self?.takeoutActivity?.itemIndex = Int(bytes) }
+        }
+        activeTransferControl = control
+        if transferCancelRequested { control.cancel() }
+        defer { activeTransferControl = nil }
+        return try await Task.detached(priority: .utility) {
+            try ExportPartRelay.copyPart(
+                from: source,
+                to: destination,
+                expectedBytes: expected,
+                isCancelled: { control.isCancelled },
+                progress: { control.report($0) }
+            )
+        }.value
+    }
+
+    /// Records what the transfer achieved: the receiving drive now holds the
+    /// part, and the donor's whole-file hash — computed for free while
+    /// reading — is worth keeping for a later byte-for-byte comparison.
+    private func applyTransferOutcome(
+        _ transfer: ExportPartTransfer,
+        step: ResolvedTransfer,
+        outcome: ExportPartRelay.TransferOutcome
+    ) throws {
+        try catalog.transaction {
+            if let sourceArchiveID = step.sourceArchiveID,
+               var source = takeoutArchives.first(where: { $0.id == sourceArchiveID }),
+               source.contentHash == nil {
+                source.contentHash = outcome.sourceHash
+                try catalog.upsertTakeoutArchive(source)
+            }
+            if let recipient = step.recipientDriveID {
+                // The landed copy gets the quick checksum that was actually
+                // compared, and no content hash: nothing has read those bytes
+                // back in full, and claiming otherwise would turn a spot check
+                // into a proof it is not.
+                let archive = TakeoutArchive(
+                    id: UUID(),
+                    path: outcome.destination.path,
+                    kind: .zip,
+                    sizeBytes: outcome.sizeBytes,
+                    driveID: recipient,
+                    discoveredAt: Date(),
+                    importedAt: nil,
+                    importBatchID: nil,
+                    importedAssetCount: 0,
+                    skippedDuplicateCount: 0,
+                    note: "Copied from \(step.donorDriveID.flatMap { drivesByID[$0]?.name } ?? "the Mac's holding area") to satisfy the \(redundancyPolicy.description) policy.",
+                    exportSetID: transfer.setID,
+                    partNumber: transfer.partNumber,
+                    quickChecksum: outcome.quickChecksum
+                )
+                try catalog.upsertTakeoutArchive(archive)
+            }
+        }
+        // Only once the destination is recorded is the parked copy redundant.
+        if let held = step.heldPart {
+            try relay.remove(held)
+        }
+        takeoutArchives = try catalog.fetchTakeoutArchives()
+        heldExportParts = relay.heldParts()
+        audit(
+            .replication,
+            "\(transfer.displayName) copied to \(step.destinationLabel) (\(Formatters.bytes.string(fromByteCount: outcome.sizeBytes))). The copy's quick checksum matches its source; a byte-for-byte comparison has not been run.",
+            driveID: step.recipientDriveID
+        )
+    }
 
     /// Which assets live inside which export part, keyed by part stem.
     ///
@@ -939,6 +1214,12 @@ final class AppStore: ObservableObject {
             }
             if partials > 0 { repairs.append("removed \(partials) incomplete extraction folder(s)") }
 
+            // A transfer interrupted by a crash or an unplug leaves a
+            // half-written part in the holding area. It is worthless and can
+            // be many gigabytes.
+            let abandoned = relay.discardIncompleteCopies()
+            if abandoned > 0 { repairs.append("discarded \(abandoned) interrupted export-part cop(ies)") }
+
             if !repairs.isEmpty {
                 audit(.system, "Startup reconciliation: " + repairs.joined(separator: "; ") + ".")
                 loadAll()
@@ -989,6 +1270,16 @@ final class AppStore: ObservableObject {
             batchSafe[batchID] = (batchSafe[batchID] ?? true) && safe
         }
         fullyReplicatedBatchIDs = Set(batchSafe.filter { $0.value }.keys)
+
+        // Planning is pure arithmetic over a few dozen archives, so the
+        // export-part picture stays current with the catalog rather than only
+        // after an operation that happens to recompute it.
+        archivePlan = ArchiveReplicationPlanner.plan(
+            archives: takeoutArchives,
+            managedDriveIDs: Set(drives.map(\.id)),
+            policy: redundancyPolicy
+        )
+        refreshPartTransferPlan()
     }
 
     func rescanDrives() {
@@ -1779,6 +2070,15 @@ final class AppStore: ObservableObject {
         // An import may have introduced parts that change the picture, so
         // re-evaluate which parts now exist twice.
         applyArchiveLevelRedundancy()
+
+        // Parts the policy still wants elsewhere: move them while this drive
+        // is here to give or receive them. Whether that means a direct copy,
+        // parking a part on the Mac, or delivering one that has been waiting
+        // depends on what else is plugged in, and is decided in the planner.
+        refreshPartTransferPlan()
+        if !partTransferPlan.isEmpty {
+            await performExportPartTransfers()
+        }
 
         // The catalog just changed materially (new assets, new replica
         // claims); snapshot it onto the drive it describes.

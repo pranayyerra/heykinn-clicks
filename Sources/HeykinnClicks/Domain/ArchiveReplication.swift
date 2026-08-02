@@ -159,3 +159,158 @@ enum ArchiveReplicationPlanner {
         )
     }
 }
+
+/// An export part parked on the Mac while it travels between drives.
+///
+/// Named after the part it holds, so the directory listing *is* the state:
+/// a catalog restored from backup, a crash mid-copy, or someone emptying the
+/// folder by hand all leave the truth visible on disk with nothing to
+/// reconcile.
+struct HeldExportPart: Identifiable, Hashable {
+    var setID: String
+    var partNumber: Int
+    var path: String
+    var sizeBytes: Int64
+    var stagedAt: Date
+
+    var id: String { "\(setID)-\(partNumber)" }
+    var url: URL { URL(fileURLWithPath: path) }
+    var displayName: String { "takeout-\(setID)-\(String(format: "%03d", partNumber))" }
+}
+
+/// One move that gets an export part closer to living on enough drives.
+struct ExportPartTransfer: Identifiable, Hashable {
+    enum Route: Hashable {
+        /// Both drives are connected — copy straight across, no detour.
+        case driveToDrive(from: UUID, to: UUID)
+        /// Only the drive that has the part is connected. Park it on the Mac
+        /// so the transfer can finish later, when the other drive appears.
+        case driveToHoldingArea(from: UUID, intendedFor: UUID)
+        /// The drive that needs the part is connected and the part is already
+        /// parked — deliver it, then free the space.
+        case holdingAreaToDrive(to: UUID)
+
+        var recipient: UUID {
+            switch self {
+            case .driveToDrive(_, let to): return to
+            case .driveToHoldingArea(_, let intendedFor): return intendedFor
+            case .holdingAreaToDrive(let to): return to
+            }
+        }
+    }
+
+    var setID: String
+    var partNumber: Int
+    var route: Route
+    var sizeBytes: Int64
+
+    var id: String { "\(setID)-\(partNumber)-\(route.recipient.uuidString)" }
+    var displayName: String { "takeout-\(setID)-\(String(format: "%03d", partNumber))" }
+}
+
+/// What can be moved right now, given which drives are actually plugged in.
+struct ExportPartTransferPlan {
+    var transfers: [ExportPartTransfer] = []
+    /// Parts in the holding area that no longer need to be there — already on
+    /// enough drives. The corridor should stay empty.
+    var discardable: [HeldExportPart] = []
+    /// Parts short of copies that nothing can be done about at the moment,
+    /// because no drive holding one is connected.
+    var stranded: [ExportPart] = []
+    /// Parts that would be parked on the Mac if there were room for them.
+    var deferredForSpace: [ExportPart] = []
+
+    var bytesToMove: Int64 { transfers.reduce(0) { $0 + $1.sizeBytes } }
+    var isEmpty: Bool { transfers.isEmpty && discardable.isEmpty }
+}
+
+enum ExportPartTransferPlanner {
+
+    /// Bytes left free on the Mac after parking parts. The holding area is a
+    /// corridor on the boot disk; filling it is a worse failure than a
+    /// transfer taking two sessions instead of one.
+    static let holdingAreaReserveBytes: Int64 = 20 * 1024 * 1024 * 1024
+
+    /// Works out the moves that would satisfy the redundancy policy for the
+    /// export, using only the drives connected right now.
+    ///
+    /// The order matters: deliveries first, because they are the steps that
+    /// complete a transfer already half-done and are the only way the holding
+    /// area empties. Direct drive-to-drive copies come next — they need no
+    /// space on the Mac at all. Parking a part on the Mac is the last resort,
+    /// taken only when the drive that needs the part is not here to receive it.
+    static func plan(
+        replication: ArchiveReplicationPlan,
+        connectedDriveIDs: Set<UUID>,
+        heldParts: [HeldExportPart],
+        availableHoldingBytes: Int64
+    ) -> ExportPartTransferPlan {
+        var result = ExportPartTransferPlan()
+        let managed = replication.managedDriveIDs
+        let partsByID = Dictionary(uniqueKeysWithValues: replication.parts.map { ($0.id, $0) })
+        var held = Dictionary(uniqueKeysWithValues: heldParts.map { ($0.id, $0) })
+
+        // 1. Deliver what is already waiting.
+        for (id, part) in held.sorted(by: { $0.key < $1.key }) {
+            let catalogued = partsByID[id]
+            let needing = catalogued?.drivesNeedingACopy(managedDriveIDs: managed) ?? managed
+            guard let recipient = needing.sorted(by: { $0.uuidString < $1.uuidString }).first else {
+                // Every managed drive already has it; the corridor is done
+                // with this one.
+                result.discardable.append(part)
+                held[id] = nil
+                continue
+            }
+            guard connectedDriveIDs.contains(recipient) else { continue }
+            result.transfers.append(ExportPartTransfer(
+                setID: part.setID,
+                partNumber: part.partNumber,
+                route: .holdingAreaToDrive(to: recipient),
+                sizeBytes: part.sizeBytes
+            ))
+        }
+
+        // 2. Parts still short of copies.
+        var holdingBudget = max(availableHoldingBytes - holdingAreaReserveBytes, 0)
+        for part in replication.partsNeedingWork.sorted(by: { ($0.setID, $0.partNumber) < ($1.setID, $1.partNumber) }) {
+            // Already in the corridor: it is handled above, or waiting for its
+            // recipient. Either way, do not copy it a second time.
+            if held[part.id] != nil { continue }
+            let recipients = part.drivesNeedingACopy(managedDriveIDs: managed)
+            guard !recipients.isEmpty else { continue }
+            // Only a zip can be handed to another drive as-is. An extracted
+            // folder is the same content, but copying a directory of tens of
+            // thousands of files is a different operation with none of the
+            // same guarantees, so a part that survives only as a folder is
+            // reported as stranded rather than half-transferred.
+            let donors = part.copies
+                .filter { connectedDriveIDs.contains($0.key) && $0.value.kind == .zip }
+                .keys
+            guard let donor = donors.sorted(by: { $0.uuidString < $1.uuidString }).first else {
+                result.stranded.append(part)
+                continue
+            }
+            for recipient in recipients.sorted(by: { $0.uuidString < $1.uuidString }) {
+                if connectedDriveIDs.contains(recipient) {
+                    result.transfers.append(ExportPartTransfer(
+                        setID: part.setID,
+                        partNumber: part.partNumber,
+                        route: .driveToDrive(from: donor, to: recipient),
+                        sizeBytes: part.sizeBytes
+                    ))
+                } else if part.sizeBytes > 0, part.sizeBytes <= holdingBudget {
+                    holdingBudget -= part.sizeBytes
+                    result.transfers.append(ExportPartTransfer(
+                        setID: part.setID,
+                        partNumber: part.partNumber,
+                        route: .driveToHoldingArea(from: donor, intendedFor: recipient),
+                        sizeBytes: part.sizeBytes
+                    ))
+                } else {
+                    result.deferredForSpace.append(part)
+                }
+            }
+        }
+        return result
+    }
+}

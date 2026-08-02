@@ -225,6 +225,8 @@ private struct ExportCard: View {
                     .font(.callout)
                     .foregroundStyle(protection.tint)
 
+                transferPlan
+
                 if !export.missingPartNumbers.isEmpty {
                     Label(
                         "Parts \(export.missingPartNumbers.map(String.init).joined(separator: ", ")) were never found — this export looks incomplete.",
@@ -237,6 +239,69 @@ private struct ExportCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(6)
         }
+    }
+
+    /// What is actually going to happen about a shortfall, rather than only
+    /// that one exists. "4 parts need another copy" leaves the user to work
+    /// out whether they should plug something in, wait, or free up space.
+    @ViewBuilder
+    private var transferPlan: some View {
+        let plan = store.partTransferPlan
+        let mine = plan.transfers.filter { $0.setID == export.setID }
+        let stranded = plan.stranded.filter { $0.setID == export.setID }
+        let deferred = plan.deferredForSpace.filter { $0.setID == export.setID }
+
+        if !mine.isEmpty {
+            HStack(alignment: .firstTextBaseline, spacing: 10) {
+                Label(
+                    "\(mine.count) part(s) can move now (\(Formatters.bytes.string(fromByteCount: mine.reduce(0) { $0 + $1.sizeBytes }))) — \(routeSummary(mine))",
+                    systemImage: "arrow.left.arrow.right"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                Spacer()
+                if store.isTransferringParts {
+                    Button("Stop") { store.cancelExportPartTransfers() }
+                } else {
+                    Button("Copy now") { store.transferExportParts() }
+                        .disabled(store.isImporting || store.isSyncing || store.takeoutActivity != nil)
+                }
+            }
+        }
+        if !stranded.isEmpty {
+            Label(
+                "\(stranded.count) part(s) are waiting for the drive that holds them to be connected.",
+                systemImage: "clock"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+        }
+        if !deferred.isEmpty {
+            Label(
+                "\(deferred.count) part(s) need to wait on the Mac while the other drive is away, and there is not enough free space for them. Connect both drives at once, or free up space.",
+                systemImage: "internaldrive"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+        }
+    }
+
+    private func routeSummary(_ transfers: [ExportPartTransfer]) -> String {
+        var phrases: [String] = []
+        func name(_ id: UUID) -> String { driveNames[id] ?? "the other drive" }
+        if let direct = transfers.first(where: { if case .driveToDrive = $0.route { return true } else { return false } }),
+           case .driveToDrive(let from, let to) = direct.route {
+            phrases.append("\(name(from)) → \(name(to))")
+        }
+        if let park = transfers.first(where: { if case .driveToHoldingArea = $0.route { return true } else { return false } }),
+           case .driveToHoldingArea(let from, let intendedFor) = park.route {
+            phrases.append("\(name(from)) → this Mac, to hand on to \(name(intendedFor))")
+        }
+        if let deliver = transfers.first(where: { if case .holdingAreaToDrive = $0.route { return true } else { return false } }),
+           case .holdingAreaToDrive(let to) = deliver.route {
+            phrases.append("this Mac → \(name(to))")
+        }
+        return phrases.joined(separator: ", ")
     }
 
     private var subtitle: String {
