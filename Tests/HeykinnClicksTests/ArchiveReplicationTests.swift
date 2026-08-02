@@ -80,7 +80,7 @@ final class ArchiveReplicationTests: XCTestCase {
             ],
             managedDriveIDs: [a, b]
         )
-        XCTAssertTrue(plan.parts[0].redundancy(acrossManagedDrives: [a, b]).meetsTwoCopyPolicy,
+        XCTAssertTrue(plan.parts[0].redundancy(acrossManagedDrives: [a, b]).meetsPolicy,
                       "The bytes are present either way")
     }
 
@@ -129,6 +129,57 @@ final class ArchiveReplicationTests: XCTestCase {
 
         // And it must not match a different part.
         XCTAssertFalse("volume:Backup/takeout-S1-010/Google Photos/IMG.jpg".contains(stem))
+    }
+
+    /// The number of copies is policy, not a constant. Someone wanting three
+    /// drives must get three-drive answers from the same model.
+    func testRedundancyFollowsTheConfiguredPolicyNotTheNumberTwo() {
+        let a = UUID(), b = UUID(), c = UUID()
+        let archives = [
+            archive(part: 1, drive: a, size: 100),
+            archive(part: 1, drive: b, size: 100),
+        ]
+        let threeCopies = LocalRedundancyPolicy(desiredCopies: 3)
+
+        let underDefault = ArchiveReplicationPlanner.plan(
+            archives: archives, managedDriveIDs: [a, b, c]
+        )
+        XCTAssertTrue(underDefault.isSatisfied, "Two copies satisfies the default policy")
+
+        let underThree = ArchiveReplicationPlanner.plan(
+            archives: archives, managedDriveIDs: [a, b, c], policy: threeCopies
+        )
+        XCTAssertFalse(underThree.isSatisfied, "Two copies does not satisfy a three-copy policy")
+        XCTAssertEqual(underThree.partsNeedingWork.first?.drivesNeedingACopy(managedDriveIDs: [a, b, c]), [c])
+        XCTAssertEqual(underThree.bytesOutstanding, 100)
+    }
+
+    func testProtectionAlsoFollowsThePolicy() {
+        let asset = Asset(
+            id: UUID(), kind: .photo, originalFilename: "p.jpg", importOrigin: .localFolder,
+            captureDate: nil, importDate: Date(), updatedDate: Date(), fileSize: 1,
+            pixelWidth: nil, pixelHeight: nil, contentHash: "h", residency: .local,
+            residencySource: .importDefault, presence: .localOnly, stagingRelativePath: nil,
+            importBatchID: nil, exifSummary: [:]
+        )
+        let replicas = (0..<2).map { _ in
+            DriveReplicaState(
+                assetID: asset.id, driveID: UUID(), state: .present,
+                relativePath: "volume:x", lastVerifiedAt: Date()
+            )
+        }
+        XCTAssertEqual(
+            ProtectionEvaluator.protectionStates(for: [asset], replicaStates: replicas)[asset.id],
+            .fullyReplicated
+        )
+        XCTAssertEqual(
+            ProtectionEvaluator.protectionStates(
+                for: [asset], replicaStates: replicas,
+                policy: LocalRedundancyPolicy(desiredCopies: 3)
+            )[asset.id],
+            .replicatedToOneDrive,
+            "Under a three-copy policy, two copies is not full protection"
+        )
     }
 
     func testMissingPartsAreTheOnlyWorkReported() {

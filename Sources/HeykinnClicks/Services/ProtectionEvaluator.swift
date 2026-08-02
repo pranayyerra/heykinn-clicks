@@ -13,6 +13,7 @@ enum ProtectionEvaluator {
     static func protectionStates(
         for assets: [Asset],
         replicaStates: [DriveReplicaState],
+        policy: LocalRedundancyPolicy = .default,
         now: Date = Date()
     ) -> [UUID: ProtectionState] {
         let byAsset = Dictionary(grouping: replicaStates, by: \.assetID)
@@ -22,6 +23,7 @@ enum ProtectionEvaluator {
                 for: asset,
                 replicaStates: byAsset[asset.id] ?? [],
                 alreadyFiltered: true,
+                policy: policy,
                 now: now
             )
         }
@@ -34,6 +36,7 @@ enum ProtectionEvaluator {
         for asset: Asset,
         replicaStates: [DriveReplicaState],
         alreadyFiltered: Bool = false,
+        policy: LocalRedundancyPolicy = .default,
         now: Date = Date()
     ) -> ProtectionState {
         guard asset.residency == .local else { return .notApplicable }
@@ -49,19 +52,23 @@ enum ProtectionEvaluator {
             return .driftDetected
         }
 
-        // Full replication means both managed drives hold the asset. With fewer
-        // than two drives registered, an asset can never be fully replicated —
-        // that is a truthful statement about the archive, not a bug.
+        // Full replication means the policy's number of drives hold the asset.
+        // With fewer drives registered than the policy asks for, an asset can
+        // never be fully replicated — a truthful statement about the archive,
+        // not a bug.
         let present = states.filter { $0.state == .present }
 
-        if present.count >= 2 {
+        if policy.isSatisfied(byCopies: present.count) {
             let overdue = present.contains { replica in
                 guard let verified = replica.lastVerifiedAt else { return true }
                 return now.timeIntervalSince(verified) > verificationMaxAge
             }
             return overdue ? .verificationOverdue : .fullyReplicated
         }
-        if present.count == 1 {
+        // Any number of copies short of the policy is partial protection — not
+        // "staged only", which would claim no drive holds it at all. With a
+        // policy above two, two copies is still partial.
+        if present.count >= 1 {
             return .replicatedToOneDrive
         }
         return .stagedOnly

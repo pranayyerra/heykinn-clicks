@@ -56,7 +56,7 @@ struct TakeoutArchive: Identifiable, Hashable {
     /// Parses `takeout-<session>-<part>.zip` (Google's split-download naming)
     /// or the same name without `.zip` — the natural name of a folder someone
     /// extracted from one part. Session tokens may themselves contain dashes
-    /// (re-runs look like `20260710T081521Z-2`), so the part is whatever
+    /// (re-runs look like `<timestamp>-2`), so the part is whatever
     /// follows the LAST dash.
     static func parseExportComponents(filename: String) -> (setID: String, part: Int)? {
         let lowered = filename.lowercased()

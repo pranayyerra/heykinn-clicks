@@ -21,7 +21,9 @@ enum ProtectionState: String, Codable, Hashable {
     var displayName: String {
         switch self {
         case .stagedOnly: return "Staged only"
-        case .replicatedToOneDrive: return "One drive"
+        // Accurate whatever the policy asks for: with two drives this is one
+        // of two, with three it may be two of three.
+        case .replicatedToOneDrive: return "Partly replicated"
         case .fullyReplicated: return "Fully replicated"
         case .driftDetected: return "Damaged copy found"
         case .verificationOverdue: return "Not checked recently"

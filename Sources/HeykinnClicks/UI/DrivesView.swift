@@ -269,10 +269,10 @@ struct DrivesView: View {
                     registrationCandidate = nil
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.drives.count >= 2)
+                .disabled(store.drives.count >= store.redundancyPolicy.desiredCopies)
             }
-            if store.drives.count >= 2 {
-                Text("Two managed drives are already registered — the v1 model manages exactly two replicas.")
+            if store.drives.count >= store.redundancyPolicy.desiredCopies {
+                Text("\(store.redundancyPolicy.desiredCopies) managed drive(s) are already registered, which is what the local redundancy policy asks for.")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }

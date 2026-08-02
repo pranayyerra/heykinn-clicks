@@ -42,6 +42,10 @@ final class AppStore: ObservableObject {
 
     var isSyncing: Bool { syncProgress != nil }
 
+    /// How many managed drives should hold each Local asset. Read wherever
+    /// redundancy is judged, so the number is stated once.
+    let redundancyPolicy: LocalRedundancyPolicy = .default
+
     /// An unmanaged external volume just appeared; the UI asks whether to use
     /// it as managed local storage (and/or scan it for Takeout).
     @Published var connectPrompt: VolumeInfo?
@@ -222,31 +226,36 @@ final class AppStore: ObservableObject {
     /// holds them is not work, it is waste.
     func applyArchiveLevelRedundancy() {
         let managedIDs = Set(drives.map(\.id))
-        archivePlan = ArchiveReplicationPlanner.plan(archives: takeoutArchives, managedDriveIDs: managedIDs)
+        archivePlan = ArchiveReplicationPlanner.plan(
+            archives: takeoutArchives, managedDriveIDs: managedIDs, policy: redundancyPolicy
+        )
         guard !archivePlan.partsMeetingPolicy.isEmpty else { return }
 
         let covered = assetIDsProtectedByArchive()
         guard !covered.isEmpty else { return }
 
-        // For each drive that holds a satisfied part, the assets inside it are
-        // present there — backed by that drive's own copy of the part.
+        // A drive holding a satisfied part holds the assets inside it. Record
+        // that against the part rather than inventing a per-file path, and
+        // withdraw the copy work the per-asset model had queued.
         var claimed = 0
         var cancelled = 0
+        var pendingCleared = 0
         do {
             try catalog.transaction {
                 for part in archivePlan.partsMeetingPolicy {
-                    for (driveID, archive) in part.copies where managedIDs.contains(driveID) {
-                        let marker = (archive.path as NSString).lastPathComponent
+                    let backing = ReplicationService.archivePartPrefix + part.displayName
+                    for driveID in part.driveIDs where managedIDs.contains(driveID) {
                         for assetID in covered {
                             let existing = replicasByAssetID[assetID]?.first { $0.driveID == driveID }
+                            // Never overwrite a replica already established by
+                            // reading the bytes; this is the weaker claim.
                             if existing?.state == .present { continue }
-                            // The asset's bytes are inside this drive's copy of
-                            // the part, so the part is its replica.
+                            if existing?.state == .pending { pendingCleared += 1 }
                             try catalog.upsertReplicaState(DriveReplicaState(
                                 assetID: assetID,
                                 driveID: driveID,
                                 state: .present,
-                                relativePath: ReplicationService.volumeBackedPrefix + marker,
+                                relativePath: backing,
                                 lastVerifiedAt: nil
                             ))
                             claimed += 1
@@ -261,7 +270,7 @@ final class AppStore: ObservableObject {
             }
             audit(
                 .replication,
-                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist on two drives, covering \(covered.count) asset(s). Recorded \(claimed) second cop(ies) and cancelled \(cancelled) now-unnecessary file copies."
+                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist on two drives, covering \(covered.count) asset(s). Recorded \(claimed) second cop(ies) against the parts holding them, replacing \(pendingCleared) pending entr(ies), and withdrew \(cancelled) file copies that are no longer needed."
             )
             loadAll()
         } catch {
@@ -758,7 +767,8 @@ final class AppStore: ObservableObject {
         )
         protectionStates = ProtectionEvaluator.protectionStates(
             for: assets,
-            replicaStates: replicaStates
+            replicaStates: replicaStates,
+            policy: redundancyPolicy
         )
 
         var batchSafe: [UUID: Bool] = [:]

@@ -37,8 +37,28 @@ enum ReplicationService {
     /// `zipmember:<volume-relative-zip-path>!<entry-path>`.
     static let zipMemberPrefix = "zipmember:"
 
+    /// relativePath prefix for a replica satisfied by this drive's copy of a
+    /// whole export part: `archivepart:takeout-<set>-<part>`. The archive is
+    /// made of a handful of large zips, so holding the part *is* holding the
+    /// assets inside it. Recording that directly avoids copying tens of
+    /// thousands of files onto a drive that already has them, and avoids
+    /// decompressing every entry just to name it.
+    static let archivePartPrefix = "archivepart:"
+
     static func isVolumeBacked(_ replica: DriveReplicaState?) -> Bool {
         replica?.relativePath?.hasPrefix(volumeBackedPrefix) == true
+    }
+
+    static func isArchivePartBacked(_ replica: DriveReplicaState?) -> Bool {
+        replica?.relativePath?.hasPrefix(archivePartPrefix) == true
+    }
+
+    /// The export part stem a replica is satisfied by, if any.
+    static func archivePartStem(_ replica: DriveReplicaState?) -> String? {
+        guard let relative = replica?.relativePath, relative.hasPrefix(archivePartPrefix) else {
+            return nil
+        }
+        return String(relative.dropFirst(archivePartPrefix.count))
     }
 
     static func isZipMemberBacked(_ replica: DriveReplicaState?) -> Bool {
@@ -48,7 +68,7 @@ enum ReplicationService {
     /// Any replica whose bytes belong to the user's own archive files rather
     /// than the app-managed replica root. These are verified, never deleted.
     static func isArchiveBacked(_ replica: DriveReplicaState?) -> Bool {
-        isVolumeBacked(replica) || isZipMemberBacked(replica)
+        isVolumeBacked(replica) || isZipMemberBacked(replica) || isArchivePartBacked(replica)
     }
 
     static func zipMemberComponents(_ replica: DriveReplicaState?) -> (zipRelativePath: String, entry: String)? {
@@ -251,6 +271,33 @@ enum ReplicationService {
         mountURL: URL,
         existingReplica: DriveReplicaState?
     ) throws -> DriveReplicaState {
+        // A part-backed replica is satisfied by the drive still holding that
+        // export part. Checking the part is the honest unit of work here:
+        // decompressing every entry to confirm one photo would be absurd when
+        // the part is what the policy actually counts.
+        if let stem = archivePartStem(existingReplica) {
+            var replica = DriveReplicaState(
+                assetID: asset.id,
+                driveID: drive.id,
+                state: .missing,
+                relativePath: existingReplica?.relativePath,
+                lastVerifiedAt: Date()
+            )
+            guard let enumerator = FileManager.default.enumerator(
+                at: mountURL,
+                includingPropertiesForKeys: nil,
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { return replica }
+            for case let url as URL in enumerator {
+                if url.deletingPathExtension().lastPathComponent == stem
+                    || url.lastPathComponent == stem {
+                    replica.state = .present
+                    break
+                }
+            }
+            return replica
+        }
+
         // Zip-member replicas verify by streaming the entry out of the zip.
         if let components = zipMemberComponents(existingReplica) {
             var replica = DriveReplicaState(

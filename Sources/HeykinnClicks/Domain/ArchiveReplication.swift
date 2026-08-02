@@ -6,22 +6,23 @@ enum PartRedundancy: String, Codable, Hashable {
     case absent
     /// Exactly one managed drive holds it.
     case singleCopy
-    /// Two or more drives hold it, matched by name and byte size only.
-    /// Enough to plan against; not yet proof the bytes agree.
+    /// Enough drives hold it, matched by name and byte size only. Enough to
+    /// plan against; not yet proof the bytes agree.
     case redundantUnverified
-    /// Two or more drives hold it and their whole-file hashes agree.
+    /// Enough drives hold it and their whole-file hashes agree.
     case redundantVerified
 
     var displayName: String {
         switch self {
         case .absent: return "Not on any drive"
         case .singleCopy: return "One copy"
-        case .redundantUnverified: return "Two copies (sizes match)"
-        case .redundantVerified: return "Two copies, verified"
+        case .redundantUnverified: return "Enough copies (sizes match)"
+        case .redundantVerified: return "Enough copies, verified"
         }
     }
 
-    var meetsTwoCopyPolicy: Bool {
+    /// Whether this state satisfies the configured local redundancy policy.
+    var meetsPolicy: Bool {
         self == .redundantUnverified || self == .redundantVerified
     }
 }
@@ -29,11 +30,11 @@ enum PartRedundancy: String, Codable, Hashable {
 /// One part of a Google Takeout export, and where its copies live.
 ///
 /// This is the unit the archive is actually made of. The export arrives as a
-/// handful of large zips; replicating it means having those zips on two
-/// drives, not copying every photo inside them individually. Modelling it
-/// per-asset turned twelve file copies into tens of thousands of operations
-/// and hid the fact that a drive already holding the export was already
-/// compliant.
+/// handful of large zips; replicating it means having those zips on as many
+/// drives as the redundancy policy asks for, not copying every photo inside
+/// them individually. Modelling it per-asset turns a handful of file copies
+/// into tens of thousands of operations, and hides the fact that a drive
+/// already holding the export is already compliant.
 struct ExportPart: Identifiable, Hashable {
     var setID: String
     var partNumber: Int
@@ -62,37 +63,46 @@ struct ExportPart: Identifiable, Hashable {
         return Set(sizes).count == 1
     }
 
-    func redundancy(acrossManagedDrives managedDriveIDs: Set<UUID>) -> PartRedundancy {
+    func redundancy(
+        acrossManagedDrives managedDriveIDs: Set<UUID>,
+        policy: LocalRedundancyPolicy = .default
+    ) -> PartRedundancy {
         let holders = driveIDs.intersection(managedDriveIDs)
         if holders.isEmpty { return .absent }
-        if holders.count == 1 { return .singleCopy }
+        guard policy.isSatisfied(byCopies: holders.count) else { return .singleCopy }
         if hashesAgree { return .redundantVerified }
         if sizesAgree { return .redundantUnverified }
-        // Same part number on two drives but disagreeing sizes: treat as one
-        // good copy rather than claiming redundancy that may not hold.
+        // Enough drives hold a part with this number, but their sizes disagree,
+        // so they are not the same bytes. Report the weaker truth rather than
+        // claiming a redundancy that may not hold.
         return .singleCopy
     }
 
-    /// Drives that should receive this part to satisfy the two-copy policy.
+    /// Drives that should receive this part for the policy to be satisfied.
     func drivesNeedingACopy(managedDriveIDs: Set<UUID>) -> Set<UUID> {
         managedDriveIDs.subtracting(driveIDs)
     }
 }
 
-/// What must happen for an export to satisfy the two-copy policy.
+/// What must happen for an export to satisfy the local redundancy policy.
 struct ArchiveReplicationPlan {
     var parts: [ExportPart]
     var managedDriveIDs: Set<UUID>
+    var policy: LocalRedundancyPolicy = .default
 
     var partsMeetingPolicy: [ExportPart] {
-        parts.filter { $0.redundancy(acrossManagedDrives: managedDriveIDs).meetsTwoCopyPolicy }
+        parts.filter {
+            $0.redundancy(acrossManagedDrives: managedDriveIDs, policy: policy).meetsPolicy
+        }
     }
 
     var partsNeedingWork: [ExportPart] {
-        parts.filter { !$0.redundancy(acrossManagedDrives: managedDriveIDs).meetsTwoCopyPolicy }
+        parts.filter {
+            !$0.redundancy(acrossManagedDrives: managedDriveIDs, policy: policy).meetsPolicy
+        }
     }
 
-    /// Bytes still to move for the whole export to exist twice.
+    /// Bytes still to move for the whole export to meet the policy.
     var bytesOutstanding: Int64 {
         partsNeedingWork.reduce(0) { total, part in
             total + part.sizeBytes * Int64(max(part.drivesNeedingACopy(managedDriveIDs: managedDriveIDs).count, 0))
@@ -109,7 +119,8 @@ enum ArchiveReplicationPlanner {
     /// a copy of their part too — the bytes are present either way.
     static func plan(
         archives: [TakeoutArchive],
-        managedDriveIDs: Set<UUID>
+        managedDriveIDs: Set<UUID>,
+        policy: LocalRedundancyPolicy = .default
     ) -> ArchiveReplicationPlan {
         var byPart: [String: ExportPart] = [:]
         for archive in archives {
@@ -129,7 +140,8 @@ enum ArchiveReplicationPlanner {
         }
         return ArchiveReplicationPlan(
             parts: byPart.values.sorted { ($0.setID, $0.partNumber) < ($1.setID, $1.partNumber) },
-            managedDriveIDs: managedDriveIDs
+            managedDriveIDs: managedDriveIDs,
+            policy: policy
         )
     }
 }

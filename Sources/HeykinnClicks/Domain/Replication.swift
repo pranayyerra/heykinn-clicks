@@ -51,6 +51,25 @@ enum ReplicationTaskState: String, Codable, Hashable {
     case failed
 }
 
+/// How many managed drives should hold each Local asset.
+///
+/// Two is the shape the product is designed around — one drive can fail, and a
+/// second is what makes that survivable — but nothing in the model requires
+/// that number, so it lives here rather than as a literal scattered through
+/// protection, planning and registration.
+struct LocalRedundancyPolicy: Equatable {
+    var desiredCopies: Int
+
+    static let `default` = LocalRedundancyPolicy(desiredCopies: 2)
+
+    /// Human phrasing for the policy, used wherever it is explained.
+    var description: String {
+        desiredCopies == 2 ? "two copies" : "\(desiredCopies) copies"
+    }
+
+    func isSatisfied(byCopies count: Int) -> Bool { count >= desiredCopies }
+}
+
 /// What a drive's pending backlog actually consists of. A bare task count
 /// hides the difference between "copy 3 files" and "re-read 120 GB", which are
 /// wildly different asks of the user's time and drive.
