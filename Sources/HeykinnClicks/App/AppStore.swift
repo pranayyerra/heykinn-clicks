@@ -285,6 +285,111 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Confirms redundancy by comparing whole-file checksums of the export
+    /// parts, rather than reading every asset inside them.
+    ///
+    /// If two drives hold byte-identical copies of a part, everything in that
+    /// part is verifiably present on both — proved by a handful of file hashes
+    /// instead of decompressing tens of thousands of entries. One sequential
+    /// read per part replaces per-asset checking entirely.
+    func verifyExportPartsByChecksum() {
+        guard takeoutActivity == nil, !isImporting else { return }
+        let managedIDs = Set(drives.map(\.id))
+        archivePlan = ArchiveReplicationPlanner.plan(
+            archives: takeoutArchives, managedDriveIDs: managedIDs, policy: redundancyPolicy
+        )
+        // Only parts whose copies are all reachable can be compared now.
+        let candidates = archivePlan.partsMeetingPolicy.filter { part in
+            part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+        }
+        guard !candidates.isEmpty else {
+            audit(.replication, "Checksum check: no export part has all of its copies connected.")
+            return
+        }
+
+        Task { @MainActor in
+            var verifiedParts = 0
+            var mismatchedParts: [String] = []
+            var assetsConfirmed = 0
+
+            for (index, part) in candidates.enumerated() {
+                takeoutActivity = TakeoutActivity(
+                    phase: .fingerprinting,
+                    detail: part.displayName,
+                    stepIndex: index + 1,
+                    stepCount: candidates.count,
+                    note: "comparing copies by checksum"
+                )
+                var hashes: [UUID: String] = [:]
+                for (driveID, archive) in part.copies {
+                    // Folders have no single-file checksum; this compares parts
+                    // stored as archives.
+                    guard archive.kind == .zip else { continue }
+                    guard let hash = await fingerprintZipIfNeeded(archive) else { continue }
+                    hashes[driveID] = hash
+                }
+                guard hashes.count >= redundancyPolicy.desiredCopies else { continue }
+
+                if Set(hashes.values).count == 1 {
+                    assetsConfirmed += markPartVerified(part, onDrives: Set(hashes.keys))
+                    verifiedParts += 1
+                } else {
+                    // Same name and size, different bytes: one copy is damaged
+                    // or is not the part it claims to be. Say so rather than
+                    // treating it as protection.
+                    mismatchedParts.append(part.displayName)
+                    markPartMismatched(part, onDrives: Set(hashes.keys))
+                }
+            }
+
+            var message = "Checksum check: \(verifiedParts) export part(s) confirmed identical across drives, covering \(assetsConfirmed) asset(s)."
+            if !mismatchedParts.isEmpty {
+                message += " \(mismatchedParts.count) part(s) DIFFER between drives and are flagged: \(mismatchedParts.joined(separator: ", "))."
+            }
+            audit(.replication, message)
+            takeoutActivity = nil
+            loadAll()
+        }
+    }
+
+    /// Records that every replica backed by this part has been confirmed.
+    @discardableResult
+    private func markPartVerified(_ part: ExportPart, onDrives driveIDs: Set<UUID>) -> Int {
+        let stem = part.displayName
+        let now = Date()
+        var confirmed = 0
+        do {
+            try catalog.transaction {
+                for replica in replicaStates where driveIDs.contains(replica.driveID)
+                    && replica.state == .present
+                    && (replica.relativePath?.contains(stem) ?? false) {
+                    var updated = replica
+                    updated.lastVerifiedAt = now
+                    try catalog.upsertReplicaState(updated)
+                    confirmed += 1
+                }
+            }
+        } catch {
+            lastError = "Could not record checksum verification: \(error.localizedDescription)"
+        }
+        return confirmed
+    }
+
+    /// Flags replicas whose part disagrees between drives, so the difference
+    /// surfaces as a problem rather than silently passing as redundancy.
+    private func markPartMismatched(_ part: ExportPart, onDrives driveIDs: Set<UUID>) {
+        let stem = part.displayName
+        try? catalog.transaction {
+            for replica in replicaStates where driveIDs.contains(replica.driveID)
+                && replica.state == .present
+                && (replica.relativePath?.contains(stem) ?? false) {
+                var updated = replica
+                updated.state = .drift
+                try catalog.upsertReplicaState(updated)
+            }
+        }
+    }
+
     // MARK: - Capture dates
 
     /// Edited derivatives keyed by the original they came from.
@@ -1997,13 +2102,37 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Runs a bounded file check on the drive.
+    /// Checks this drive's content for damage.
+    ///
+    /// Content held as export parts is confirmed by comparing whole-file
+    /// checksums between drives — a handful of reads that settles everything
+    /// inside those parts at once. Only what is not covered that way falls
+    /// back to reading files one at a time.
     func verifyDrive(_ driveID: UUID) {
         guard connectedMounts[driveID] != nil else {
             lastError = "Drive is not connected."
             return
         }
+        if archiveChecksumCheckWouldHelp(driveID) {
+            verifyExportPartsByChecksum()
+            return
+        }
         queueVerificationSweep(driveID, budget: .sweep)
+    }
+
+    /// Whether this drive holds export parts whose copies could be compared by
+    /// checksum right now, covering replicas not yet confirmed.
+    func archiveChecksumCheckWouldHelp(_ driveID: UUID) -> Bool {
+        let unconfirmed = Set(
+            replicaStates
+                .filter { $0.driveID == driveID && $0.state == .present && $0.lastVerifiedAt == nil }
+                .compactMap(\.relativePath)
+        )
+        guard !unconfirmed.isEmpty else { return false }
+        return archivePlan.partsMeetingPolicy.contains { part in
+            part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+                && unconfirmed.contains { $0.contains(part.displayName) }
+        }
     }
 
     /// Queues a bounded verification sweep: the stalest replicas first, up to

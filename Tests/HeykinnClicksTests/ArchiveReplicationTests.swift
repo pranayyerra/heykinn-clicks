@@ -332,3 +332,68 @@ final class DriveAttributionTests: XCTestCase {
         )
     }
 }
+
+/// Comparing whole-file checksums of the export parts settles everything
+/// inside them at once, instead of reading tens of thousands of assets.
+final class ChecksumVerificationTests: XCTestCase {
+
+    private func archive(part: Int, drive: UUID, hash: String?, size: Int64 = 100) -> TakeoutArchive {
+        TakeoutArchive(
+            id: UUID(), path: "/V/\(drive.uuidString)/takeout-S-\(String(format: "%03d", part)).zip",
+            kind: .zip, sizeBytes: size, driveID: drive, discoveredAt: Date(),
+            importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S", partNumber: part,
+            contentHash: hash
+        )
+    }
+
+    func testMatchingChecksumsProveThePartIsRedundant() {
+        let a = UUID(), b = UUID()
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [archive(part: 1, drive: a, hash: "abc"), archive(part: 1, drive: b, hash: "abc")],
+            managedDriveIDs: [a, b]
+        )
+        XCTAssertEqual(plan.parts[0].redundancy(acrossManagedDrives: [a, b]), .redundantVerified)
+        XCTAssertTrue(plan.parts[0].hashesAgree)
+    }
+
+    /// Same name, same size, different bytes: one copy is damaged or is not
+    /// the part it claims to be. That must not pass as protection.
+    func testDifferingChecksumsAreNotTreatedAsRedundancy() {
+        let a = UUID(), b = UUID()
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [archive(part: 1, drive: a, hash: "abc"), archive(part: 1, drive: b, hash: "xyz")],
+            managedDriveIDs: [a, b]
+        )
+        let part = plan.parts[0]
+        XCTAssertFalse(part.hashesAgree)
+        // Sizes still match, so it reads as present-but-unproven rather than
+        // verified — the mismatch is what the check then flags.
+        XCTAssertEqual(part.redundancy(acrossManagedDrives: [a, b]), .redundantUnverified)
+    }
+
+    func testUnfingerprintedCopiesAreNotClaimedAsVerified() {
+        let a = UUID(), b = UUID()
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [archive(part: 1, drive: a, hash: "abc"), archive(part: 1, drive: b, hash: nil)],
+            managedDriveIDs: [a, b]
+        )
+        XCTAssertFalse(plan.parts[0].hashesAgree, "One hash is not a comparison")
+        XCTAssertEqual(plan.parts[0].redundancy(acrossManagedDrives: [a, b]), .redundantUnverified)
+    }
+
+    /// The point of the approach: one hash per part, whatever it contains.
+    func testCostIsPerPartNotPerAsset() {
+        let a = UUID(), b = UUID()
+        var archives: [TakeoutArchive] = []
+        for part in 1...12 {
+            archives.append(archive(part: part, drive: a, hash: "h\(part)"))
+            archives.append(archive(part: part, drive: b, hash: "h\(part)"))
+        }
+        let plan = ArchiveReplicationPlanner.plan(archives: archives, managedDriveIDs: [a, b])
+        let comparisons = plan.parts.reduce(0) { $0 + $1.copies.count }
+        XCTAssertEqual(comparisons, 24, "Two copies of twelve parts — not one read per photo")
+        XCTAssertEqual(plan.partsMeetingPolicy.count, 12)
+        XCTAssertTrue(plan.parts.allSatisfy { $0.hashesAgree })
+    }
+}
