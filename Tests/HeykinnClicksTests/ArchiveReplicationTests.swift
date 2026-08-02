@@ -397,3 +397,74 @@ final class ChecksumVerificationTests: XCTestCase {
         XCTAssertTrue(plan.parts.allSatisfy { $0.hashesAgree })
     }
 }
+
+/// A shortfall must name the parts and the drive that needs them. "4 of 12
+/// parts need another copy" tells you nothing you can act on.
+final class ShortfallReportingTests: XCTestCase {
+
+    private func archive(part: Int, drive: UUID, size: Int64 = 1_000) -> TakeoutArchive {
+        TakeoutArchive(
+            id: UUID(), path: "/V/takeout-S-\(String(format: "%03d", part)).zip",
+            kind: .zip, sizeBytes: size, driveID: drive, discoveredAt: Date(),
+            importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S", partNumber: part
+        )
+    }
+
+    private func summary(_ archives: [TakeoutArchive], drives: Set<UUID>) -> ExportSummary {
+        ExportSummary(
+            setID: "S", archives: archives,
+            plan: ArchiveReplicationPlanner.plan(archives: archives, managedDriveIDs: drives)
+        )
+    }
+
+    func testShortfallNamesThePartsAndTheDriveThatNeedsThem() {
+        let a = UUID(), b = UUID()
+        // Parts 1 and 2 on both; 3 and 4 only on A.
+        var archives = [archive(part: 1, drive: a), archive(part: 1, drive: b),
+                        archive(part: 2, drive: a), archive(part: 2, drive: b)]
+        archives += [archive(part: 3, drive: a), archive(part: 4, drive: a)]
+
+        let export = summary(archives, drives: [a, b])
+        let text = export.protection(driveNames: [a: "Drive A", b: "Drive B"]).text
+
+        XCTAssertTrue(text.contains("3"), text)
+        XCTAssertTrue(text.contains("4"), text)
+        XCTAssertTrue(text.contains("Drive B"), "It must say where the copies must go: \(text)")
+        XCTAssertFalse(text.contains("Drive A"), "Drive A already has them: \(text)")
+        XCTAssertEqual(export.shortfall.count, 2)
+    }
+
+    /// Outstanding bytes are this export's, not every export's added together.
+    func testBytesOutstandingCountOnlyThisExport() {
+        let a = UUID(), b = UUID()
+        let mine = [archive(part: 1, drive: a, size: 500)]
+        let other = TakeoutArchive(
+            id: UUID(), path: "/V/takeout-OTHER-001.zip", kind: .zip, sizeBytes: 9_000,
+            driveID: a, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
+            importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
+            exportSetID: "OTHER", partNumber: 1
+        )
+        let plan = ArchiveReplicationPlanner.plan(archives: mine + [other], managedDriveIDs: [a, b])
+        let export = ExportSummary(setID: "S", archives: mine, plan: plan)
+
+        XCTAssertEqual(export.bytesOutstanding, 500, "The other export's 9,000 bytes are not this export's problem")
+        XCTAssertEqual(plan.bytesOutstanding, 9_500, "…though the plan as a whole still owes both")
+    }
+
+    func testFullyPresentExportReportsNoShortfall() {
+        let a = UUID(), b = UUID()
+        let export = summary([archive(part: 1, drive: a), archive(part: 1, drive: b)], drives: [a, b])
+        XCTAssertTrue(export.shortfall.isEmpty)
+        XCTAssertEqual(export.bytesOutstanding, 0)
+        XCTAssertTrue(export.protection(driveNames: [:]).text.contains("On every drive"))
+    }
+
+    func testSingularWordingForOnePart() {
+        let a = UUID(), b = UUID()
+        let export = summary([archive(part: 7, drive: a)], drives: [a, b])
+        let text = export.protection(driveNames: [a: "A", b: "B"]).text
+        XCTAssertTrue(text.hasPrefix("Part 7"), text)
+        XCTAssertFalse(text.hasPrefix("Parts"), text)
+    }
+}

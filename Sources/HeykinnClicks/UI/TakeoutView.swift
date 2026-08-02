@@ -115,20 +115,47 @@ struct ExportSummary: Identifiable {
         TakeoutExportSet(setID: setID, parts: archives).missingPartNumbers
     }
 
-    /// Plain answer to "is this safe?".
-    var protection: (text: String, symbol: String, tint: Color) {
+    /// Parts short of the policy, with the drives each one still owes a copy to.
+    var shortfall: [(part: ExportPart, destinations: [UUID])] {
+        parts.compactMap { part in
+            let redundancy = part.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy)
+            guard !redundancy.meetsPolicy else { return nil }
+            let destinations = Array(part.drivesNeedingACopy(managedDriveIDs: plan.managedDriveIDs))
+            guard !destinations.isEmpty else { return nil }
+            return (part, destinations)
+        }
+    }
+
+    /// Bytes to move for *this* export — not the whole plan, which would
+    /// report another export's outstanding work against this one.
+    var bytesOutstanding: Int64 {
+        shortfall.reduce(0) { $0 + $1.part.sizeBytes * Int64($1.destinations.count) }
+    }
+
+    /// Plain answer to "is this safe?", and when it is not, which parts are
+    /// short and where they need to go — a count alone gives nothing to act on.
+    func protection(driveNames: [UUID: String]) -> (text: String, symbol: String, tint: Color) {
         guard !parts.isEmpty else {
             return ("Not part of a tracked export", "questionmark.circle", .secondary)
         }
-        let satisfied = parts.filter { $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy).meetsPolicy }
-        let verified = parts.filter { $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy) == .redundantVerified }
-        if satisfied.count < parts.count {
-            let short = parts.count - satisfied.count
-            let bytes = Formatters.bytes.string(fromByteCount: plan.bytesOutstanding)
-            return ("\(short) of \(parts.count) parts need another copy (\(bytes) to move)", "exclamationmark.triangle.fill", .orange)
+        let outstanding = shortfall
+        if !outstanding.isEmpty {
+            let numbers = outstanding.map { String($0.part.partNumber) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            let targets = Set(outstanding.flatMap(\.destinations))
+                .map { driveNames[$0] ?? "another drive" }
+                .sorted()
+            return (
+                "Part\(numbers.count == 1 ? "" : "s") \(numbers.joined(separator: ", ")) not yet on \(targets.joined(separator: " and ")) — \(Formatters.bytes.string(fromByteCount: bytesOutstanding)) to copy",
+                "exclamationmark.triangle.fill",
+                .orange
+            )
+        }
+        let verified = parts.filter {
+            $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy) == .redundantVerified
         }
         if verified.count < parts.count {
-            return ("On every drive — copies not yet compared", "checkmark.circle", .teal)
+            let pending = parts.count - verified.count
+            return ("On every drive — \(pending) part(s) not yet compared by checksum", "checkmark.circle", .teal)
         }
         return ("On every drive, checksums match", "checkmark.seal.fill", .green)
     }
@@ -140,6 +167,10 @@ private struct ExportCard: View {
     let export: ExportSummary
     @Binding var importRequest: TakeoutImportRequest?
     @EnvironmentObject private var store: AppStore
+
+    private var driveNames: [UUID: String] {
+        Dictionary(uniqueKeysWithValues: store.drives.map { ($0.id, $0.name) })
+    }
 
     var body: some View {
         GroupBox {
@@ -180,9 +211,10 @@ private struct ExportCard: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                Label(export.protection.text, systemImage: export.protection.symbol)
+                let protection = export.protection(driveNames: driveNames)
+                Label(protection.text, systemImage: protection.symbol)
                     .font(.callout)
-                    .foregroundStyle(export.protection.tint)
+                    .foregroundStyle(protection.tint)
 
                 if !export.missingPartNumbers.isEmpty {
                     Label(
