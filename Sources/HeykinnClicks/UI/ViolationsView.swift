@@ -14,6 +14,24 @@ struct ViolationsView: View {
                     )
                 } else {
                     List {
+                        ForEach(ResidencyDomain.allCases.filter { $0 != .local }, id: \.self) { domain in
+                            let count = store.unverifiedCloudPresenceCount(domain: domain)
+                            if count > 0 {
+                                Section {
+                                    VStack(alignment: .leading, spacing: 8) {
+                                        Label("\(count) asset(s) claim \(domain.displayName) presence that was never verified", systemImage: "questionmark.circle")
+                                            .font(.headline)
+                                        Text("The app has no \(domain.displayName) account connection, so it cannot check whether this content is still there. If it isn't, withdraw the claim — the assets stay Local, which is what hashing actually proves.")
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Button("Withdraw unverified \(domain.displayName) claim") {
+                                            store.clearUnverifiedCloudPresence(domain: domain)
+                                        }
+                                    }
+                                    .padding(.vertical, 4)
+                                }
+                            }
+                        }
                         Section {
                             ForEach(store.violations) { violation in
                                 violationRow(violation)

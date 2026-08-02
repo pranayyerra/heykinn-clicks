@@ -628,6 +628,62 @@ final class TakeoutTests: XCTestCase {
         XCTAssertTrue(result.claimedReplicas.isEmpty)
     }
 
+    // MARK: - Cloud presence is never assumed
+
+    func testImportRecordsNoCloudPresenceOrEvidenceByDefault() throws {
+        let root = try makeTempDirectory()
+        let folder = try makeFakeTakeoutTree(in: root)
+        let staging = StagingStore(rootURL: try makeTempDirectory())
+
+        let result = TakeoutImporter.importMedia(
+            from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
+            archiveName: "Takeout", existingAssets: [], staging: staging,
+            assumeStillInGoogle: false
+        )
+        for asset in result.importedAssets {
+            XCTAssertFalse(asset.presence.googleCloud)
+            XCTAssertEqual(asset.presence.domains, [.local])
+            XCTAssertEqual(asset.cloudPresenceEvidence, .none)
+            XCTAssertNil(asset.cloudPresenceCheckedAt)
+        }
+    }
+
+    func testStatedCloudPresenceIsMarkedAsAssertionNotVerified() throws {
+        let root = try makeTempDirectory()
+        let folder = try makeFakeTakeoutTree(in: root)
+        let staging = StagingStore(rootURL: try makeTempDirectory())
+
+        let result = TakeoutImporter.importMedia(
+            from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
+            archiveName: "Takeout", existingAssets: [], staging: staging,
+            assumeStillInGoogle: true
+        )
+        for asset in result.importedAssets {
+            XCTAssertTrue(asset.presence.googleCloud)
+            XCTAssertEqual(
+                asset.cloudPresenceEvidence, .userAsserted,
+                "A user statement must never be recorded as verified"
+            )
+            XCTAssertFalse(asset.cloudPresenceEvidence.isTrustworthy)
+        }
+    }
+
+    func testNoCloudVerifierIsConnectedSoNothingCanBeMarkedVerified() async {
+        let registry = CloudVerifierRegistry.unconnected
+        XCTAssertFalse(registry.isConnected(.googleCloud))
+        XCTAssertFalse(registry.isConnected(.appleCloud))
+        for domain in [ResidencyDomain.googleCloud, .appleCloud] {
+            let verifier = registry.verifier(for: domain)
+            XCTAssertNotNil(verifier)
+            do {
+                _ = try await verifier!.verifyPresence(of: [])
+                XCTFail("An unconnected verifier must refuse rather than answer")
+            } catch {
+                XCTAssertTrue(error is CloudVerificationError)
+            }
+        }
+    }
+
     // MARK: - Checksum fast-path reconciliation
 
     func testFastReconcileTransfersMappingFromIdenticalZip() throws {

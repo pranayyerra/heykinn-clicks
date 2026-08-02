@@ -958,6 +958,50 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Withdraws unverified cloud presence from Takeout-imported assets.
+    /// Earlier builds assumed content was still in Google and wrote that onto
+    /// every import; nothing ever checked it. This clears the claim (and any
+    /// migration job that only existed to cover it), leaving Local presence —
+    /// the one thing hashing proves.
+    func clearUnverifiedCloudPresence(domain: ResidencyDomain) {
+        guard domain != .local else { return }
+        let affected = assets.filter {
+            $0.presence.contains(domain) && $0.cloudPresenceEvidence != .verified
+        }
+        guard !affected.isEmpty else { return }
+        do {
+            for var asset in affected {
+                asset.presence.set(domain, false)
+                asset.cloudPresenceEvidence = .none
+                asset.cloudPresenceCheckedAt = nil
+                if asset.residency == domain {
+                    // Residency must follow the content that actually exists.
+                    asset.residency = .local
+                    asset.residencySource = .manual
+                }
+                asset.updatedDate = Date()
+                try catalog.upsertAsset(asset)
+            }
+            let affectedIDs = Set(affected.map(\.id))
+            for job in migrationJobs where job.state.isActive
+                && job.fromDomain == domain
+                && job.assetIDs.allSatisfy({ affectedIDs.contains($0) }) {
+                try catalog.upsertMigrationJob(
+                    MigrationService.fail(job, reason: "\(domain.displayName) presence was never verified and has been withdrawn")
+                )
+            }
+            audit(.violation, "Withdrew unverified \(domain.displayName) presence from \(affected.count) asset(s); the app has no \(domain.displayName) connection and never confirmed it.")
+            loadAll()
+        } catch {
+            lastError = "Could not clear unverified cloud presence: \(error.localizedDescription)"
+        }
+    }
+
+    /// Assets carrying a cloud claim the app never verified.
+    func unverifiedCloudPresenceCount(domain: ResidencyDomain) -> Int {
+        assets.filter { $0.presence.contains(domain) && $0.cloudPresenceEvidence != .verified }.count
+    }
+
     func forgetTakeoutArchive(_ archiveID: UUID) {
         do {
             try catalog.deleteTakeoutArchive(id: archiveID)

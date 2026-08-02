@@ -26,6 +26,15 @@ struct AssetDetailView: View {
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             presenceChips(asset)
+                            if asset.cloudPresenceEvidence != .none {
+                                Label(
+                                    "Cloud presence: \(asset.cloudPresenceEvidence.displayName)",
+                                    systemImage: asset.cloudPresenceEvidence.isTrustworthy
+                                        ? "checkmark.seal" : "questionmark.circle"
+                                )
+                                .font(.caption)
+                                .foregroundStyle(asset.cloudPresenceEvidence.isTrustworthy ? .green : .orange)
+                            }
                         }
                         Spacer()
                     }

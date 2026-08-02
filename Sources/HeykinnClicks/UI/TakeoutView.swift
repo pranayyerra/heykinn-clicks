@@ -318,7 +318,9 @@ struct TakeoutImportSheet: View {
     let request: TakeoutImportRequest
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    @State private var stillInGoogle = true
+    // Defaults to off: the app cannot check Google, so it must not pre-tick a
+    // claim on the user's behalf.
+    @State private var stillInGoogle = false
 
     private var title: String {
         if let setID = request.setID {
@@ -336,10 +338,10 @@ struct TakeoutImportSheet: View {
                 .font(.callout)
                 .foregroundStyle(.secondary)
 
-            Toggle("These photos still exist in Google Photos", isOn: $stillInGoogle)
+            Toggle("I know these photos are still in Google Photos", isOn: $stillInGoogle)
             Text(stillInGoogle
-                 ? "A single GoogleCloud → Local migration job will track the temporary overlap\(request.archives.count > 1 ? " for the whole set" : ""): verify replication, then confirm you've deleted the originals from Google Photos to complete it."
-                 : "The assets will be recorded as present only in the Local domain.")
+                 ? "Recorded as your statement, not a verified fact — the app has no Google account connection and cannot check. A GoogleCloud → Local migration job\(request.archives.count > 1 ? " for the whole set" : "") will track the overlap: verify replication, then confirm you've deleted the originals from Google to complete it."
+                 : "The assets will be recorded as present only in the Local domain — the only thing the app can prove by hashing the files. Leave this off if you're unsure.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
