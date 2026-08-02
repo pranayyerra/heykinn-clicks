@@ -70,3 +70,64 @@ final class ScalePerformanceTests: XCTestCase {
         )
     }
 }
+
+/// "Never checked" and "checked too long ago" are different statements, and
+/// saying the latter about a copy recorded minutes ago is untrue.
+final class FirstCheckStateTests: XCTestCase {
+
+    private func asset() -> Asset {
+        Asset(
+            id: UUID(), kind: .photo, originalFilename: "p.jpg", importOrigin: .googleTakeout,
+            captureDate: nil, importDate: Date(), updatedDate: Date(), fileSize: 1,
+            pixelWidth: nil, pixelHeight: nil, contentHash: "h", residency: .local,
+            residencySource: .importDefault, presence: .localOnly, stagingRelativePath: nil,
+            importBatchID: nil, exifSummary: [:]
+        )
+    }
+
+    private func replica(_ assetID: UUID, verified: Date?) -> DriveReplicaState {
+        DriveReplicaState(
+            assetID: assetID, driveID: UUID(), state: .present,
+            relativePath: "archivepart:takeout-S-001", lastVerifiedAt: verified
+        )
+    }
+
+    func testACopyNeverReadBackIsAwaitingItsFirstCheck() {
+        let a = asset()
+        let state = ProtectionEvaluator.protectionStates(
+            for: [a],
+            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: nil)]
+        )[a.id]
+        XCTAssertEqual(state, .awaitingFirstCheck)
+        XCTAssertNotEqual(state, .verificationOverdue, "It was never checked, not checked long ago")
+        XCTAssertTrue(state?.isHealthy ?? false, "The copies exist; the policy is met")
+    }
+
+    func testAStaleCheckIsStillReportedAsOverdue() {
+        let a = asset()
+        let longAgo = Date().addingTimeInterval(-ProtectionEvaluator.verificationMaxAge - 3600)
+        let state = ProtectionEvaluator.protectionStates(
+            for: [a],
+            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: longAgo)]
+        )[a.id]
+        XCTAssertEqual(state, .verificationOverdue)
+    }
+
+    func testAllRecentlyCheckedIsFullyReplicated() {
+        let a = asset()
+        let state = ProtectionEvaluator.protectionStates(
+            for: [a],
+            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: Date())]
+        )[a.id]
+        XCTAssertEqual(state, .fullyReplicated)
+    }
+
+    func testTooFewCopiesIsNotExcusedByHavingBeenChecked() {
+        let a = asset()
+        let state = ProtectionEvaluator.protectionStates(
+            for: [a], replicaStates: [replica(a.id, verified: Date())]
+        )[a.id]
+        XCTAssertEqual(state, .replicatedToOneDrive, "One checked copy is still one copy")
+        XCTAssertFalse(state?.isHealthy ?? true)
+    }
+}

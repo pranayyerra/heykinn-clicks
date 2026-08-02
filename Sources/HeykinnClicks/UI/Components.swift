@@ -54,6 +54,7 @@ extension ProtectionState {
         case .replicatedToOneDrive: return .yellow
         case .stagedOnly: return .orange
         case .driftDetected: return .red
+        case .awaitingFirstCheck: return .teal
         case .verificationOverdue: return .purple
         case .notApplicable: return .secondary.opacity(0.5)
         }
@@ -65,6 +66,7 @@ extension ProtectionState {
         case .replicatedToOneDrive: return "shield.lefthalf.filled"
         case .stagedOnly: return "tray.fill"
         case .driftDetected: return "exclamationmark.triangle.fill"
+        case .awaitingFirstCheck: return "clock.badge.questionmark"
         case .verificationOverdue: return "clock.badge.exclamationmark"
         case .notApplicable: return "minus"
         }

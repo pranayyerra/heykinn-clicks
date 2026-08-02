@@ -13,6 +13,11 @@ enum ProtectionState: String, Codable, Hashable {
     case fullyReplicated
     /// Actual replica state differs from expected (checksum mismatch, missing file).
     case driftDetected
+    /// Enough copies exist, but at least one has never been read back. Claiming
+    /// a copy from a matching archive is evidence it is there, not proof the
+    /// bytes are good — and "never checked" is a different statement from a
+    /// check that has gone stale.
+    case awaitingFirstCheck
     /// Replicas exist but integrity verification is stale.
     case verificationOverdue
     /// Asset is not Local-resident, so local protection does not apply.
@@ -26,12 +31,15 @@ enum ProtectionState: String, Codable, Hashable {
         case .replicatedToOneDrive: return "Partly replicated"
         case .fullyReplicated: return "Fully replicated"
         case .driftDetected: return "Damaged copy found"
+        case .awaitingFirstCheck: return "Not checked yet"
         case .verificationOverdue: return "Not checked recently"
         case .notApplicable: return "—"
         }
     }
 
+    /// Whether the redundancy policy is met. A copy awaiting its first check
+    /// still counts — the copies exist; checking confirms they are undamaged.
     var isHealthy: Bool {
-        self == .fullyReplicated || self == .notApplicable
+        self == .fullyReplicated || self == .awaitingFirstCheck || self == .notApplicable
     }
 }

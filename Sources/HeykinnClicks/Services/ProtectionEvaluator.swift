@@ -59,6 +59,12 @@ enum ProtectionEvaluator {
         let present = states.filter { $0.state == .present }
 
         if policy.isSatisfied(byCopies: present.count) {
+            // Never read back at all is a different claim from read back too
+            // long ago, and saying "not checked recently" about a copy recorded
+            // minutes ago is simply untrue.
+            if present.contains(where: { $0.lastVerifiedAt == nil }) {
+                return .awaitingFirstCheck
+            }
             let overdue = present.contains { replica in
                 guard let verified = replica.lastVerifiedAt else { return true }
                 return now.timeIntervalSince(verified) > verificationMaxAge
