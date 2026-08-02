@@ -192,6 +192,39 @@ final class AppStore: ObservableObject {
         livePhotoMotionByStillID[asset.id]
     }
 
+    /// Reopens videos previously ruled out whose filename stem matches one of
+    /// these newly imported stills. A video stays a plain video until its
+    /// still turns up — which may be in a later import — so being ruled out
+    /// must never be permanent when new content could change the answer.
+    private func reopenLivePhotoChecks(forNewlyImported imported: [Asset]) {
+        let newStillStems = Set(
+            imported
+                .filter { $0.kind == .photo || $0.kind == .livePhoto }
+                .map { ($0.originalFilename as NSString).deletingPathExtension.lowercased() }
+        )
+        guard !newStillStems.isEmpty else { return }
+
+        let reopened = assets.filter { asset in
+            asset.kind == .video
+                && asset.livePhotoCheckedAt != nil
+                && asset.livePhotoStillID == nil
+                && newStillStems.contains((asset.originalFilename as NSString).deletingPathExtension.lowercased())
+        }
+        guard !reopened.isEmpty else { return }
+        do {
+            try catalog.transaction {
+                for var video in reopened {
+                    video.livePhotoCheckedAt = nil
+                    try catalog.upsertAsset(video)
+                }
+            }
+            audit(.system, "Reopened \(reopened.count) video(s) for Live Photo matching: a newly imported still shares their name.")
+            loadAll()
+        } catch {
+            lastError = "Could not reopen Live Photo checks: \(error.localizedDescription)"
+        }
+    }
+
     /// Finds Live Photo pairs among unpaired assets and links them. Each half
     /// keeps its own residency and replica tracking — the motion file is real
     /// content that still has to live somewhere and be checked — but the
@@ -683,7 +716,10 @@ final class AppStore: ObservableObject {
             try catalog.upsertImportBatch(result.batch)
             try persistImportedAssets(result.importedAssets)
             audit(.importEvent, "Imported \(result.importedAssets.count) asset(s) from \(result.batch.sourcePath) (\(result.duplicateFilenames.count) exact duplicate(s) skipped, \(result.failures.count) failure(s)).")
-            if !result.importedAssets.isEmpty { pairLivePhotos() }
+            if !result.importedAssets.isEmpty {
+                reopenLivePhotoChecks(forNewlyImported: result.importedAssets)
+                pairLivePhotos()
+            }
             if !result.failures.isEmpty {
                 lastError = "Import finished with \(result.failures.count) failure(s): \(result.failures.first!.error)"
             }
@@ -1015,6 +1051,7 @@ final class AppStore: ObservableObject {
         loadAll()
         // New assets are the only source of new pairs, so this is the natural
         // moment to reunite Live Photos — no user action required.
+        reopenLivePhotoChecks(forNewlyImported: allImported)
         pairLivePhotos()
         backupCatalog(force: true)
     }

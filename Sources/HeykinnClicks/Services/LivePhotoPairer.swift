@@ -65,9 +65,12 @@ enum LivePhotoPairer {
         /// The movie is a Live Photo's motion half, but not of *this* still.
         /// Another still may yet match it, so it stays open for future checks.
         case stillDoesNotMatch
-        /// The movie carries no Live Photo identifier at all (or runs far too
-        /// long), so it is an ordinary video. No still will ever match it, and
-        /// re-testing it on later runs would be wasted drive reads.
+        /// The movie carries no Live Photo identifier (or runs far too long),
+        /// so on the evidence available it is an ordinary video and stays in
+        /// the Library as one. Recorded so later runs skip it — but the record
+        /// is cleared if a newly imported still shares its name, because
+        /// Google sometimes strips this metadata and the pairing may yet be
+        /// provable.
         case notLivePhotoMotion
 
         var isPair: Bool { self == .identifiersMatch || self == .motionIdentifierAndName }
