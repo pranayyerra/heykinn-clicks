@@ -62,9 +62,17 @@ enum LivePhotoPairer {
         /// stills and drops Apple's maker note, so the link survives on one
         /// side only; without it these pairs would never reunite.
         case motionIdentifierAndName
-        case notAPair
+        /// The movie is a Live Photo's motion half, but not of *this* still.
+        /// Another still may yet match it, so it stays open for future checks.
+        case stillDoesNotMatch
+        /// The movie carries no Live Photo identifier at all (or runs far too
+        /// long), so it is an ordinary video. No still will ever match it, and
+        /// re-testing it on later runs would be wasted drive reads.
+        case notLivePhotoMotion
 
-        var isPair: Bool { self != .notAPair }
+        var isPair: Bool { self == .identifiersMatch || self == .motionIdentifierAndName }
+        /// Settled for good — safe to record so the file is never re-tested.
+        var isConclusiveRejection: Bool { self == .notLivePhotoMotion }
     }
 
     /// Confirms a candidate really is a Live Photo pair. A shared filename is
@@ -72,13 +80,13 @@ enum LivePhotoPairer {
     /// Live Photo's motion half by carrying a content identifier.
     static func confirm(_ candidate: Candidate) async -> Confidence {
         if let duration = await motionDuration(candidate.motionURL), duration > maxMotionDuration {
-            return .notAPair
+            return .notLivePhotoMotion
         }
         let motionID = await motionContentIdentifier(candidate.motionURL)
-        guard let motionID, !motionID.isEmpty else { return .notAPair }
+        guard let motionID, !motionID.isEmpty else { return .notLivePhotoMotion }
 
         if let stillID = stillContentIdentifier(candidate.stillURL), !stillID.isEmpty {
-            return stillID == motionID ? .identifiersMatch : .notAPair
+            return stillID == motionID ? .identifiersMatch : .stillDoesNotMatch
         }
         // Still has no identifier to compare; the movie's presence plus the
         // matching stem is the best evidence available.
@@ -106,7 +114,7 @@ enum LivePhotoPairer {
         var stillsByStem: [String: [(Asset, URL)]] = [:]
         var motionsByStem: [String: [(Asset, URL)]] = [:]
 
-        for asset in assets where asset.livePhotoStillID == nil {
+        for asset in assets where asset.livePhotoStillID == nil && asset.livePhotoCheckedAt == nil {
             guard let url = sourceURL(asset) else { continue }
             let stem = url.deletingPathExtension().lastPathComponent.lowercased()
             switch asset.kind {

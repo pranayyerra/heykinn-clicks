@@ -76,6 +76,10 @@ struct Asset: Identifiable, Hashable {
     /// real content that still has to live somewhere and be checked.
     var livePhotoStillID: UUID?
 
+    /// Set once a video has been shown to carry no Live Photo identifier, so
+    /// later pairing runs skip it instead of re-reading it off the drive.
+    var livePhotoCheckedAt: Date?
+
     /// True for the movie half, which the Library folds into its still.
     var isLivePhotoMotion: Bool { livePhotoStillID != nil }
 

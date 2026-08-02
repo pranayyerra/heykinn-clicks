@@ -85,15 +85,6 @@ struct LibraryView: View {
                 }
                 ToolbarItem {
                     Button {
-                        store.pairLivePhotos()
-                    } label: {
-                        Label("Find Live Photos", systemImage: "livephoto")
-                    }
-                    .disabled(store.isImporting || store.takeoutActivity != nil)
-                    .help("Google Takeout exports a Live Photo as a still plus a short movie without linking them. This reunites the pairs, confirming each with Apple's content identifier.")
-                }
-                ToolbarItem {
-                    Button {
                         isImporterPresented = true
                     } label: {
                         if store.isImporting {

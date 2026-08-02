@@ -267,6 +267,14 @@ final class AppStore: ObservableObject {
                     }
                 } else {
                     rejected += 1
+                    if confidence.isConclusiveRejection,
+                       var motion = assetsByID[candidate.motionAssetID],
+                       motion.livePhotoCheckedAt == nil {
+                        motion.livePhotoCheckedAt = Date()
+                        try? catalog.upsertAsset(motion)
+                        assetsByID[motion.id] = motion
+                        if let at = positionByID[motion.id] { assets[at] = motion }
+                    }
                 }
                 if index % 25 == 0 {
                     takeoutActivity?.itemIndex = index
@@ -675,6 +683,7 @@ final class AppStore: ObservableObject {
             try catalog.upsertImportBatch(result.batch)
             try persistImportedAssets(result.importedAssets)
             audit(.importEvent, "Imported \(result.importedAssets.count) asset(s) from \(result.batch.sourcePath) (\(result.duplicateFilenames.count) exact duplicate(s) skipped, \(result.failures.count) failure(s)).")
+            if !result.importedAssets.isEmpty { pairLivePhotos() }
             if !result.failures.isEmpty {
                 lastError = "Import finished with \(result.failures.count) failure(s): \(result.failures.first!.error)"
             }
@@ -1004,6 +1013,9 @@ final class AppStore: ObservableObject {
         isImporting = false
         takeoutActivity = nil
         loadAll()
+        // New assets are the only source of new pairs, so this is the natural
+        // moment to reunite Live Photos — no user action required.
+        pairLivePhotos()
         backupCatalog(force: true)
     }
 

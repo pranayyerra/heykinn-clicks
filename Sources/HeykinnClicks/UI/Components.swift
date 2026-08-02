@@ -152,11 +152,20 @@ struct AssetThumbnailView: View {
             if asset.kind == .livePhoto && image != nil && preview.player == nil {
                 VStack {
                     HStack {
-                        Image(systemName: "livephoto")
-                            .font(.caption)
-                            .foregroundStyle(.white)
-                            .shadow(radius: 2)
-                            .padding(5)
+                        // Apple Photos marks a Live Photo with a glyph-and-word
+                        // badge in this corner; matching it keeps the meaning
+                        // obvious rather than relying on an unlabelled symbol.
+                        HStack(spacing: 3) {
+                            Image(systemName: "livephoto")
+                            Text("LIVE")
+                                .font(.system(size: 9, weight: .semibold))
+                        }
+                        .font(.caption2)
+                        .foregroundStyle(.white)
+                        .padding(.horizontal, 5)
+                        .padding(.vertical, 2)
+                        .background(.black.opacity(0.35), in: Capsule())
+                        .padding(5)
                         Spacer()
                     }
                     Spacer()

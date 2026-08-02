@@ -110,7 +110,31 @@ final class LivePhotoPairerTests: XCTestCase {
         )
         let confidence = await LivePhotoPairer.confirm(candidate)
         XCTAssertFalse(confidence.isPair, "Neither file carries a Live Photo identifier")
-        XCTAssertEqual(confidence, .notAPair)
+        XCTAssertEqual(confidence, .notLivePhotoMotion)
+        XCTAssertTrue(
+            confidence.isConclusiveRejection,
+            "An ordinary video can be recorded as settled so it is never re-read"
+        )
+    }
+
+    /// A video already shown to be an ordinary video must not be offered
+    /// again — that is what keeps automatic pairing cheap enough to run on
+    /// every import instead of behind a button.
+    func testAlreadyCheckedVideosAreNotOfferedAgain() {
+        let still = makeAsset("IMG_7.HEIC", .photo)
+        var motion = makeAsset("IMG_7.MP4", .video)
+        motion.livePhotoCheckedAt = Date()
+        let resolve = urls([still.id: "/d/IMG_7.HEIC", motion.id: "/d/IMG_7.MP4"])
+        XCTAssertTrue(LivePhotoPairer.candidates(from: [still, motion], sourceURL: resolve).isEmpty)
+    }
+
+    /// A mismatch against one still must stay open, since a later import may
+    /// bring the still it actually belongs to.
+    func testStillMismatchIsNotTreatedAsSettled() {
+        XCTAssertFalse(LivePhotoPairer.Confidence.stillDoesNotMatch.isConclusiveRejection)
+        XCTAssertFalse(LivePhotoPairer.Confidence.stillDoesNotMatch.isPair)
+        XCTAssertTrue(LivePhotoPairer.Confidence.identifiersMatch.isPair)
+        XCTAssertTrue(LivePhotoPairer.Confidence.motionIdentifierAndName.isPair)
     }
 
     func testMotionHalfIsFlaggedAndHiddenFromTheGrid() {
