@@ -84,7 +84,7 @@ final class AppStore: ObservableObject {
         let sourceURL = localFileURL(for: asset)
         let assetID = asset.id
         let task = Task.detached(priority: .userInitiated) { () -> NSImage? in
-            cache.thumbnail(for: assetID, sourceURL: sourceURL)
+            await cache.thumbnail(for: assetID, sourceURL: sourceURL)
         }
         thumbnailTasks[asset.id] = task
         let image = await task.value

@@ -1,6 +1,7 @@
 import Foundation
 import AppKit
 import ImageIO
+import AVFoundation
 import UniformTypeIdentifiers
 
 /// Two-level thumbnail cache: an in-memory tier for scrolling, and a small
@@ -49,7 +50,7 @@ final class ThumbnailCache {
     /// Memory → disk → generate from `sourceURL`. Returns nil only when there
     /// is no cached copy and no reachable source (e.g. drive unplugged and
     /// never viewed before).
-    func thumbnail(for assetID: UUID, sourceURL: URL?) -> NSImage? {
+    func thumbnail(for assetID: UUID, sourceURL: URL?) async -> NSImage? {
         if let hit = cachedInMemory(assetID) { return hit }
 
         let fileURL = diskURL(for: assetID)
@@ -60,7 +61,7 @@ final class ThumbnailCache {
             return image
         }
 
-        guard let sourceURL, let image = Self.makeThumbnail(from: sourceURL) else { return nil }
+        guard let sourceURL, let image = await Self.makeThumbnail(from: sourceURL) else { return nil }
         store(image, for: assetID)
         writeToDisk(image, for: assetID)
         return image
@@ -137,9 +138,38 @@ final class ThumbnailCache {
 
     // MARK: - Generation
 
+    /// Builds a thumbnail for either a still or a video.
+    static func makeThumbnail(from url: URL) async -> NSImage? {
+        if MetadataExtractor.kind(forFileExtension: url.pathExtension) == .video {
+            return await makeVideoThumbnail(from: url)
+        }
+        return makeImageThumbnail(from: url)
+    }
+
+    /// Grabs a representative frame. The very first frame is often black or a
+    /// fade-in, so it seeks a little way in — clamped for short clips — and
+    /// allows generous tolerance so it can settle on a nearby keyframe instead
+    /// of decoding forward to an exact time.
+    static func makeVideoThumbnail(from url: URL) async -> NSImage? {
+        let asset = AVURLAsset(url: url)
+        let generator = AVAssetImageGenerator(asset: asset)
+        generator.appliesPreferredTrackTransform = true
+        generator.maximumSize = CGSize(width: maxPixelSize, height: maxPixelSize)
+        generator.requestedTimeToleranceBefore = CMTime(seconds: 1, preferredTimescale: 600)
+        generator.requestedTimeToleranceAfter = CMTime(seconds: 2, preferredTimescale: 600)
+
+        var seconds = 1.0
+        if let duration = try? await asset.load(.duration), duration.isNumeric, duration.seconds > 0 {
+            seconds = min(1.0, duration.seconds / 2)
+        }
+        let time = CMTime(seconds: seconds, preferredTimescale: 600)
+        guard let cgImage = try? await generator.image(at: time).image else { return nil }
+        return NSImage(cgImage: cgImage, size: NSSize(width: cgImage.width, height: cgImage.height))
+    }
+
     /// Downsamples with ImageIO, preferring an embedded camera thumbnail when
     /// one exists and decoding the full image only when it does not.
-    static func makeThumbnail(from url: URL) -> NSImage? {
+    static func makeImageThumbnail(from url: URL) -> NSImage? {
         guard let source = CGImageSourceCreateWithURL(url as CFURL, nil) else { return nil }
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageIfAbsent: true,

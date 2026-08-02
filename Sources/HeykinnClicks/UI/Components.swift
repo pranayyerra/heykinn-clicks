@@ -117,6 +117,20 @@ struct AssetThumbnailView: View {
                     .font(.title2)
                     .foregroundStyle(.secondary)
             }
+            // Once videos have real frames they look like stills, so mark them.
+            if asset.kind == .video && image != nil {
+                VStack {
+                    Spacer()
+                    HStack {
+                        Spacer()
+                        Image(systemName: "play.circle.fill")
+                            .font(.title3)
+                            .foregroundStyle(.white)
+                            .shadow(radius: 2)
+                            .padding(5)
+                    }
+                }
+            }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .task(id: asset.id) {

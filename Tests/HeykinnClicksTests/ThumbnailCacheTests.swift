@@ -27,13 +27,14 @@ final class ThumbnailCacheTests: XCTestCase {
         try rep.representation(using: .png, properties: [:])!.write(to: url)
     }
 
-    func testThumbnailIsDownsampledAndWrittenToDisk() throws {
+    func testThumbnailIsDownsampledAndWrittenToDisk() async throws {
         let cache = ThumbnailCache(directory: try makeTempDirectory())
         let source = try makeTempDirectory().appendingPathComponent("big.png")
         try writeImage(to: source, size: 1600)
         let assetID = UUID()
 
-        let image = try XCTUnwrap(cache.thumbnail(for: assetID, sourceURL: source))
+        let generated = await cache.thumbnail(for: assetID, sourceURL: source)
+        let image = try XCTUnwrap(generated)
         XCTAssertLessThanOrEqual(
             max(image.size.width, image.size.height), CGFloat(ThumbnailCache.maxPixelSize),
             "Cached thumbnails must be downsampled, not full-size"
@@ -45,34 +46,36 @@ final class ThumbnailCacheTests: XCTestCase {
         XCTAssertNotNil(cache.cachedInMemory(assetID))
     }
 
-    func testDiskTierServesThumbnailsWhenTheSourceIsGone() throws {
+    func testDiskTierServesThumbnailsWhenTheSourceIsGone() async throws {
         let directory = try makeTempDirectory()
         let source = try makeTempDirectory().appendingPathComponent("photo.png")
         try writeImage(to: source)
         let assetID = UUID()
 
         // Populate, then simulate the drive being unplugged and the app restarting.
-        _ = ThumbnailCache(directory: directory).thumbnail(for: assetID, sourceURL: source)
+        _ = await ThumbnailCache(directory: directory).thumbnail(for: assetID, sourceURL: source)
         try FileManager.default.removeItem(at: source)
 
         let fresh = ThumbnailCache(directory: directory)
         XCTAssertNil(fresh.cachedInMemory(assetID), "Memory tier must start empty after a restart")
+        let served = await fresh.thumbnail(for: assetID, sourceURL: nil)
         XCTAssertNotNil(
-            fresh.thumbnail(for: assetID, sourceURL: nil),
+            served,
             "Disk tier must serve the thumbnail with no source available"
         )
     }
 
-    func testMissingSourceAndNoCacheYieldsNil() throws {
+    func testMissingSourceAndNoCacheYieldsNil() async throws {
         let cache = ThumbnailCache(directory: try makeTempDirectory())
-        XCTAssertNil(cache.thumbnail(for: UUID(), sourceURL: nil))
-        XCTAssertNil(cache.thumbnail(
-            for: UUID(),
-            sourceURL: URL(fileURLWithPath: "/nonexistent/nope.jpg")
-        ))
+        let noSource = await cache.thumbnail(for: UUID(), sourceURL: nil)
+        XCTAssertNil(noSource)
+        let missingFile = await cache.thumbnail(
+            for: UUID(), sourceURL: URL(fileURLWithPath: "/nonexistent/nope.jpg")
+        )
+        XCTAssertNil(missingFile)
     }
 
-    func testPruneEvictsLeastRecentlyUsedDownToBudget() throws {
+    func testPruneEvictsLeastRecentlyUsedDownToBudget() async throws {
         let directory = try makeTempDirectory()
         let cache = ThumbnailCache(directory: directory)
         let source = try makeTempDirectory().appendingPathComponent("photo.png")
@@ -82,7 +85,7 @@ final class ThumbnailCacheTests: XCTestCase {
         for index in 0..<8 {
             let id = UUID()
             ids.append(id)
-            _ = cache.thumbnail(for: id, sourceURL: source)
+            _ = await cache.thumbnail(for: id, sourceURL: source)
             // Stagger use times so eviction order is deterministic.
             try FileManager.default.setAttributes(
                 [.modificationDate: Date().addingTimeInterval(Double(index))],
@@ -100,11 +103,11 @@ final class ThumbnailCacheTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: cache.diskURL(for: ids[7]).path))
     }
 
-    func testPruneIsANoOpWhenUnderBudget() throws {
+    func testPruneIsANoOpWhenUnderBudget() async throws {
         let cache = ThumbnailCache(directory: try makeTempDirectory())
         let source = try makeTempDirectory().appendingPathComponent("photo.png")
         try writeImage(to: source)
-        _ = cache.thumbnail(for: UUID(), sourceURL: source)
+        _ = await cache.thumbnail(for: UUID(), sourceURL: source)
         XCTAssertEqual(cache.pruneDisk(budget: 100 * 1024 * 1024), 0)
     }
 }
