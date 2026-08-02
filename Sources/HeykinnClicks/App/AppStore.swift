@@ -187,6 +187,88 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: - Archive-level replication
+
+    /// The export-part view of replication: what the archive is actually made
+    /// of, and whether each part exists twice.
+    @Published private(set) var archivePlan: ArchiveReplicationPlan =
+        ArchiveReplicationPlan(parts: [], managedDriveIDs: [])
+
+    /// Assets whose bytes live inside an export part that already exists on
+    /// two drives. Copying such an asset individually would duplicate content
+    /// the policy already considers protected.
+    private func assetIDsProtectedByArchive() -> Set<UUID> {
+        // Identify a part by its stem — `takeout-<set>-<part>`. That appears
+        // both in the zip's filename and in the path of the folder extracted
+        // from it, so it matches a replica however that replica is stored.
+        // Comparing full filenames fails: a replica extracted to a folder
+        // records no `.zip`.
+        let protectedStems = archivePlan.partsMeetingPolicy.map(\.displayName)
+        guard !protectedStems.isEmpty else { return [] }
+
+        var protectedAssets: Set<UUID> = []
+        for replica in replicaStates where replica.state == .present {
+            guard let relative = replica.relativePath else { continue }
+            if protectedStems.contains(where: { relative.contains($0) }) {
+                protectedAssets.insert(replica.assetID)
+            }
+        }
+        return protectedAssets
+    }
+
+    /// Cancels per-asset copies for content whose export part is already on
+    /// two drives, and records the second copy. Twelve zips existing twice is
+    /// the policy being met; re-copying 24,000 files into a drive that already
+    /// holds them is not work, it is waste.
+    func applyArchiveLevelRedundancy() {
+        let managedIDs = Set(drives.map(\.id))
+        archivePlan = ArchiveReplicationPlanner.plan(archives: takeoutArchives, managedDriveIDs: managedIDs)
+        guard !archivePlan.partsMeetingPolicy.isEmpty else { return }
+
+        let covered = assetIDsProtectedByArchive()
+        guard !covered.isEmpty else { return }
+
+        // For each drive that holds a satisfied part, the assets inside it are
+        // present there — backed by that drive's own copy of the part.
+        var claimed = 0
+        var cancelled = 0
+        do {
+            try catalog.transaction {
+                for part in archivePlan.partsMeetingPolicy {
+                    for (driveID, archive) in part.copies where managedIDs.contains(driveID) {
+                        let marker = (archive.path as NSString).lastPathComponent
+                        for assetID in covered {
+                            let existing = replicasByAssetID[assetID]?.first { $0.driveID == driveID }
+                            if existing?.state == .present { continue }
+                            // The asset's bytes are inside this drive's copy of
+                            // the part, so the part is its replica.
+                            try catalog.upsertReplicaState(DriveReplicaState(
+                                assetID: assetID,
+                                driveID: driveID,
+                                state: .present,
+                                relativePath: ReplicationService.volumeBackedPrefix + marker,
+                                lastVerifiedAt: nil
+                            ))
+                            claimed += 1
+                        }
+                    }
+                }
+                for task in replicationTasks where task.state == .queued
+                    && task.action == .copy && covered.contains(task.assetID) {
+                    try catalog.deleteReplicationTask(id: task.id)
+                    cancelled += 1
+                }
+            }
+            audit(
+                .replication,
+                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist on two drives, covering \(covered.count) asset(s). Recorded \(claimed) second cop(ies) and cancelled \(cancelled) now-unnecessary file copies."
+            )
+            loadAll()
+        } catch {
+            lastError = "Could not record archive redundancy: \(error.localizedDescription)"
+        }
+    }
+
     // MARK: - Capture dates
 
     /// Edited derivatives keyed by the original they came from.
@@ -1413,6 +1495,12 @@ final class AppStore: ObservableObject {
             }
         }
 
+        // Cheapest evidence first. If this drive holds the same export parts
+        // as another, the two-copy policy is already met and there is nothing
+        // to reconcile or copy — checking that costs a directory listing,
+        // whereas reconciling a zip means decompressing every entry inside it.
+        applyArchiveLevelRedundancy()
+
         if driveIsMissingReplicas() {
             for archive in onDrive() where !archive.isImported
                 && partImportedSomewhere(archive)
@@ -1457,6 +1545,9 @@ final class AppStore: ObservableObject {
         // the motion halves do not sit in the grid as standalone videos.
         recoverCaptureDates()
         pairLivePhotos()
+        // An import may have introduced parts that change the picture, so
+        // re-evaluate which parts now exist twice.
+        applyArchiveLevelRedundancy()
 
         // The catalog just changed materially (new assets, new replica
         // claims); snapshot it onto the drive it describes.
