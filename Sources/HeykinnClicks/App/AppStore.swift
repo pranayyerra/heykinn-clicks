@@ -550,6 +550,21 @@ final class AppStore: ObservableObject {
         do {
             // 1. Replication tasks interrupted mid-flight would otherwise sit
             // in a state the sync loop never picks up again.
+            // Copies recorded as failed only because no drive holding the
+            // bytes was connected are still owed; return them to the queue.
+            let transientlyFailed = replicationTasks.filter {
+                $0.state == .failed && ($0.errorMessage?.contains("No staged source copy") == true
+                    || $0.errorMessage?.contains("Waiting for a drive") == true)
+            }
+            for var task in transientlyFailed {
+                task.state = .queued
+                task.errorMessage = nil
+                try catalog.upsertReplicationTask(task)
+            }
+            if !transientlyFailed.isEmpty {
+                repairs.append("requeued \(transientlyFailed.count) copy task(s) that had no reachable source")
+            }
+
             let stuck = replicationTasks.filter { $0.state == .inProgress }
             for var task in stuck {
                 task.state = .queued
@@ -692,10 +707,16 @@ final class AppStore: ObservableObject {
             endQuiesce(driveID)
             busyDriveIDs.remove(driveID)
             audit(.drive, "\(name) connected.", driveID: driveID)
-            if autoSyncOnConnect && backlogCount(for: driveID) > 0 {
-                syncDrive(driveID)
+            // Reconcile before syncing. A drive that already holds this
+            // content — the same Takeout export, say — should claim it in
+            // place; starting the backlog first would copy over the top of
+            // files that are already there.
+            Task {
+                await autoTakeoutPipeline(driveID: driveID)
+                if autoSyncOnConnect && backlogCount(for: driveID) > 0 {
+                    syncDrive(driveID)
+                }
             }
-            Task { await autoTakeoutPipeline(driveID: driveID) }
         }
 
         promptForUnmanagedVolumes()
@@ -1784,12 +1805,20 @@ final class AppStore: ObservableObject {
                     ReplicationService.perform(task, drive: drive, mountURL: mountURL, asset: asset, sourceURL: sourceURL, existingReplica: existingReplica)
                 }.value
                 do {
-                    try catalog.upsertReplicationTask(result.task)
-                    if let replica = result.replica {
-                        try catalog.upsertReplicaState(replica)
+                    if !result.isTransient {
+                        try catalog.upsertReplicationTask(result.task)
+                        if let replica = result.replica {
+                            try catalog.upsertReplicaState(replica)
+                        }
                     }
                 } catch {
                     lastError = "Sync persistence failed: \(error.localizedDescription)"
+                }
+                if result.isTransient {
+                    // Every following task needs the same missing source, so
+                    // there is nothing to gain by grinding through them.
+                    interruptionReason = "no drive holding the source files is connected"
+                    break
                 }
                 if result.task.state == .completed { completed += 1 } else { failed += 1 }
                 syncProgress?.completedTasks = completed

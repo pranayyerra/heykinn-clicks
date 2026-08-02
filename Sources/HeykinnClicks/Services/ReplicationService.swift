@@ -4,6 +4,10 @@ struct ReplicaTaskResult {
     var task: ReplicationTask
     var replica: DriveReplicaState?
     var message: String
+    /// The work could not be done for a reason that will pass — typically the
+    /// drive holding the only copy is unplugged. Such a task must stay queued
+    /// rather than be recorded as failed, or the work is silently lost.
+    var isTransient: Bool = false
 }
 
 struct SyncOutcome {
@@ -139,6 +143,18 @@ enum ReplicationService {
             task.completedAt = Date()
             return ReplicaTaskResult(task: task, replica: replica, message: message)
         } catch {
+            // No reachable source is a statement about right now, not about
+            // the task: the copy is still owed once a drive holding the bytes
+            // comes back.
+            if case ReplicationError.noSourceCopy = error {
+                task.errorMessage = "Waiting for a drive holding this file"
+                return ReplicaTaskResult(
+                    task: task,
+                    replica: nil,
+                    message: "No reachable copy of \(asset.originalFilename) — leaving it queued",
+                    isTransient: true
+                )
+            }
             task.state = .failed
             task.errorMessage = error.localizedDescription
             return ReplicaTaskResult(
