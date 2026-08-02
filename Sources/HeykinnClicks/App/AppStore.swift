@@ -197,18 +197,11 @@ final class AppStore: ObservableObject {
     /// still turns up — which may be in a later import — so being ruled out
     /// must never be permanent when new content could change the answer.
     private func reopenLivePhotoChecks(forNewlyImported imported: [Asset]) {
-        let newStillStems = Set(
-            imported
-                .filter { $0.kind == .photo || $0.kind == .livePhoto }
-                .map { ($0.originalFilename as NSString).deletingPathExtension.lowercased() }
-        )
+        let newStillStems = LivePhotoPairer.stillStems(of: imported)
         guard !newStillStems.isEmpty else { return }
 
-        let reopened = assets.filter { asset in
-            asset.kind == .video
-                && asset.livePhotoCheckedAt != nil
-                && asset.livePhotoStillID == nil
-                && newStillStems.contains((asset.originalFilename as NSString).deletingPathExtension.lowercased())
+        let reopened = assets.filter {
+            LivePhotoPairer.shouldReopenCheck(video: $0, newlyImportedStillStems: newStillStems)
         }
         guard !reopened.isEmpty else { return }
         do {

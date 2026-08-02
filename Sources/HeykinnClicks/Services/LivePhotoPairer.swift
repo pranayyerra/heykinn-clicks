@@ -96,6 +96,29 @@ enum LivePhotoPairer {
         return .motionIdentifierAndName
     }
 
+    /// Filename stems of the stills among these assets, lowercased.
+    static func stillStems(of assets: [Asset]) -> Set<String> {
+        Set(
+            assets
+                .filter { $0.kind == .photo || $0.kind == .livePhoto }
+                .map { ($0.originalFilename as NSString).deletingPathExtension.lowercased() }
+        )
+    }
+
+    /// Whether a video previously ruled out deserves another look because a
+    /// newly imported still shares its name. Being ruled out must not be
+    /// permanent: Google strips this metadata from some files, so "no
+    /// identifier today" is not proof for all time.
+    static func shouldReopenCheck(video: Asset, newlyImportedStillStems: Set<String>) -> Bool {
+        guard video.kind == .video,
+              video.livePhotoCheckedAt != nil,
+              video.livePhotoStillID == nil
+        else { return false }
+        return newlyImportedStillStems.contains(
+            (video.originalFilename as NSString).deletingPathExtension.lowercased()
+        )
+    }
+
     /// Most still/movie combinations tried per filename stem. Guards against a
     /// stem shared by many unrelated files (phones reuse names like IMG_1588)
     /// turning into a combinatorial scan.
