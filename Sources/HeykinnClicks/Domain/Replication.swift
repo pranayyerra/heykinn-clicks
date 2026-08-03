@@ -38,6 +38,22 @@ struct DriveReplicaState: Hashable, Identifiable {
     var id: String { "\(assetID.uuidString)/\(driveID.uuidString)" }
 }
 
+/// What one drive actually holds, tallied in a single pass over replica state.
+/// The UI draws a drive's share of the archive on every redraw; recomputing it
+/// by filtering the whole replica table each time does not survive a catalog
+/// with hundreds of thousands of rows.
+struct DriveContentBreakdown: Equatable {
+    var present = 0
+    /// Expected on the drive but not there yet: queued, mid-copy, or interrupted.
+    var pending = 0
+    var drift = 0
+    var missing = 0
+    var presentBytes: Int64 = 0
+
+    /// Everything the drive is meant to end up holding.
+    var expected: Int { present + pending + drift }
+}
+
 enum ReplicationAction: String, Codable, Hashable {
     case copy
     case verify

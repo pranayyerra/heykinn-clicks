@@ -17,5 +17,12 @@ struct HeykinnClicksApp: App {
                     NSApp.activate(ignoringOtherApps: true)
                 }
         }
+
+        // Preferences belong behind ⌘, rather than mixed into the screens that
+        // show the archive itself.
+        Settings {
+            SettingsView()
+                .environmentObject(store)
+        }
     }
 }

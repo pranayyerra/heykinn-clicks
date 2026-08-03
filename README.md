@@ -4,6 +4,9 @@ A local-first **photo residency manager** for macOS. Not a gallery app, not a
 cloud-sync clone — a storage-governance, metadata-authority, and
 archive-coordination tool for personal photos and videos.
 
+The spec this was built from — including the twelve things the original
+design got wrong, and why — is in [docs/SPEC.md](docs/SPEC.md).
+
 ## Core model
 
 **Exclusive residency.** Every asset has exactly one logical residency domain
@@ -80,32 +83,45 @@ Sources/HeykinnClicks/
 │   ├── Policy.swift             PolicyRule
 │   ├── Migration.swift          MigrationJob + MigrationState (overlap legality)
 │   ├── Violation.swift          ViolationKind (computed, surfaced, never auto-fixed)
+│   ├── Takeout.swift            TakeoutArchive, TakeoutExportSet, pipeline phases
+│   ├── ArchiveReplication.swift ExportPart, PartRedundancy (graded, not binary),
+│   │                            HeldExportPart, ExportPartTransferPlanner
 │   └── …                        ImportBatch, AuditEvent, DuplicateGroup
 ├── Persistence/
 │   ├── SQLiteDatabase.swift     thin sqlite3 wrapper (WAL, prepared statements)
 │   └── CatalogStore*.swift      schema + repositories for every entity
 ├── Services/                    Pure/stateless engines where possible:
 │   ├── ImportService.swift      scan → hash → dedupe → classify → stage → catalog
-│   ├── HashingService.swift     streaming SHA-256
+│   ├── HashingService.swift     streaming SHA-256 + sampled quick checksum
 │   ├── MetadataExtractor.swift  ImageIO EXIF (encapsulated; swappable for exiftool)
+│   ├── CaptureDateResolver.swift date precedence chain, recording which source won
+│   ├── LivePhotoPairer.swift    still ↔ motion matching, tiered by confidence
 │   ├── PolicyEngine.swift       priority-ordered rule evaluation + origin classification
 │   ├── DuplicateDetector.swift  exact hash groups (perceptual matching = later phase)
 │   ├── StagingStore.swift       Mac staging/cache area
 │   ├── DriveMonitor.swift       volume enumeration, marker identity, mount notifications
 │   ├── ReplicationService.swift copy/verify/remove backlog execution (hash-verified,
 │   │                            temp-file + atomic rename; interruption-safe)
-│   ├── ProtectionEvaluator.swift pure protection-state computation
+│   ├── ExportPartRelay.swift    the Mac holding area; verified large-file copy
+│   ├── Takeout*.swift           Scanner, Extractor (adaptive parallel), Importer,
+│   │                            Reconciler — the zero-button drive pipeline
+│   ├── CloudDomainVerifier.swift seam for account integration; refuses to guess
+│   ├── CatalogBackupService.swift VACUUM INTO snapshots, verified before publishing
+│   ├── ThumbnailCache.swift     memory + disk tiers, video frames, in-flight dedupe
+│   ├── ProtectionEvaluator.swift batch protection-state computation (per-asset is O(n²))
 │   ├── ViolationScanner.swift   invariant checks incl. migration-overlap exemption
 │   └── MigrationService.swift   explicit state machine: pending → copyingToTarget →
 │                                verifyingTarget → clearingSource → completed/failed
 ├── Support/SampleData.swift     first-run seed (real files, real hashes)
-└── UI/                          Library, Asset Detail, Drives & Health, Duplicates,
-                                 Violations, Policies, Migrations, Activity
+└── UI/                          Overview (visual dashboard), Library (hover-plays
+                                 Live Photos and video), Asset Detail, Drives &
+                                 Health, Duplicates, Violations, Policies,
+                                 Migrations, Google Takeout, Activity, Settings (⌘,)
 ```
 
 ### Sync behavior
 
-- **Auto-sync on connect** (toggleable in Drives & Health): when a managed
+- **Auto-sync on connect** (toggleable in Settings → Automation): when a managed
   drive appears with pending backlog, its sync starts automatically. Multiple
   drives serialize — a second drive queues behind a running sync.
 - **Progress + cancel**: syncs process one task at a time with a live progress
@@ -142,12 +158,17 @@ the external archive drive:
   (`photoTakenTime` wins over EXIF, GPS and description are carried in),
   stages everything as Local-resident assets, dedupes by content hash, and
   queues drive replication. The archive file itself is never modified.
-- **Residency semantics**: if the photos still exist in Google Photos (the
-  default assumption, controlled by a toggle at import), the assets are marked
-  present in both GoogleCloud and Local, and a **GoogleCloud → Local migration
-  job** is auto-created at Verifying Target — so the overlap is legal and
-  tracked, and the job walks you through verifying replication and then
-  confirming deletion from Google Photos to close the overlap window.
+- **Residency semantics**: imports record **Local presence only**. The app has
+  no Google or Apple account connection and makes no network calls, so it
+  cannot know whether an export's photos are still in Google Photos — and an
+  assumption that silently becomes a fact eventually deletes someone's only
+  copy. A toggle at manual import lets you state the overlap yourself; it is
+  **off by default**, recorded as `userAsserted` rather than verified, and
+  creates a GoogleCloud → Local migration job so the overlap is legal, tracked,
+  and closed once you confirm deletion from Google. Automatic imports never
+  tick it. `CloudDomainVerifier` is the seam a real account integration slots
+  into; until one exists it reports `isConnected == false` and refuses to
+  answer, so no code path can mistake an assumption for evidence.
 - **Extract-on-drive workflow**: zips can be extracted in place on their drive
   (folder named zip-name-minus-.zip, joining the same export set) so imports
   read directly from the drive instead of extracting ~10 GB parts to Mac
@@ -221,6 +242,73 @@ runs the zero-button pipeline: **scan → reconcile → extract → import**.
   replicas (it is storage then, not a redundant copy). Verification streams
   archive-backed content and detects drift like any managed replica.
 
+### Export-part replication, spot checks, and the transfer corridor
+
+A 248 GB export is **12 zips holding 24,626 photos**. Replicating it means
+having those 12 zips on both drives — modelling it per-asset turns 12 file
+copies into 24,618 pointless operations and hides that a second drive already
+carrying the same zips is *already compliant*. So the archive is modelled as
+`ExportPart`s, and an asset is present on a drive because that drive holds
+**its own** part (not because the drive holds any satisfied part — that would
+claim redundancy that evaporates the moment the drives hold different subsets).
+
+- **Graded redundancy.** `absent` → `singleCopy` → `redundantUnverified`
+  (name and size agree) → `redundantSpotChecked` (quick checksums agree) →
+  `redundantVerified` (whole-file hashes agree). A binary verified flag encodes
+  nothing here, because the proof is unaffordable.
+- **Quick checksum.** Hashes the file's length plus a 2 MB head, six 512 KB
+  interior windows, and a 2 MB tail — about **7 MB read of a 9.9 GB part in
+  0.24 s**, versus minutes for a full hash (and ~256 GB of reads to compare a
+  whole export across two drives, which is why the full comparison never ran).
+  It catches truncation, a partial transfer, the wrong file under the right
+  name, and corruption at either edge. It **cannot** see a flipped bit between
+  the sampled windows — stated in the type name, in the UI string, and in a
+  test that asserts a mid-file change is missed by the quick check and caught
+  by the full one. Byte-for-byte comparison stays available per export.
+- **Transfer corridor.** When the drive that has a part and the drive that
+  needs it are never plugged in together, the part waits in a holding area on
+  the Mac in between. Both drives connected: copy straight across. Only the
+  donor: park it. Only the recipient: deliver the parked copy and delete it.
+  Deliveries are planned **first** so the corridor drains rather than fills, and
+  are never blocked by space pressure — delivering is what frees the space.
+  Only as many parts are parked as fit with a 20 GB reserve left on the boot
+  disk; the rest are reported as waiting, not silently dropped. A part
+  surviving only as an extracted folder is reported stranded rather than
+  half-transferred.
+- **The holding area keeps no table.** A parked part is a file named after the
+  part it holds, so the directory listing *is* the state — a catalog restored
+  from a snapshot, a crash mid-copy, or emptying the folder in Finder all leave
+  nothing to reconcile. Copies stream through a `.partial` name and are renamed
+  only once the landed bytes match the source, so an interrupted transfer never
+  leaves something that looks complete. The source's full SHA-256 is captured
+  during the read (free there; a 10 GB reread otherwise), while the landed copy
+  gets only a quick checksum — nothing read those bytes back in full, and
+  calling it verified would be a lie.
+
+### Real-library ingest: Live Photos, dates, and previews
+
+Google Takeout fights you, so these are import-path fixes rather than one-off
+repairs to one person's catalog:
+
+- **Live Photos are split across parts** — the still in part 005, its motion
+  half in part 012. Candidates are matched by filename stem *across* folders and
+  confirmed by the QuickTime content identifier. Google also strips the still's
+  Apple maker note, so pairing is tiered by confidence (identifiers match >
+  motion identifier plus matching name > not a Live Photo). Unpaired motion
+  files stay browsable as ordinary videos and are re-checked when a later part
+  imports a matching still. Paired stills show the Live indicator and play in
+  place on hover, as in Apple's Photos.
+- **Capture dates** resolve through an explicit precedence chain — file
+  metadata → Google sidecar → the *original's* sidecar for an edited variant →
+  filename → containing folder's year → unknown — recording which source won.
+  Folder-year detection is structural (a standalone 4-digit component), not a
+  match on the English string `Photos from YYYY`, so non-English exports work.
+- **Edited variants link to their originals** so they display together instead
+  of as unrelated near-duplicates.
+- **Thumbnails** are cached in memory and on disk, generated for videos too
+  (`AVAssetImageGenerator`), with in-flight requests deduped so fast scrolling
+  doesn't start several reads of the same original off the drive.
+
 ### Durability and catalog backup
 
 The media survives on the drives, but residency, replica state, duplicate
@@ -287,19 +375,17 @@ scanning is needed.
   parsing, Apple export reconciliation) are Phase 4.
 - Catalog access is main-actor synchronous; fine at personal-archive scale,
   and the `CatalogStore` boundary is where a background actor slots in later.
-- Perceptual duplicates, faces, semantic search, map view, Live Photo pairing
-  (`AssetVariant` already models the paired video), sidecar export.
+- Perceptual duplicates, faces, semantic search, map view, sidecar export.
 
 ## Next implementation steps
 
 1. Scheduled verification sweeps that refresh `lastVerifiedAt` and demote
    `FullyReplicated` → `VerificationOverdue` proactively.
 2. Duplicate review workflow (keep/supersede, storage reclaim via explicit jobs).
-3. Apple Photos export importer (Takeout is done; the Apple side needs its own
-   metadata reconciliation), plus richer Takeout coverage: album JSON, edited
-   variants, motion-photo pairing.
-4. Import hardening on real libraries: Live Photo pairing (`AssetVariant` is
-   ready), video capture dates via AVFoundation, progress UI for multi-GB
-   imports.
+3. Apple Photos export importer — Takeout is done; the Apple side needs its own
+   metadata reconciliation. Plus richer Takeout coverage: album JSON.
+4. Account integration behind `CloudDomainVerifier`, so cloud presence can be
+   recorded as `verified` instead of only asserted, and migrations can confirm
+   deletion rather than asking the user to.
 5. Xcode app-bundle wrapper (icon, sandbox entitlements with security-scoped
    bookmarks for drive access) once the SwiftPM skeleton stabilizes.

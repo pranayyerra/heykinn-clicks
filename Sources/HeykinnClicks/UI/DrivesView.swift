@@ -16,49 +16,20 @@ struct DrivesView: View {
                     TakeoutActivityBanner(activity: activity)
                 }
 
-                // Both automation settings live together rather than one being
-                // stranded on the Takeout screen.
-                Toggle("Automatically sync a managed drive when it connects", isOn: $store.autoSyncOnConnect)
-                    .toggleStyle(.switch)
-
-                VStack(alignment: .leading, spacing: 4) {
-                    Toggle("Handle Google exports on a drive automatically", isOn: $store.autoManageTakeout)
-                        .toggleStyle(.switch)
-                    Text("Finds exports on a connected drive, unpacks and imports what is new, and recognises copies the drive already holds instead of copying them again.")
-                        .font(.caption)
+                if store.drives.isEmpty {
+                    Text("No drives registered yet. The archive still works — imports land in Mac staging — but Local assets stay Staged Only until you register \(store.redundancyPolicy.description).")
                         .foregroundStyle(.secondary)
-                }
-
-                Label {
-                    Text("**Checking for damage** re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It has to read every byte, so it runs in batches rather than all at once.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                } icon: {
-                    Image(systemName: "checkmark.shield")
-                        .foregroundStyle(.secondary)
-                }
-
-                GroupBox("Managed drives") {
-                    if store.drives.isEmpty {
-                        Text("No drives registered yet. The archive still works — imports land in Mac staging — but Local assets stay Staged Only until you register two drives.")
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(6)
-                    } else {
-                        VStack(spacing: 10) {
-                            ForEach(store.drives) { drive in
-                                driveRow(drive)
-                            }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                } else {
+                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 360), spacing: 12)], spacing: 12) {
+                        ForEach(store.drives) { drive in
+                            DriveCard(drive: drive)
                         }
-                        .padding(6)
                     }
                 }
 
-                GroupBox("Catalog backup") {
+                CardBox(title: "Catalog backup", systemImage: "shield.checkerboard") {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("The media survives on the drives, but residency, replica state, duplicate grouping, and import history exist only in the catalog. Verified snapshots are written to each connected drive so losing the Mac does not lose the metadata.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                         HStack {
                             if let latest = store.latestCatalogSnapshot {
                                 Label(
@@ -90,11 +61,10 @@ struct DrivesView: View {
                                 .foregroundStyle(.orange)
                         }
                     }
-                    .padding(6)
                 }
 
                 if !store.heldExportParts.isEmpty || !store.partTransferPlan.transfers.isEmpty {
-                    GroupBox("Export parts in transit") {
+                    CardBox(title: "Export parts in transit", systemImage: "shippingbox") {
                         VStack(alignment: .leading, spacing: 8) {
                             Text("When the drive that has a part and the drive that needs it are never plugged in at the same time, the part waits here on the Mac in between. It is deleted as soon as it reaches the other drive.")
                                 .font(.caption)
@@ -128,11 +98,10 @@ struct DrivesView: View {
                             }
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(6)
                     }
                 }
 
-                GroupBox("Mac staging") {
+                CardBox(title: "Mac staging", systemImage: "tray") {
                     VStack(alignment: .leading, spacing: 6) {
                         LabeledRow(label: "Location", value: store.staging.rootURL.path)
                         LabeledRow(label: "Size", value: Formatters.bytes.string(fromByteCount: store.staging.totalBytes))
@@ -142,10 +111,9 @@ struct DrivesView: View {
                         )
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(6)
                 }
 
-                GroupBox("Available volumes") {
+                CardBox(title: "Available volumes", systemImage: "externaldrive.badge.plus") {
                     let unmanaged = store.availableVolumes.filter { volume in
                         DriveMonitor.match(volume: volume, against: store.drives) == nil
                     }
@@ -153,7 +121,6 @@ struct DrivesView: View {
                         Text("No unmanaged external volumes mounted.")
                             .foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
-                            .padding(6)
                     } else {
                         VStack(spacing: 8) {
                             ForEach(unmanaged) { volume in
@@ -170,11 +137,10 @@ struct DrivesView: View {
                                 }
                             }
                         }
-                        .padding(6)
                     }
                 }
             }
-            .padding()
+            .padding(20)
         }
         .navigationTitle("Drives & Health")
         .toolbar {
@@ -202,108 +168,6 @@ struct DrivesView: View {
         }
         return Label(text, systemImage: "info.circle")
             .foregroundStyle(.secondary)
-    }
-
-    private func driveRow(_ drive: ManagedDrive) -> some View {
-        let isConnected = store.connectedMounts[drive.id] != nil
-        let backlog = store.backlogCount(for: drive.id)
-        let summary = store.backlogSummary(for: drive.id)
-        let driftCount = store.replicaStates.filter { $0.driveID == drive.id && $0.state == .drift }.count
-        let progress = store.syncProgress?.driveID == drive.id ? store.syncProgress : nil
-
-        return VStack(spacing: 8) {
-        HStack(alignment: .top) {
-            Circle()
-                .fill(isConnected ? Color.green : Color.secondary.opacity(0.4))
-                .frame(width: 10, height: 10)
-                .padding(.top, 5)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(drive.name)
-                    .font(.headline)
-                Text(isConnected
-                     ? "Connected at \(store.connectedMounts[drive.id]?.path ?? "?")"
-                     : "Not connected — last seen \(Formatters.relative(drive.lastSeenAt))")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                if isConnected {
-                    if store.isBusy(drive.id) {
-                        Label("In use — do not unplug", systemImage: "exclamationmark.triangle.fill")
-                            .font(.caption)
-                            .foregroundStyle(.orange)
-                    } else {
-                        Label("Idle — safe to eject", systemImage: "checkmark.circle")
-                            .font(.caption)
-                            .foregroundStyle(.green)
-                    }
-                }
-                HStack(spacing: 12) {
-                    Label(summary.isEmpty ? "nothing pending" : summary.description, systemImage: "tray.full")
-                        .foregroundStyle(backlog > 0 ? .orange : .secondary)
-                    Label("Last sync \(Formatters.relative(store.lastCompletedSync(for: drive.id)))", systemImage: "arrow.triangle.2.circlepath")
-                        .foregroundStyle(.secondary)
-                    if driftCount > 0 {
-                        Label("\(driftCount) drifted", systemImage: "exclamationmark.triangle.fill")
-                            .foregroundStyle(.red)
-                    }
-                }
-                .font(.caption)
-            }
-            Spacer()
-            if store.isQuiescing(drive.id) {
-                Label("Releasing…", systemImage: "hourglass")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            } else if progress != nil {
-                Button("Cancel") { store.cancelSync() }
-            } else if isConnected {
-                Menu {
-                    Button("Check a batch now") { store.queueVerificationSweep(drive.id) }
-                        .disabled(store.isSyncing)
-                    if summary.verifyCount > 0 {
-                        Button("Clear \(summary.verifyCount) queued check(s)", role: .destructive) {
-                            store.clearQueuedTasks(for: drive.id, action: .verify)
-                        }
-                    }
-                } label: {
-                    Text("Check for damage")
-                } primaryAction: {
-                    store.queueVerificationSweep(drive.id)
-                }
-                .disabled(store.isSyncing)
-                .help("Re-reads a batch of files on this drive and confirms they are still byte-for-byte what was imported. Starts with the ones checked longest ago.")
-
-                Button(syncButtonTitle(summary)) { store.syncDrive(drive.id) }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(store.isSyncing || backlog == 0)
-                    .help(summary.isEmpty
-                          ? "Nothing pending for this drive."
-                          : "Works through this drive's queue: \(summary.description).")
-            }
-        }
-        if let progress {
-            VStack(alignment: .leading, spacing: 3) {
-                ProgressView(value: progress.fractionComplete)
-                HStack {
-                    Text(progress.currentItem.map { "Syncing \($0)" } ?? "Syncing…")
-                    Spacer()
-                    Text("\(progress.completedTasks + progress.failedTasks) of \(progress.totalTasks)\(progress.failedTasks > 0 ? " (\(progress.failedTasks) failed)" : "")")
-                }
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            }
-        }
-        }
-        .padding(10)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-    }
-
-    /// Says what the run will actually do — "Sync now" reads like copying,
-    /// which is misleading when the queue is entirely verification.
-    private func syncButtonTitle(_ summary: BacklogSummary) -> String {
-        if summary.isEmpty { return "Sync now" }
-        if summary.copyCount == 0 && summary.removeCount == 0 { return "Check \(summary.verifyCount) files now" }
-        if summary.verifyCount == 0 && summary.removeCount == 0 { return "Copy \(summary.copyCount) now" }
-        return "Process \(summary.total) now"
     }
 
     private func registrationSheet(_ volume: VolumeInfo) -> some View {

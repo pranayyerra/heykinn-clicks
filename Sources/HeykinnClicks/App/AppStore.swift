@@ -22,6 +22,9 @@ final class AppStore: ObservableObject {
     @Published private(set) var duplicateGroups: [DuplicateGroup] = []
     @Published private(set) var violations: [Violation] = []
     @Published private(set) var protectionStates: [UUID: ProtectionState] = [:]
+    /// What each drive holds, tallied once per catalog change rather than
+    /// re-filtered by every view that draws a drive.
+    @Published private(set) var driveBreakdowns: [UUID: DriveContentBreakdown] = [:]
     /// Batches whose every asset is safe without its source archive.
     @Published private(set) var fullyReplicatedBatchIDs: Set<UUID> = []
 
@@ -1262,6 +1265,24 @@ final class AppStore: ObservableObject {
             replicaStates: replicaStates,
             policy: redundancyPolicy
         )
+
+        var breakdowns: [UUID: DriveContentBreakdown] = [:]
+        for replica in replicaStates {
+            var breakdown = breakdowns[replica.driveID] ?? DriveContentBreakdown()
+            switch replica.state {
+            case .present:
+                breakdown.present += 1
+                breakdown.presentBytes += assetsByID[replica.assetID]?.fileSize ?? 0
+            case .pending, .copying, .stale:
+                breakdown.pending += 1
+            case .drift:
+                breakdown.drift += 1
+            case .missing:
+                breakdown.missing += 1
+            }
+            breakdowns[replica.driveID] = breakdown
+        }
+        driveBreakdowns = breakdowns
 
         var batchSafe: [UUID: Bool] = [:]
         for asset in assets {

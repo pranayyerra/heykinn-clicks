@@ -217,6 +217,215 @@ struct AssetThumbnailView: View {
     }
 }
 
+/// A population drawn as one proportional bar. Sizes speak before numbers do:
+/// a mostly-green bar reads as "safe" without the user parsing a table.
+struct SegmentedBar: View {
+    struct Segment: Identifiable, Equatable {
+        var label: String
+        var count: Int
+        var color: Color
+
+        var id: String { label }
+    }
+
+    let segments: [Segment]
+    var height: CGFloat = 12
+
+    private var total: Int { segments.reduce(0) { $0 + $1.count } }
+
+    var body: some View {
+        GeometryReader { proxy in
+            HStack(spacing: 0) {
+                if total == 0 {
+                    Rectangle().fill(Color.secondary.opacity(0.15))
+                } else {
+                    ForEach(segments.filter { $0.count > 0 }) { segment in
+                        Rectangle()
+                            .fill(segment.color)
+                            .frame(width: proxy.size.width * CGFloat(segment.count) / CGFloat(total))
+                            .help("\(segment.label): \(segment.count.formatted())")
+                    }
+                }
+            }
+        }
+        .frame(height: height)
+        .clipShape(Capsule())
+        .animation(.easeInOut(duration: 0.25), value: segments)
+    }
+}
+
+/// Names the colours in a `SegmentedBar` or `ProtectionDonut`. Empty buckets
+/// are dropped: a legend line reading "0" is noise, not information.
+struct SegmentLegend: View {
+    let segments: [SegmentedBar.Segment]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            ForEach(segments.filter { $0.count > 0 }) { segment in
+                HStack(spacing: 7) {
+                    Circle()
+                        .fill(segment.color)
+                        .frame(width: 8, height: 8)
+                    Text(segment.label)
+                        .font(.callout)
+                    Spacer(minLength: 12)
+                    Text(segment.count.formatted())
+                        .font(.callout)
+                        .monospacedDigit()
+                        .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+}
+
+/// The same buckets as a ring, with the single number that matters in the
+/// middle. Used once, at the top of the app, to answer "are my photos safe?".
+struct ProtectionDonut: View {
+    private struct Arc: Identifiable {
+        let id: Int
+        let start: CGFloat
+        let end: CGFloat
+        let color: Color
+    }
+
+    let segments: [SegmentedBar.Segment]
+    let headline: String
+    let caption: String
+    var lineWidth: CGFloat = 16
+    var diameter: CGFloat = 140
+
+    private var total: Int { segments.reduce(0) { $0 + $1.count } }
+
+    private var arcs: [Arc] {
+        guard total > 0 else { return [] }
+        var result: [Arc] = []
+        var cursor: CGFloat = 0
+        for (index, segment) in segments.enumerated() where segment.count > 0 {
+            let fraction = CGFloat(segment.count) / CGFloat(total)
+            result.append(Arc(id: index, start: cursor, end: min(cursor + fraction, 1), color: segment.color))
+            cursor += fraction
+        }
+        return result
+    }
+
+    var body: some View {
+        ZStack {
+            Circle()
+                .stroke(Color.secondary.opacity(0.15), lineWidth: lineWidth)
+            ForEach(arcs) { arc in
+                Circle()
+                    .trim(from: arc.start, to: arc.end)
+                    .stroke(arc.color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
+                    .rotationEffect(.degrees(-90))
+            }
+            VStack(spacing: 1) {
+                Text(headline)
+                    .font(.system(size: 30, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text(caption)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(lineWidth + 8)
+            .multilineTextAlignment(.center)
+        }
+        .frame(width: diameter, height: diameter)
+        .animation(.easeInOut(duration: 0.3), value: segments)
+    }
+}
+
+/// One number worth acting on, sized to be read across the room and clickable
+/// straight through to the screen that resolves it.
+struct StatTile: View {
+    let symbol: String
+    let value: String
+    let title: String
+    let tint: Color
+    let action: () -> Void
+
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 4) {
+                Image(systemName: symbol)
+                    .font(.title3)
+                    .foregroundStyle(tint)
+                Text(value)
+                    .font(.system(size: 26, weight: .semibold, design: .rounded))
+                    .monospacedDigit()
+                Text(title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.leading)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 108, alignment: .topLeading)
+            .padding(12)
+            .background(tint.opacity(isHovering ? 0.20 : 0.10), in: RoundedRectangle(cornerRadius: 12))
+        }
+        .buttonStyle(.plain)
+        .onHover { isHovering = $0 }
+        .animation(.easeInOut(duration: 0.12), value: isHovering)
+    }
+}
+
+/// A titled panel. Lighter than `GroupBox` so a screen of them reads as a
+/// dashboard rather than as a preferences window.
+struct CardBox<Content: View>: View {
+    let title: String
+    var systemImage: String?
+    var accessory: AnyView?
+    @ViewBuilder let content: Content
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Label {
+                    Text(title)
+                        .font(.headline)
+                } icon: {
+                    if let systemImage {
+                        Image(systemName: systemImage)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Spacer()
+                if let accessory {
+                    accessory
+                }
+            }
+            content
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(16)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
+    }
+}
+
+/// Free/used space for a mounted volume. Nil when the volume is gone, which is
+/// the normal case for a drive that has just been unplugged.
+enum VolumeCapacity {
+    static func read(_ url: URL) -> (total: Int64, available: Int64)? {
+        let keys: Set<URLResourceKey> = [
+            .volumeTotalCapacityKey,
+            .volumeAvailableCapacityKey,
+            .volumeAvailableCapacityForImportantUsageKey
+        ]
+        guard let values = try? url.resourceValues(forKeys: keys),
+              let total = values.volumeTotalCapacity, total > 0 else { return nil }
+        // The "important usage" figure is the honest one — it accounts for
+        // purgeable space — but it is unavailable on plenty of external
+        // filesystems, where it comes back nil or zero rather than as an error.
+        let important = values.volumeAvailableCapacityForImportantUsage ?? 0
+        let plain = Int64(values.volumeAvailableCapacity ?? 0)
+        let available = important > 0 ? important : plain
+        guard available > 0 else { return nil }
+        return (Int64(total), available)
+    }
+}
+
 struct LabeledRow: View {
     let label: String
     let value: String

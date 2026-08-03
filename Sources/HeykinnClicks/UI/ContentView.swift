@@ -1,19 +1,21 @@
 import SwiftUI
 
 enum SidebarSection: String, CaseIterable, Identifiable {
+    case overview
     case library
     case duplicates
+    case takeout
     case drives
+    case migrations
     case violations
     case policies
-    case migrations
-    case takeout
     case activity
 
     var id: String { rawValue }
 
     var title: String {
         switch self {
+        case .overview: return "Overview"
         case .library: return "Library"
         case .duplicates: return "Duplicates"
         case .drives: return "Drives & Health"
@@ -27,6 +29,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
 
     var symbolName: String {
         switch self {
+        case .overview: return "square.grid.2x2"
         case .library: return "photo.on.rectangle"
         case .duplicates: return "square.on.square"
         case .drives: return "externaldrive.connected.to.line.below"
@@ -39,24 +42,51 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     }
 }
 
+/// Sidebar grouping by what the user is trying to do, rather than one flat list
+/// where "Policies" and "Library" look like the same kind of thing.
+private struct SidebarGroup: Identifiable {
+    let title: String?
+    let sections: [SidebarSection]
+
+    var id: String { title ?? "root" }
+
+    static let all: [SidebarGroup] = [
+        SidebarGroup(title: nil, sections: [.overview]),
+        SidebarGroup(title: "Photos", sections: [.library, .duplicates, .takeout]),
+        SidebarGroup(title: "Storage", sections: [.drives, .migrations]),
+        SidebarGroup(title: "Housekeeping", sections: [.violations, .policies, .activity])
+    ]
+}
+
 struct ContentView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var selection: SidebarSection? = .library
+    @State private var selection: SidebarSection? = .overview
 
     var body: some View {
         NavigationSplitView {
-            List(SidebarSection.allCases, selection: $selection) { section in
-                Label {
-                    Text(section.title)
-                } icon: {
-                    Image(systemName: section.symbolName)
+            List(selection: $selection) {
+                ForEach(SidebarGroup.all) { group in
+                    Section {
+                        ForEach(group.sections) { section in
+                            Label {
+                                Text(section.title)
+                            } icon: {
+                                Image(systemName: section.symbolName)
+                            }
+                            .badge(badge(for: section))
+                            .tag(section)
+                        }
+                    } header: {
+                        if let title = group.title {
+                            Text(title)
+                        }
+                    }
                 }
-                .badge(badge(for: section))
-                .tag(section)
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 210)
         } detail: {
-            switch selection ?? .library {
+            switch selection ?? .overview {
+            case .overview: OverviewView(selection: $selection)
             case .library: LibraryView()
             case .duplicates: DuplicatesView()
             case .drives: DrivesView()
