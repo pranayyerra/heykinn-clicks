@@ -44,6 +44,17 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     var question: Question {
         Question.allCases.first { $0.pages.contains(self) } ?? .overview
     }
+
+    /// What this page's badge is counting, so "1" can say what it is one of.
+    func badgeNoun(count: Int) -> String {
+        switch self {
+        case .violations: return count == 1 ? "to review" : "to review"
+        case .duplicates: return count == 1 ? "duplicate set" : "duplicate sets"
+        case .migrations: return count == 1 ? "move running" : "moves running"
+        case .takeout: return count == 1 ? "file to import" : "files to import"
+        default: return ""
+        }
+    }
 }
 
 /// The sidebar, as the three things somebody actually wants to know.
@@ -133,19 +144,23 @@ struct ContentView: View {
         NavigationSplitView {
             List(selection: questionSelection) {
                 ForEach(Question.allCases) { question in
-                    VStack(alignment: .leading, spacing: 1) {
-                        Label {
+                    // Label, not a VStack of Text: a sidebar row's selection
+                    // tint and its enabled appearance come from the Label's
+                    // title/icon slots, and building the row by hand out of
+                    // Text left every unselected row rendering like a disabled
+                    // control — the whole sidebar read as greyed out.
+                    Label {
+                        VStack(alignment: .leading, spacing: 1) {
                             Text(question.title)
-                        } icon: {
-                            Image(systemName: question.symbolName)
+                            Text(question.subtitle)
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
                         }
-                        Text(question.subtitle)
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .padding(.leading, 26)
+                        .padding(.vertical, 2)
+                    } icon: {
+                        Image(systemName: question.symbolName)
                     }
-                    .padding(.vertical, 3)
-                    .badge(badge(for: question))
+                    .badge(badgeText(for: question))
                     .tag(question)
                 }
             }
@@ -259,7 +274,19 @@ struct ContentView: View {
     /// attention two screens down is still something needing attention, and
     /// burying it under a question the reader has not opened is how a nine-item
     /// sidebar hid things in the first place.
-    private func badge(for question: Question) -> Int {
-        question.pages.reduce(0) { $0 + badge(for: $1) }
+    ///
+    /// Named, not just counted. A bare "1" against "Is it safe" is a worrying
+    /// number with no subject — the reader has to open the question to find out
+    /// what the app is worried about, which is the work the badge was supposed
+    /// to save them. One item says what it is; several say how many of what.
+    private func badgeText(for question: Question) -> String? {
+        let carried = question.pages
+            .map { (page: $0, count: badge(for: $0)) }
+            .filter { $0.count > 0 }
+        guard !carried.isEmpty else { return nil }
+        if carried.count == 1, let only = carried.first {
+            return "\(only.count) \(only.page.badgeNoun(count: only.count))"
+        }
+        return carried.reduce(0) { $0 + $1.count }.formatted()
     }
 }

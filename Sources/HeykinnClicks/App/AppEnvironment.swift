@@ -19,12 +19,40 @@ struct AppEnvironment {
     /// driven directly, which is the whole point of testing them.
     var runsBackgroundWork: Bool
 
-    static func production() -> AppEnvironment {
+    /// Environment variable naming an archive directory to use instead of the
+    /// real one.
+    ///
+    /// A test can already build a whole store over a temporary archive, but a
+    /// *running* app could only ever open the user's own — so looking at the
+    /// app meant looking at 24,000 real photos on real drives, and any check of
+    /// a screen's behaviour was a change to the archive somebody depends on.
+    /// Redirecting `HOME` does not work: Application Support resolves through
+    /// the user domain, not the environment. This is the seam that was missing.
+    static let archiveDirectoryOverrideKey = "HEYKINN_ARCHIVE_DIRECTORY"
+    /// Set alongside the override to keep an inspection copy off the machine's
+    /// real volumes: no volume scan, no snapshots written to the user's drives.
+    static let offlineKey = "HEYKINN_NO_BACKGROUND_WORK"
+
+    static func production(
+        processEnvironment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> AppEnvironment {
         let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
+        let directory = processEnvironment[archiveDirectoryOverrideKey].map {
+            URL(fileURLWithPath: $0, isDirectory: true)
+        } ?? support.appendingPathComponent("HeykinnClicks", isDirectory: true)
+
+        // A redirected archive gets its own preferences too. Sharing the real
+        // ones would have an inspection copy reading — and writing — the
+        // policy, the ignored volumes and the iCloud answer that belong to the
+        // archive it is standing in for.
+        let defaults = processEnvironment[archiveDirectoryOverrideKey].flatMap {
+            UserDefaults(suiteName: "HeykinnClicks.archive." + $0.replacingOccurrences(of: "/", with: "."))
+        } ?? .standard
+
         return AppEnvironment(
-            appDirectory: support.appendingPathComponent("HeykinnClicks", isDirectory: true),
-            defaults: .standard,
-            runsBackgroundWork: true
+            appDirectory: directory,
+            defaults: defaults,
+            runsBackgroundWork: processEnvironment[offlineKey] == nil
         )
     }
 }

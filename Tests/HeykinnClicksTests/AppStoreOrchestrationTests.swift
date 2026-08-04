@@ -1253,3 +1253,86 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertNil(store.lastError)
     }
 }
+
+/// The redundancy policy has to be bounded by the drives that exist, or an
+/// archive with no drives reports 0% safe. Bounding it by *overwriting* what
+/// the user asked for made that permanent — and every install begins with no
+/// drives, so every install was quietly pinned to one copy for good.
+@MainActor
+final class RedundancyPolicyBoundTests: XCTestCase {
+
+    private var roots: [URL] = []
+    private var suiteNames: [String] = []
+
+    override func tearDown() {
+        for url in roots { try? FileManager.default.removeItem(at: url) }
+        for name in suiteNames { UserDefaults.standard.removePersistentDomain(forName: name) }
+        roots = []; suiteNames = []
+        super.tearDown()
+    }
+
+    private func makeStore(_ directory: URL? = nil) throws -> (AppStore, URL, UserDefaults) {
+        let root = try directory ?? {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("heykinn-policy-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+            roots.append(url)
+            return url
+        }()
+        let suiteName = "heykinn-policy-\(root.lastPathComponent)"
+        if !suiteNames.contains(suiteName) { suiteNames.append(suiteName) }
+        let defaults = UserDefaults(suiteName: suiteName)!
+        let store = AppStore(environment: AppEnvironment(
+            appDirectory: root, defaults: defaults, runsBackgroundWork: false
+        ))
+        return (store, root, defaults)
+    }
+
+    func testWithNoDrivesThePolicyInForceIsBoundedToOne() throws {
+        let (store, _, _) = try makeStore()
+        XCTAssertEqual(store.redundancyPolicy.desiredCopies, 1, "Nowhere to put a second copy")
+        XCTAssertEqual(store.requestedCopies, 2, "…but two is still what was asked for")
+    }
+
+    /// The bug, in one assertion: register a drive and the policy the user
+    /// asked for comes back on its own.
+    func testRegisteringDrivesRestoresTheRequestedPolicy() throws {
+        let (store, _, _) = try makeStore()
+        XCTAssertEqual(store.redundancyPolicy.desiredCopies, 1)
+
+        let first = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-target-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
+        roots.append(first)
+        store.registerHostDeviceTarget(at: first, name: "One")
+
+        XCTAssertEqual(
+            store.redundancyPolicy.desiredCopies, 1,
+            "One drive still only holds one copy"
+        )
+        XCTAssertEqual(store.requestedCopies, 2, "The request survived being bounded")
+    }
+
+    /// And it survives a relaunch: the bound was never written to preferences,
+    /// so a second session does not inherit it as the new intent.
+    func testTheBoundIsNotWrittenToPreferences() throws {
+        let (first, root, defaults) = try makeStore()
+        XCTAssertEqual(first.redundancyPolicy.desiredCopies, 1)
+        XCTAssertNil(
+            defaults.object(forKey: "desiredCopies"),
+            "Bounding the policy must not write anything down"
+        )
+
+        let (second, _, _) = try makeStore(root)
+        XCTAssertEqual(second.requestedCopies, 2, "A relaunch still wants two copies")
+    }
+
+    func testChangingThePolicyIsRemembered() throws {
+        let (store, root, _) = try makeStore()
+        store.redundancyPolicy = LocalRedundancyPolicy(desiredCopies: 3)
+        XCTAssertEqual(store.requestedCopies, 3)
+
+        let (reopened, _, _) = try makeStore(root)
+        XCTAssertEqual(reopened.requestedCopies, 3)
+    }
+}

@@ -181,6 +181,17 @@ struct LibraryView: View {
             + "clock that was never set. Shown where the files claim, unchanged."
     }
 
+    /// True when every photo in the archive lives in the same domain, which is
+    /// the normal state and the one where the badge is pure repetition.
+    private var residencyIsUniform: Bool {
+        var seen: ResidencyDomain?
+        for asset in store.assets {
+            if let seen, seen != asset.residency { return false }
+            seen = asset.residency
+        }
+        return true
+    }
+
     private func assetCell(_ asset: Asset) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             AssetThumbnailView(asset: asset)
@@ -189,7 +200,14 @@ struct LibraryView: View {
                 .font(.caption)
                 .lineLimit(1)
             HStack(spacing: 4) {
-                ResidencyBadge(domain: asset.residency)
+                // Only where it says something. On an archive that is entirely
+                // Local — which is every archive until a cloud is involved —
+                // this drew the same badge on all 21,000 tiles, so the one
+                // place the badge matters, a photo that is somewhere else, had
+                // nothing to stand out from.
+                if !residencyIsUniform {
+                    ResidencyBadge(domain: asset.residency)
+                }
                 // The archive can see this photograph and holds nothing of it.
                 // Said in the same words the map uses for a place holding no
                 // copy, because it is the same fact about a different subject.

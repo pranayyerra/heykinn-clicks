@@ -387,6 +387,18 @@ struct ProtectionDonut: View {
     var lineWidth: CGFloat = 16
     var diameter: CGFloat = 140
 
+    /// How many of the counted items the app has actually read back and
+    /// matched, drawn as a second ring inside the first.
+    ///
+    /// The outer ring is the verdict — enough copies exist — and on a healthy
+    /// archive it is a full green circle. Left alone it reads as "everything
+    /// has been checked", which is a different and much stronger claim, and one
+    /// the app spends its whole design refusing to make: most of those copies
+    /// have never been read back. A footnote under the ring could not hold that
+    /// line against a 100% in thirty-point type, so the evidence gets a ring of
+    /// its own. Nil where the distinction does not apply.
+    var confirmed: Int?
+
     private var total: Int { segments.reduce(0) { $0 + $1.count } }
 
     private var arcs: [Arc] {
@@ -401,6 +413,11 @@ struct ProtectionDonut: View {
         return result
     }
 
+    private var confirmedFraction: CGFloat? {
+        guard let confirmed, total > 0 else { return nil }
+        return min(1, max(0, CGFloat(confirmed) / CGFloat(total)))
+    }
+
     var body: some View {
         ZStack {
             Circle()
@@ -411,15 +428,34 @@ struct ProtectionDonut: View {
                     .stroke(arc.color, style: StrokeStyle(lineWidth: lineWidth, lineCap: .butt))
                     .rotationEffect(.degrees(-90))
             }
+            if let confirmedFraction {
+                let inset = lineWidth + 5
+                Circle()
+                    .inset(by: inset)
+                    .stroke(Color.secondary.opacity(0.15), lineWidth: 5)
+                Circle()
+                    .inset(by: inset)
+                    .trim(from: 0, to: confirmedFraction)
+                    .stroke(Color.accentColor, style: StrokeStyle(lineWidth: 5, lineCap: .butt))
+                    .rotationEffect(.degrees(-90))
+            }
             VStack(spacing: 1) {
                 Text(headline)
                     .font(.system(size: 30, weight: .semibold, design: .rounded))
                     .monospacedDigit()
+                    // The inner ring took the room "100%" needed and it
+                    // truncated to "10…" — a percentage is the one string on
+                    // this screen that must never be shortened.
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.55)
                 Text(caption)
-                    .font(.caption)
+                    .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.8)
             }
-            .padding(lineWidth + 8)
+            .padding(.horizontal, lineWidth + 10)
+            .padding(.vertical, lineWidth + 4)
             .multilineTextAlignment(.center)
         }
         .frame(width: diameter, height: diameter)

@@ -41,8 +41,8 @@ struct OverviewView: View {
             }
         }
         return [
-            SegmentedBar.Segment(label: "Safe on \(store.redundancyPolicy.description)", count: met, color: .green),
-            SegmentedBar.Segment(label: "Not yet on \(store.redundancyPolicy.description)", count: short, color: .orange),
+            SegmentedBar.Segment(label: "Has \(store.redundancyPolicy.description)", count: met, color: .green),
+            SegmentedBar.Segment(label: "Short of \(store.redundancyPolicy.description)", count: short, color: .orange),
             SegmentedBar.Segment(label: "A copy no longer matches", count: diverged, color: .red)
         ]
     }
@@ -55,17 +55,38 @@ struct OverviewView: View {
         protectionCounts.values.reduce(0, +)
     }
 
-    /// The evidence behind the verdict, kept out of it. A check that has gone
-    /// stale is not a copy that has gone missing, and reporting it as though it
-    /// were is what made a healthy archive look broken.
+    /// Photos whose copies the app has actually read back and matched.
+    ///
+    /// The verdict counts copies that exist; this counts copies somebody has
+    /// looked at. On a fresh archive the two are wildly different — every
+    /// import writes copies and reads none of them back — and the gap is the
+    /// single most misleading thing the old card could leave implicit behind a
+    /// full green ring.
+    private var confirmedCount: Int {
+        protectionCounts
+            .filter { $0.key.verdict.isSatisfied && $0.key.checkStanding == .fresh }
+            .values.reduce(0, +)
+    }
+
+    /// The evidence behind the verdict, stated rather than buried. A check that
+    /// has gone stale is not a copy that has gone missing, and reporting it as
+    /// though it were is what made a healthy archive look broken — but leaving
+    /// it as a grey aside under a 100% is how a reader comes away believing
+    /// every photo has been verified when almost none of them have.
     private var evidenceNote: String? {
         let neverRead = protectionCounts.filter { $0.key.checkStanding == .neverRead }.values.reduce(0, +)
         let stale = protectionCounts.filter { $0.key.checkStanding == .stale }.values.reduce(0, +)
-        var parts: [String] = []
-        if neverRead > 0 { parts.append("\(neverRead.formatted()) never read back") }
-        if stale > 0 { parts.append("\(stale.formatted()) not read back recently") }
-        guard !parts.isEmpty else { return nil }
-        return parts.joined(separator: " · ")
+        guard neverRead + stale > 0 else {
+            guard localCount > 0 else { return nil }
+            return "Every copy has been read back and matched."
+        }
+        if neverRead > 0, stale > 0 {
+            return "\(confirmedCount.formatted()) read back and matched. \(neverRead.formatted()) have never been read, and \(stale.formatted()) not for a while — the app is working through them."
+        }
+        if stale > 0 {
+            return "\(confirmedCount.formatted()) read back and matched. \(stale.formatted()) were last read a while ago and are due another look."
+        }
+        return "\(confirmedCount.formatted()) of \(localCount.formatted()) read back and matched. The rest are on your drives but nobody has read them yet — that is what the inner ring is filling in."
     }
 
     private var residencySegments: [SegmentedBar.Segment] {
@@ -124,7 +145,8 @@ struct OverviewView: View {
                 ProtectionDonut(
                     segments: protectionSegments,
                     headline: donutHeadline,
-                    caption: localCount == 0 ? "nothing yet" : "safe"
+                    caption: localCount == 0 ? "nothing yet" : "on enough drives",
+                    confirmed: localCount == 0 ? nil : confirmedCount
                 )
                 VStack(alignment: .leading, spacing: 12) {
                     Text(safetyHeadline)
@@ -132,13 +154,14 @@ struct OverviewView: View {
                         .fixedSize(horizontal: false, vertical: true)
                     SegmentLegend(segments: protectionSegments)
                     if let evidenceNote {
-                        // Below the verdict, in the smaller type its weight
-                        // deserves: this is what is known about the copies, not
-                        // whether they exist.
-                        Label(evidenceNote, systemImage: "clock.badge.questionmark")
-                            .font(.caption)
+                        // The inner ring's line. Not a footnote qualifying the
+                        // verdict — a second fact, and the one the reader would
+                        // otherwise assume the green ring had already promised.
+                        Label(evidenceNote, systemImage: "circle.dotted")
+                            .font(.callout)
                             .foregroundStyle(.secondary)
-                            .help("Copies the app has not read back. They still satisfy the policy — reading them back is how it confirms the bytes are undamaged.")
+                            .fixedSize(horizontal: false, vertical: true)
+                            .help("Having enough copies and having read them back are different things. A copy nobody has read is still a copy — it just has not been confirmed undamaged yet.")
                     }
                     if store.targets.count < store.redundancyPolicy.desiredCopies {
                         Button {
@@ -171,10 +194,14 @@ struct OverviewView: View {
         // it, not folded into it — the copies either satisfy the policy or they
         // do not, and a stale check does not change that.
         if protectedCount == localCount {
-            return "All \(localCount.formatted()) photos are safe on \(store.redundancyPolicy.description)."
+            // "Safe" was doing two jobs — enough copies exist, and they are
+            // known to be good — and only the first is true here. Say the one
+            // the ring is actually reporting; the line under it says how far
+            // the checking has got.
+            return "All \(localCount.formatted()) photos have \(store.redundancyPolicy.description)."
         }
         let short = localCount - protectedCount
-        return "\(short.formatted()) of \(localCount.formatted()) photos are not yet on \(store.redundancyPolicy.description)."
+        return "\(short.formatted()) of \(localCount.formatted()) photos do not have \(store.redundancyPolicy.description) yet."
     }
 
     // MARK: - Drives
@@ -184,7 +211,7 @@ struct OverviewView: View {
     /// screen a clear job.
     private var drivesCard: some View {
         CardBox(
-            title: "Copies",
+            title: "Drives holding your archive",
             systemImage: "externaldrive",
             accessory: AnyView(
                 Button("Manage") { selection = .targets }
@@ -230,12 +257,20 @@ struct OverviewView: View {
         }.count
         let total = store.targets.count
 
-        let completeness = complete == total
-            ? "\(total) copies, all complete"
-            : "\(complete) of \(total) copies complete"
+        // Counted in drives. "2 copies" here and "one copy" in the verdict
+        // above are different things — a drive, and how many copies of each
+        // photo the policy asks for — and using one word for both on a single
+        // screen made the two numbers look like they should agree.
+        let completeness: String
+        switch (complete == total, total) {
+        case (true, 1): completeness = "One drive, holding everything"
+        case (true, 2): completeness = "Both drives hold everything"
+        case (true, _): completeness = "All \(total) drives hold everything"
+        default: completeness = "\(complete) of \(total) drives hold everything"
+        }
         let availability = reachable == 0
-            ? "none reachable right now"
-            : (reachable == total ? "all reachable now" : "\(reachable) reachable now")
+            ? "none plugged in right now"
+            : (reachable == total ? "all plugged in now" : "\(reachable) plugged in now")
         return "\(completeness) — \(availability)."
     }
 
@@ -267,7 +302,9 @@ struct OverviewView: View {
                 id: "unprotected",
                 symbol: "shield.lefthalf.filled",
                 value: unprotectedCount.formatted(),
-                title: "photos without \(store.redundancyPolicy.description) yet",
+                title: unprotectedCount == 1
+                    ? "photo not on \(store.redundancyPolicy.description) yet"
+                    : "photos not on \(store.redundancyPolicy.description) yet",
                 tint: .orange,
                 destination: .targets
             ))
@@ -277,7 +314,7 @@ struct OverviewView: View {
                 id: "violations",
                 symbol: "exclamationmark.octagon",
                 value: store.violations.count.formatted(),
-                title: "rule violations to review",
+                title: store.violations.count == 1 ? "thing to review" : "things to review",
                 tint: .red,
                 destination: .violations
             ))
@@ -290,7 +327,9 @@ struct OverviewView: View {
                 // Parts, because that is the unit: "13 exports" for one export
                 // whose twelve parts are all imported said the archive was
                 // barely started when it was finished.
-                title: "export part(s) not imported yet",
+                title: pendingArchiveCount == 1
+                    ? "downloaded file still to read"
+                    : "downloaded files still to read",
                 tint: .blue,
                 destination: .takeout
             ))
@@ -300,7 +339,9 @@ struct OverviewView: View {
                 id: "duplicates",
                 symbol: "square.on.square",
                 value: store.duplicateGroups.count.formatted(),
-                title: "sets of identical files",
+                title: store.duplicateGroups.count == 1
+                    ? "set of identical files"
+                    : "sets of identical files",
                 tint: .purple,
                 destination: .duplicates
             ))
@@ -310,7 +351,7 @@ struct OverviewView: View {
                 id: "migrations",
                 symbol: "arrow.left.arrow.right",
                 value: activeMigrationCount.formatted(),
-                title: "migrations in flight",
+                title: activeMigrationCount == 1 ? "move in progress" : "moves in progress",
                 tint: .teal,
                 destination: .migrations
             ))
@@ -347,27 +388,46 @@ struct OverviewView: View {
 
     // MARK: - Residency
 
+    /// Domains actually holding something. A bar drawn from one non-zero
+    /// segment is a full-width block of one colour with two zeroes underneath
+    /// it — chart furniture around a fact that is one sentence long.
+    private var occupiedResidencySegments: [SegmentedBar.Segment] {
+        residencySegments.filter { $0.count > 0 }
+    }
+
     private var residencyCard: some View {
         CardBox(title: "Where your photos live", systemImage: "map") {
             VStack(alignment: .leading, spacing: 10) {
-                SegmentedBar(segments: residencySegments, height: 14)
-                HStack(alignment: .top, spacing: 28) {
-                    ForEach(residencySegments) { segment in
-                        VStack(alignment: .leading, spacing: 2) {
-                            HStack(spacing: 6) {
-                                Circle()
-                                    .fill(segment.color)
-                                    .frame(width: 8, height: 8)
-                                Text(segment.label)
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            Text(segment.count.formatted())
+                if occupiedResidencySegments.count < 2 {
+                    if let only = occupiedResidencySegments.first {
+                        HStack(spacing: 8) {
+                            Circle()
+                                .fill(only.color)
+                                .frame(width: 10, height: 10)
+                            Text("All \(only.count.formatted()) photos are in \(only.label).")
                                 .font(.title3)
-                                .monospacedDigit()
                         }
                     }
-                    Spacer()
+                } else {
+                    SegmentedBar(segments: occupiedResidencySegments, height: 14)
+                    HStack(alignment: .top, spacing: 28) {
+                        ForEach(occupiedResidencySegments) { segment in
+                            VStack(alignment: .leading, spacing: 2) {
+                                HStack(spacing: 6) {
+                                    Circle()
+                                        .fill(segment.color)
+                                        .frame(width: 8, height: 8)
+                                    Text(segment.label)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                Text(segment.count.formatted())
+                                    .font(.title3)
+                                    .monospacedDigit()
+                            }
+                        }
+                        Spacer()
+                    }
                 }
                 Text("Every photo lives in exactly one place. Move them between places from Migrations.")
                     .font(.caption)

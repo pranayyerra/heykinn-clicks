@@ -8,6 +8,63 @@ struct DrivesView: View {
     @State private var selectedPlace: UUID?
     @State private var targetToForget: ReplicationTarget?
 
+    /// The answer, before the diagram of it.
+    ///
+    /// This screen is what "Is it safe" opens on, and it opened on a picture:
+    /// a hub, some spokes, and half a window of white space under them. A
+    /// diagram is a good way to show *where* the copies are and a poor way to
+    /// answer *whether they are enough* — the reader had to count the green
+    /// boxes and know what green meant. So the sentence comes first and the
+    /// map illustrates it, which is also what fills the space the map left.
+    @ViewBuilder
+    private var verdict: some View {
+        let damaged = store.protectionStates.values.filter { $0 == .driftDetected }.count
+        let short = store.protectionStates.values.filter { $0.verdict == .shortOfPolicy }.count
+        let holders = store.targets.count
+        let reachable = store.targets.filter { store.reachablePaths[$0.id] != nil }.count
+
+        HStack(alignment: .top, spacing: 12) {
+            Image(systemName: damaged > 0 ? "exclamationmark.triangle.fill"
+                  : short > 0 ? "exclamationmark.circle.fill" : "checkmark.seal.fill")
+                .font(.title)
+                .foregroundStyle(damaged > 0 ? .red : short > 0 ? .orange : .green)
+            VStack(alignment: .leading, spacing: 3) {
+                Text(verdictHeadline(damaged: damaged, short: short, holders: holders))
+                    .font(.title3)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(verdictDetail(reachable: reachable, holders: holders))
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func verdictHeadline(damaged: Int, short: Int, holders: Int) -> String {
+        if store.assets.isEmpty { return "Nothing in the archive yet." }
+        if holders == 0 { return "No drive is holding your photos yet." }
+        if damaged > 0 {
+            return "\(damaged.formatted()) photo(s) have a copy that no longer matches."
+        }
+        if short > 0 {
+            return "\(short.formatted()) of \(store.protectionStates.count.formatted()) photos do not have \(store.redundancyPolicy.description) yet."
+        }
+        return "Yes — every photo has \(store.redundancyPolicy.description)."
+    }
+
+    private func verdictDetail(reachable: Int, holders: Int) -> String {
+        guard holders > 0 else {
+            return "Register a drive below and the archive starts copying itself onto it."
+        }
+        let plugged = reachable == 0
+            ? "None are plugged in right now, which is fine — a drive that is away still holds what it held."
+            : reachable == holders
+                ? "All of them are plugged in."
+                : "\(reachable) of \(holders) plugged in right now."
+        return plugged + " Copies are checked by reading them back; the app works through that in the background."
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
@@ -16,6 +73,8 @@ struct DrivesView: View {
                 if store.isTransferringParts, let activity = store.takeoutActivity {
                     TakeoutActivityBanner(activity: activity)
                 }
+
+                verdict
 
                 ArchiveMapView(
                     photoCount: photoCount,
@@ -32,7 +91,7 @@ struct DrivesView: View {
                 if let target = selectedTarget {
                     DriveCard(drive: target, onForget: { targetToForget = target })
                 } else if !store.targets.isEmpty {
-                    Text("Select a place to see its detail and controls.")
+                    Text("Click a drive above for its detail and controls.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)

@@ -182,3 +182,41 @@ final class TargetTests: XCTestCase {
         XCTAssertFalse(drive.isHostDevice, "An external drive is a target in its own right, not the host device")
     }
 }
+
+/// A running app could only ever open the user's own archive, so looking at a
+/// screen meant looking at real photos on real drives — and any check of a
+/// screen's behaviour was a change to an archive somebody depends on.
+final class ArchiveDirectoryOverrideTests: XCTestCase {
+
+    func testProductionUsesTheRealArchiveByDefault() {
+        let environment = AppEnvironment.production(processEnvironment: [:])
+        XCTAssertEqual(environment.appDirectory.lastPathComponent, "HeykinnClicks")
+        XCTAssertTrue(environment.runsBackgroundWork)
+        XCTAssertEqual(environment.defaults, UserDefaults.standard)
+    }
+
+    func testAnOverriddenArchiveIsUsedInstead() {
+        let environment = AppEnvironment.production(processEnvironment: [
+            AppEnvironment.archiveDirectoryOverrideKey: "/tmp/inspection-archive",
+        ])
+        XCTAssertEqual(environment.appDirectory.path, "/tmp/inspection-archive")
+    }
+
+    /// Sharing the real preferences would have an inspection copy reading and
+    /// writing the policy, the ignored volumes and the iCloud answer that
+    /// belong to the archive it is standing in for.
+    func testAnOverriddenArchiveGetsItsOwnPreferences() {
+        let environment = AppEnvironment.production(processEnvironment: [
+            AppEnvironment.archiveDirectoryOverrideKey: "/tmp/inspection-archive",
+        ])
+        XCTAssertNotEqual(environment.defaults, UserDefaults.standard)
+    }
+
+    func testBackgroundWorkCanBeLeftOffSoRealVolumesAreNeverTouched() {
+        let environment = AppEnvironment.production(processEnvironment: [
+            AppEnvironment.archiveDirectoryOverrideKey: "/tmp/inspection-archive",
+            AppEnvironment.offlineKey: "1",
+        ])
+        XCTAssertFalse(environment.runsBackgroundWork)
+    }
+}

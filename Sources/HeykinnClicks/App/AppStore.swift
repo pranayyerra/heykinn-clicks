@@ -67,15 +67,44 @@ final class AppStore: ObservableObject {
     /// than you have places to put them. Registering a target raises this.
     var maxSettableCopies: Int { max(targets.count, 1) }
 
-    @Published var redundancyPolicy: LocalRedundancyPolicy = .default {
-        didSet {
-            defaults.set(redundancyPolicy.desiredCopies, forKey: "desiredCopies")
+    /// How many copies the user has asked for, whether or not there are places
+    /// to put them yet.
+    ///
+    /// Kept apart from the policy in force, because the app has to bound the
+    /// policy to the targets that exist — a policy asking for two copies with
+    /// no drives registered reports a healthy archive as 0% safe. Bounding it
+    /// used to mean *overwriting* this number, which made the clamp a one-way
+    /// ratchet: every new install opens with no targets, so two copies was
+    /// lowered to one and written to preferences before the user had plugged
+    /// anything in. Registering a drive raised the ceiling and nothing raised
+    /// the policy back, so the app sat at one copy for good — quietly not doing
+    /// the single thing it exists to do, while reporting 100%.
+    /// No `didSet`. A stored property with a default fires its observer when an
+    /// initialiser assigns it, so persisting there wrote the preference back
+    /// and audited a policy change nobody made on every single launch. The
+    /// side effects belong to the setter below, which only a person moving the
+    /// control ever reaches.
+    @Published private var desiredCopiesPreference: Int = LocalRedundancyPolicy.default.desiredCopies
+
+    /// The policy actually in force: what was asked for, bounded by the number
+    /// of places that could hold a copy. Registering a target raises it again
+    /// on its own, because nothing was thrown away to bound it.
+    var redundancyPolicy: LocalRedundancyPolicy {
+        get { LocalRedundancyPolicy(desiredCopies: min(desiredCopiesPreference, maxSettableCopies)) }
+        set {
+            guard newValue.desiredCopies != desiredCopiesPreference else { return }
+            desiredCopiesPreference = newValue.desiredCopies
+            defaults.set(desiredCopiesPreference, forKey: "desiredCopies")
             // Protection is judged against this number, so every verdict in
             // the app changes the moment it does.
             recomputeDerivedState()
-            audit(.policy, "Redundancy policy set to \(redundancyPolicy.description) per Local photo.")
+            audit(.policy, "Redundancy policy set to \(LocalRedundancyPolicy(desiredCopies: desiredCopiesPreference).description) per Local photo.")
         }
     }
+
+    /// What the user asked for, for the control that sets it: a slider that
+    /// snapped back to the bounded value could never be moved above it.
+    var requestedCopies: Int { desiredCopiesPreference }
 
     /// An unmanaged external volume just appeared; the UI asks whether to use
     /// it as managed local storage (and/or scan it for Takeout).
@@ -231,10 +260,12 @@ final class AppStore: ObservableObject {
         importFromApplePhotos = stored.object(forKey: "importFromApplePhotos") as? Bool ?? true
         iCloudPhotosEnabled = stored.object(forKey: "iCloudPhotosEnabled") as? Bool
         ignoredVolumeKeys = Set(stored.stringArray(forKey: "ignoredVolumeKeys") ?? [])
-        redundancyPolicy = LocalRedundancyPolicy(
-            desiredCopies: stored.object(forKey: "desiredCopies") as? Int
-                ?? LocalRedundancyPolicy.default.desiredCopies
-        )
+        // The stored preference directly, not through `redundancyPolicy`:
+        // that is a computed property now, and a computed setter *does* run in
+        // an initialiser — writing the default straight back to preferences
+        // and auditing a policy change nobody made, on every launch.
+        desiredCopiesPreference = stored.object(forKey: "desiredCopies") as? Int
+            ?? LocalRedundancyPolicy.default.desiredCopies
 
         loadAll()
 
@@ -1406,14 +1437,10 @@ final class AppStore: ObservableObject {
             importBatches = try catalog.fetchImportBatches()
             auditEvents = try catalog.fetchAuditEvents()
             takeoutArchives = try catalog.fetchTakeoutArchives()
-            // A policy asking for more copies than there are targets can never
-            // be met, and reports a healthy archive as 0% safe. Bound it to
-            // what exists; registering a target raises the ceiling again.
-            if redundancyPolicy.desiredCopies > maxSettableCopies {
-                let clamped = maxSettableCopies
-                audit(.policy, "Redundancy policy lowered to \(clamped) copy(s): that is how many targets are registered.")
-                redundancyPolicy = LocalRedundancyPolicy(desiredCopies: clamped)
-            }
+            // The policy in force is bounded by the targets that exist, and
+            // `redundancyPolicy` does that arithmetic on read. Nothing is
+            // written down here: overwriting what the user asked for is what
+            // made the bound permanent.
             recomputeDerivedState()
         } catch {
             lastError = "Catalog load failed: \(error.localizedDescription)"

@@ -47,20 +47,24 @@ struct PoliciesView: View {
     /// registration at a figure the user could neither see nor change.
     private var redundancyRow: some View {
         let targetCount = store.targets.count
-        let desired = store.redundancyPolicy.desiredCopies
+        // What was asked for, not what is currently possible. The stepper used
+        // to read the bounded number back, so with no drives registered it sat
+        // at one and could not be raised — the control for the app's central
+        // promise was unusable exactly when a new user would reach for it.
+        let desired = store.requestedCopies
         return VStack(alignment: .leading, spacing: 6) {
             Stepper(
                 value: Binding(
-                    get: { store.redundancyPolicy.desiredCopies },
+                    get: { store.requestedCopies },
                     set: { store.redundancyPolicy = LocalRedundancyPolicy(desiredCopies: $0) }
                 ),
-                in: 1...store.maxSettableCopies
+                in: 1...max(store.maxSettableCopies, LocalRedundancyPolicy.default.desiredCopies)
             ) {
                 HStack {
-                    Label("Keep \(store.redundancyPolicy.description)", systemImage: "square.stack.3d.up")
+                    Label("Keep \(LocalRedundancyPolicy(desiredCopies: desired).description)", systemImage: "square.stack.3d.up")
                         .font(.headline)
                     Spacer()
-                    Text("\(targetCount) target(s) registered")
+                    Text(targetCount == 1 ? "1 drive registered" : "\(targetCount) drives registered")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
