@@ -190,6 +190,55 @@ final class TakeoutTests: XCTestCase {
         XCTAssertFalse(TakeoutScanner.nameLooksLikeTakeout("takeouts"))
     }
 
+    /// A folder somebody made to keep their exports *in* is not an export. It
+    /// used to be treated as one because its name began with "takeout" — which
+    /// registered the container of a whole 254 GB archive as a single archive
+    /// of its own, double-counting everything inside it.
+    func testAFolderNamedAfterTakeoutIsNotItselfATakeout() {
+        for collisionName in ["Takeout", "Takeout 2", "Takeout (1)", "takeout-3", "Takeout2", "TAKEOUT_4"] {
+            XCTAssertTrue(
+                TakeoutScanner.nameLooksLikeTakeout(collisionName),
+                "\(collisionName) is what macOS names an unpacked export"
+            )
+        }
+        // A folder named after the zip it came out of is the other legitimate
+        // shape, and must keep being recognised.
+        XCTAssertTrue(
+            TakeoutScanner.isUnpackedTakeoutFolderName("takeout-20260710T081521Z-2-001")
+        )
+        for userName in [
+            "Takeout_Archive_2026", "Takeout backups", "takeouts",
+            "TakeoutBackups", "Takeout old stuff", "Takeout-2026-originals",
+        ] {
+            XCTAssertFalse(
+                TakeoutScanner.isUnpackedTakeoutFolderName(userName),
+                "\(userName) is a name a person chose, not one macOS or a zip produced"
+            )
+        }
+    }
+
+    /// The whole shape of the bug: an export unpacked inside a folder the user
+    /// named. The parts are found; the folder holding them is not an export.
+    func testAContainerFolderIsNotScannedAsAnExport() throws {
+        let root = try makeTempDirectory()
+        let container = root.appendingPathComponent("Takeout_Archive_2026", isDirectory: true)
+        for part in 1...2 {
+            let dir = container
+                .appendingPathComponent("takeout-S1-\(String(format: "%03d", part))", isDirectory: true)
+                .appendingPathComponent("Takeout/Google Photos", isDirectory: true)
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            try Data("img".utf8).write(to: dir.appendingPathComponent("IMG.jpg"))
+        }
+
+        let discovered = TakeoutScanner.scan(rootURL: root)
+
+        XCTAssertFalse(
+            discovered.contains { ($0.path as NSString).lastPathComponent == "Takeout_Archive_2026" },
+            "The folder holding the export is not the export"
+        )
+        XCTAssertEqual(discovered.count, 2, "Both parts inside it are still found")
+    }
+
     func testScannerDetectsRenamedRootByGooglePhotosChild() throws {
         let root = try makeTempDirectory()
         let renamed = root.appendingPathComponent("MyGoogleBackup", isDirectory: true)

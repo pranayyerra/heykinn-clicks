@@ -20,19 +20,117 @@ struct SourcesView: View {
     @State private var isExportSearchPickerPresented = false
     @State private var isFolderImportPickerPresented = false
     @State private var importRequest: TakeoutImportRequest?
+    @State private var scrollTarget: String?
+
+    // MARK: - The flow diagram
+
+    /// The three sources as the diagram sees them. One node per kind rather
+    /// than one per download: the diagram answers "where do my photos come
+    /// from, and is it all in yet?", and four cards for four zips of the same
+    /// download answers a question nobody asked. The breakdown is in the cards
+    /// underneath, which is where someone goes once they want it.
+    private var flowSources: [PhotoSource] {
+        [applePhotosSource, googleSource, folderSource]
+    }
+
+    private var applePhotosSource: PhotoSource {
+        let indexed = store.assets.filter { $0.providerLocalID != nil }.count
+        let library = store.applePhotosLibraryCount
+        let state: PhotoSource.State
+        switch store.applePhotosState {
+        case .notDetermined:
+            state = .notSet
+        case .denied:
+            state = .blocked("macOS is blocking access")
+        case .unavailable:
+            state = .blocked("Not available on this Mac")
+        case .connected:
+            if library == 0 {
+                state = .nothingFound
+            } else if indexed >= library {
+                state = .allIn(count: indexed)
+            } else {
+                state = .partlyIn(inArchive: indexed, total: library)
+            }
+        }
+        return PhotoSource(
+            id: "apple",
+            name: "Photos app",
+            symbol: "photo.on.rectangle.angled",
+            state: state,
+            detail: "The Photos library on this Mac"
+        )
+    }
+
+    private var googleSource: PhotoSource {
+        let awaiting = TakeoutExportSet.partsAwaitingImport(in: store.takeoutArchives)
+        let total = Set(
+            store.takeoutArchives.compactMap { archive in
+                archive.exportSetID.flatMap { set in archive.partNumber.map { "\(set)-\($0)" } }
+                    ?? archive.id.uuidString
+            }
+        ).count
+        let state: PhotoSource.State
+        if store.takeoutArchives.isEmpty {
+            state = .notSet
+        } else if awaiting == 0 {
+            state = .allIn(count: total)
+        } else {
+            state = .partlyIn(inArchive: total - awaiting, total: total)
+        }
+        return PhotoSource(
+            id: "google",
+            name: "Google Photos download",
+            symbol: "shippingbox",
+            state: state,
+            detail: store.takeoutArchives.isEmpty
+                ? "A copy of your photos from takeout.google.com"
+                : "Counted in files, because Google splits one download into several"
+        )
+    }
+
+    private var folderSource: PhotoSource {
+        let fromFolders = store.assets.filter {
+            $0.importOrigin == .localFolder || $0.importOrigin == .whatsapp
+        }.count
+        return PhotoSource(
+            id: "folder",
+            name: "Folders you have added",
+            symbol: "folder",
+            state: fromFolders == 0 ? .notSet : .allIn(count: fromFolders),
+            detail: "Photos copied in from a folder on a disk"
+        )
+    }
 
     var body: some View {
+        ScrollViewReader { scroller in
+            content.onChange(of: scrollTarget) { _, target in
+                guard let target else { return }
+                withAnimation { scroller.scrollTo(target, anchor: .top) }
+                scrollTarget = nil
+            }
+        }
+    }
+
+    private var content: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
                 introduction
+
+                SourceFlowView(
+                    sources: flowSources,
+                    photoCount: store.assets.count,
+                    onSelect: { scrollTarget = $0.id }
+                )
+                .padding(.vertical, 4)
 
                 if let activity = store.takeoutActivity {
                     TakeoutActivityBanner(activity: activity)
                 }
 
-                applePhotosCard
-                takeoutSection
-                folderCard
+                applePhotosCard.id("apple")
+                takeoutSection.id("google")
+                folderCard.id("folder")
             }
             .padding(20)
         }

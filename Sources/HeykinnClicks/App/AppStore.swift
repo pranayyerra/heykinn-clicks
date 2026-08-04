@@ -1307,6 +1307,13 @@ final class AppStore: ObservableObject {
                 repairs.append("attributed \(attributed) archive(s) to the drive holding them")
             }
 
+            // A folder registered as an export while holding other exports —
+            // counted twice in every total, and shown as an export of its own.
+            let containers = dropContainerArchives()
+            if containers > 0 {
+                repairs.append("stopped treating \(containers) folder(s) as exports when they only hold exports")
+            }
+
             // 3. Assets can reference a batch row that never got written by an
             // older build; synthesise it so import history is not lost.
             let knownBatchIDs = Set(importBatches.map(\.id))
@@ -3036,6 +3043,43 @@ final class AppStore: ObservableObject {
             )
         }
         return moved
+    }
+
+    /// Drops archives that merely *contain* other archives.
+    ///
+    /// A folder somebody made to keep their exports in is not an export. When
+    /// one gets registered as an archive, it is the sum of everything beneath
+    /// it: its size double-counts every part inside it in any total, it shows
+    /// up as an export of its own belonging to no set, and it reports importing
+    /// nothing because everything in it was already imported as the parts it is
+    /// made of.
+    ///
+    /// The rule needs no heuristic. One archive's path containing another's
+    /// says it outright, and the containing one is the one that is wrong: a zip
+    /// holds no rows, and an export folder inside an export folder is not a
+    /// shape Takeout produces.
+    @discardableResult
+    func dropContainerArchives() -> Int {
+        let byPath = takeoutArchives.map { ($0, $0.path.hasSuffix("/") ? $0.path : $0.path + "/") }
+        let containers = byPath.filter { candidate, prefix in
+            candidate.kind == .folder
+                && byPath.contains { other, _ in other.id != candidate.id && other.path.hasPrefix(prefix) }
+        }
+        guard !containers.isEmpty else { return 0 }
+        do {
+            try catalog.transaction {
+                for (container, _) in containers { try catalog.deleteTakeoutArchive(id: container.id) }
+            }
+        } catch {
+            lastError = "Could not tidy nested export records: \(error.localizedDescription)"
+            return 0
+        }
+        audit(
+            .importEvent,
+            "Stopped treating \(containers.count) folder(s) as export(s) of their own (e.g. \(containers[0].0.displayName)): each one holds other exports rather than being one. Nothing on disk was touched, and the exports inside them are unaffected."
+        )
+        loadAll()
+        return containers.count
     }
 
     /// Drops rows for parts recorded as gone from the app's own delivery

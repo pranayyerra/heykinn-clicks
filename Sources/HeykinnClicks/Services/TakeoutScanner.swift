@@ -58,9 +58,9 @@ enum TakeoutScanner {
                     enumerator?.skipDescendants()
                     continue
                 }
-                // "Takeout", plus extraction-collision variants: "Takeout 2",
-                // "Takeout (1)", "Takeout-3", "Takeout2".
-                if nameLooksLikeTakeout(name) {
+                // "Takeout" and its extraction-collision variants, or a folder
+                // named after the zip it came out of.
+                if isUnpackedTakeoutFolderName(name) {
                     addFolder(item)
                     enumerator?.skipDescendants()
                     continue
@@ -93,15 +93,32 @@ enum TakeoutScanner {
         return discovered.sorted { $0.path < $1.path }
     }
 
-    /// "takeout" optionally followed by a non-letter suffix: matches
-    /// "Takeout", "Takeout 2", "Takeout (1)", "takeout-3", "Takeout2" —
-    /// but not "takeouts".
+    /// A folder that is an unpacked Takeout, by either of the two names one can
+    /// end up with: the plain `Takeout` macOS writes when the zip is opened —
+    /// including the names it picks when one is already there, "Takeout 2",
+    /// "Takeout (1)", "takeout-3", "Takeout2" — or the zip's own name minus
+    /// `.zip`, which is what a folder extracted deliberately per part is called.
+    ///
+    /// Anything else is a name a person chose, and a name a person chose is not
+    /// evidence of anything. The rule used to be "starts with takeout, and the
+    /// next character is not a letter", which swallowed `Takeout_Archive_2026`
+    /// — a folder somebody made to keep their export *in*. That registered the
+    /// container of a whole 254 GB archive as a single archive of its own:
+    /// double-counted in every total, shown as an export belonging to no set,
+    /// and reporting that it imported nothing, because everything in it had
+    /// already been imported as the parts it is made of.
+    static func isUnpackedTakeoutFolderName(_ name: String) -> Bool {
+        nameLooksLikeTakeout(name) || TakeoutArchive.parseExportComponents(filename: name) != nil
+    }
+
+    /// The collision-variant half: after dropping the separators macOS uses,
+    /// what follows "takeout" must be empty or a number.
     static func nameLooksLikeTakeout(_ name: String) -> Bool {
         let lowered = name.lowercased()
         guard lowered.hasPrefix("takeout") else { return false }
-        let rest = lowered.dropFirst("takeout".count)
-        guard let first = rest.first else { return true }
-        return !first.isLetter
+        let tail = lowered.dropFirst("takeout".count)
+            .filter { !" -_()".contains($0) }
+        return tail.isEmpty || tail.allSatisfy(\.isNumber)
     }
 
     /// Peeks at the zip's file listing (via `unzip -Z1`) and checks whether its

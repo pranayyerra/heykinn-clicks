@@ -838,6 +838,55 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
     }
 
+    /// Catalogs already hold these rows, so fixing the scanner is only half of
+    /// it: an archive whose path contains another archive's is a container, and
+    /// reconciliation drops it without a rescan.
+    func testAnArchiveContainingOtherArchivesIsDropped() throws {
+        let (store, directory) = try makeStore()
+        let seed = try catalog(at: directory)
+        let targetID = UUID()
+
+        func archive(_ path: String, kind: TakeoutArchiveKind, part: Int?) -> TakeoutArchive {
+            TakeoutArchive(
+                id: UUID(), path: path, kind: kind, sizeBytes: 10, targetID: targetID,
+                discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
+                importedAssetCount: part == nil ? 0 : 100, skippedDuplicateCount: 0,
+                note: nil, exportSetID: part == nil ? nil : "S1", partNumber: part
+            )
+        }
+        let container = archive("/V/Owner/Takeout_Archive_2026", kind: .folder, part: nil)
+        try seed.upsertTakeoutArchive(container)
+        try seed.upsertTakeoutArchive(archive("/V/Owner/Takeout_Archive_2026/takeout-S1-001.zip", kind: .zip, part: 1))
+        try seed.upsertTakeoutArchive(archive("/V/Owner/Takeout_Archive_2026/takeout-S1-001", kind: .folder, part: 1))
+        store.loadAll()
+
+        XCTAssertEqual(store.dropContainerArchives(), 1)
+        XCTAssertNil(store.takeoutArchives.first { $0.id == container.id })
+        XCTAssertEqual(store.takeoutArchives.count, 2, "The exports inside it are untouched")
+    }
+
+    /// A zip holds no rows and an extracted folder is not nested inside another
+    /// export, so an ordinary drive loses nothing to this rule.
+    func testOrdinaryArchivesAreNotTreatedAsContainers() throws {
+        let (store, directory) = try makeStore()
+        let seed = try catalog(at: directory)
+        let targetID = UUID()
+        for part in 1...3 {
+            for (suffix, kind) in [(".zip", TakeoutArchiveKind.zip), ("", .folder)] {
+                try seed.upsertTakeoutArchive(TakeoutArchive(
+                    id: UUID(), path: "/V/Exports/takeout-S1-00\(part)\(suffix)", kind: kind,
+                    sizeBytes: 10, targetID: targetID, discoveredAt: Date(), importedAt: nil,
+                    importBatchID: nil, importedAssetCount: 0, skippedDuplicateCount: 0,
+                    note: nil, exportSetID: "S1", partNumber: part
+                ))
+            }
+        }
+        store.loadAll()
+
+        XCTAssertEqual(store.dropContainerArchives(), 0)
+        XCTAssertEqual(store.takeoutArchives.count, 6)
+    }
+
     // MARK: - Apple Photos: index
 
     private func libraryItem(
