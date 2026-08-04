@@ -637,4 +637,114 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertEqual(store.assets.count, after)
         XCTAssertEqual(store.assets.filter(\.isLivePhotoMotion).count, 1)
     }
+
+    // MARK: - Recovering capture-date provenance
+
+    /// A row as an install from before the provenance column would have left
+    /// it: a real date, no record of where it came from, and the raw EXIF
+    /// string still sitting in the summary.
+    private func legacyRow(
+        _ filename: String,
+        storedDate: Date,
+        exifText: String?
+    ) -> Asset {
+        var asset = makeAsset(hash: UUID().uuidString, filename: filename, captureDate: storedDate)
+        asset.captureDateSource = .unknown
+        if let exifText { asset.exifSummary["DateTimeOriginal"] = exifText }
+        return asset
+    }
+
+    /// The defect this fixes: 16,284 assets whose date was read from EXIF at
+    /// import displayed as an approximate year, because the backfill selected
+    /// them as needing work and then skipped every row that already had a
+    /// date. No drive is connected here — the evidence is in the catalog.
+    func testProvenanceIsRecoveredWithoutTouchingTheDateOrTheDisk() async throws {
+        let (store, directory) = try makeStore()
+        let text = "2016:05:08 14:22:07"
+        let stored = try XCTUnwrap(MetadataExtractor.parseExifDate(text))
+        let row = legacyRow("IMG_1.jpg", storedDate: stored, exifText: text)
+
+        let seed = try catalog(at: directory)
+        try seed.upsertAsset(row)
+        store.loadAll()
+        XCTAssertEqual(store.assetsByID[row.id]?.captureDateSource, .unknown, "Precondition")
+
+        store.recoverCaptureDates()
+        try await waitUntil("provenance recovery to finish") { store.takeoutActivity == nil }
+
+        let after = try XCTUnwrap(store.assetsByID[row.id])
+        XCTAssertEqual(after.captureDateSource, .fileMetadata)
+        XCTAssertTrue(after.captureDateSource.isExact, "The UI can stop saying 'approximate'")
+        XCTAssertEqual(after.captureDate, stored, "The date itself is never rewritten")
+    }
+
+    /// Invariant 2 at the row level. The EXIF string is there, but it no longer
+    /// reparses to the stored instant — on the real catalog, 2,091 rows whose
+    /// import happened under a different timezone. Declining is the correct
+    /// outcome, not a shortfall to paper over.
+    func testAnUnreproducibleDateKeepsItsUnknownSource() async throws {
+        let (store, directory) = try makeStore()
+        let text = "2016:05:08 14:22:07"
+        let drifted = try XCTUnwrap(MetadataExtractor.parseExifDate(text)).addingTimeInterval(5.5 * 3600)
+        let row = legacyRow("IMG_2.jpg", storedDate: drifted, exifText: text)
+
+        let seed = try catalog(at: directory)
+        try seed.upsertAsset(row)
+        store.loadAll()
+
+        store.recoverCaptureDates()
+        try await waitUntil("provenance recovery to finish") { store.takeoutActivity == nil }
+
+        let after = try XCTUnwrap(store.assetsByID[row.id])
+        XCTAssertEqual(after.captureDateSource, .unknown, "A source that cannot be re-derived is a guess")
+        XCTAssertEqual(after.captureDate, drifted, "And the date it does hold is still left alone")
+    }
+
+    /// Recovery must not change which assets read as impossibly dated — that
+    /// verdict is drawn on the date and the import, and this pass moves
+    /// neither.
+    func testRecoveryDoesNotChangeTheImpossibleDateVerdict() async throws {
+        let (store, directory) = try makeStore()
+        // A GoPro still: EXIF the app really did read, dated after the import.
+        let text = "2027:04:28 03:17:38"
+        let stored = try XCTUnwrap(MetadataExtractor.parseExifDate(text))
+        var row = legacyRow("GOPR1411.JPG", storedDate: stored, exifText: text)
+        row.importDate = stored.addingTimeInterval(-86_400 * 269)
+
+        let seed = try catalog(at: directory)
+        try seed.upsertAsset(row)
+        store.loadAll()
+        let before = store.assetsByID[row.id]?.impossibleCaptureDate
+        XCTAssertNotNil(before, "Precondition: flagged before recovery")
+
+        store.recoverCaptureDates()
+        try await waitUntil("provenance recovery to finish") { store.takeoutActivity == nil }
+
+        let after = try XCTUnwrap(store.assetsByID[row.id])
+        XCTAssertNotNil(after.impossibleCaptureDate, "Still flagged")
+        XCTAssertEqual(after.impossibleCaptureDate?.claimed, before?.claimed)
+        XCTAssertEqual(after.impossibleCaptureDate?.imported, before?.imported)
+        // What changed is only that the detail screen can now name the source.
+        XCTAssertEqual(after.impossibleCaptureDate?.source, .fileMetadata)
+    }
+
+    /// A row with a date and no evidence anywhere is left exactly as it was,
+    /// and the pass still completes rather than reporting a failure.
+    func testNoEvidenceLeavesTheRowUntouched() async throws {
+        let (store, directory) = try makeStore()
+        let stored = Date(timeIntervalSince1970: 1_462_710_127)
+        let row = legacyRow("scan.jpg", storedDate: stored, exifText: nil)
+
+        let seed = try catalog(at: directory)
+        try seed.upsertAsset(row)
+        store.loadAll()
+
+        store.recoverCaptureDates()
+        try await waitUntil("provenance recovery to finish") { store.takeoutActivity == nil }
+
+        let after = try XCTUnwrap(store.assetsByID[row.id])
+        XCTAssertEqual(after.captureDateSource, .unknown)
+        XCTAssertEqual(after.captureDate, stored)
+        XCTAssertNil(store.lastError)
+    }
 }

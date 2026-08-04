@@ -856,21 +856,30 @@ final class AppStore: ObservableObject {
             links.append((asset, original))
         }
 
-        // 2. Fill missing dates from whatever the archive still offers.
-        let needingDate = assets.filter {
-            $0.captureDate == nil || $0.captureDateSource == .unknown
+        // 2. Two different repairs, deliberately separated. A row with no date
+        //    needs one found; a row that has a date but does not say where it
+        //    came from needs only its provenance settled, and must keep the
+        //    date it already has. Lumping them together is what left 16,284
+        //    assets displaying an EXIF timestamp as an approximate year: they
+        //    were selected as needing work and then skipped for having a date.
+        let needingDate = assets.filter { $0.captureDate == nil }
+        let needingProvenance = assets.filter {
+            $0.captureDate != nil && $0.captureDateSource == .unknown
         }
-        guard !links.isEmpty || !needingDate.isEmpty else { return }
+        guard !links.isEmpty || !needingDate.isEmpty || !needingProvenance.isEmpty else { return }
 
         takeoutActivity = TakeoutActivity(
             phase: .reconciling, detail: "Capture dates",
-            itemIndex: 0, itemCount: needingDate.count,
-            note: "\(links.count) edit(s) to link, \(needingDate.count) date(s) to recover"
+            itemIndex: 0, itemCount: needingDate.count + needingProvenance.count,
+            note: "\(links.count) edit(s) to link, \(needingDate.count) date(s) to recover, "
+                + "\(needingProvenance.count) source(s) to identify"
         )
 
         Task { @MainActor in
             var linked = 0
             var recovered: [CaptureDateSource: Int] = [:]
+            /// Dates that were already right and now say where they came from.
+            var identified = 0
             do {
                 for link in links {
                     var edit = link.edit
@@ -889,8 +898,47 @@ final class AppStore: ObservableObject {
                     linked += 1
                 }
 
-                for (index, asset) in needingDate.enumerated() {
-                    guard var updated = assetsByID[asset.id], updated.captureDate == nil else { continue }
+                // 2a. Provenance the catalog can settle by itself. The raw
+                //     DateTimeOriginal string is already stored beside the
+                //     date, so most of this needs no drive connected and no
+                //     file read — and doing it first leaves the disk pass
+                //     below only the remainder. One transaction: at this scale
+                //     a fsync per row is the difference between seconds and
+                //     minutes.
+                let settledFromCatalog: [Asset] = needingProvenance.compactMap { asset in
+                    guard var updated = assetsByID[asset.id],
+                          let date = updated.captureDate,
+                          let source = CaptureDateResolver.provenance(
+                              forStoredDate: date, exifSummary: updated.exifSummary
+                          )
+                    else { return nil }
+                    updated.captureDateSource = source
+                    updated.updatedDate = Date()
+                    return updated
+                }
+                try catalog.transaction {
+                    for updated in settledFromCatalog {
+                        try catalog.upsertAsset(updated)
+                    }
+                }
+                for updated in settledFromCatalog {
+                    assetsByID[updated.id] = updated
+                    identified += 1
+                }
+                takeoutActivity?.itemIndex = identified
+                takeoutActivity?.note = "\(identified) source(s) identified from the catalog"
+
+                // 2b. Whatever is left needs the file itself: a date to find,
+                //     or a source the catalog could not evidence. One rule
+                //     covers both — a date already held is never overwritten,
+                //     and its source is adopted only if re-resolving lands on
+                //     the same instant. A file that says something different
+                //     now than at import settles nothing and stays unknown.
+                let settledIDs = Set(settledFromCatalog.map(\.id))
+                let needingDisk = needingDate
+                    + needingProvenance.filter { !settledIDs.contains($0.id) }
+                for (index, asset) in needingDisk.enumerated() {
+                    guard var updated = assetsByID[asset.id] else { continue }
                     guard let url = localFileURL(for: updated) else { continue }
 
                     var metadataDate: Date?
@@ -905,16 +953,22 @@ final class AppStore: ObservableObject {
                         sidecarSource: located?.1
                     )
                     guard let date = resolved.date else { continue }
-                    updated.captureDate = date
+                    if let held = updated.captureDate {
+                        guard CaptureDateResolver.reproduces(held, date) else { continue }
+                        identified += 1
+                    } else {
+                        updated.captureDate = date
+                        recovered[resolved.source, default: 0] += 1
+                    }
                     updated.captureDateSource = resolved.source
                     updated.updatedDate = Date()
                     try catalog.upsertAsset(updated)
                     assetsByID[updated.id] = updated
-                    recovered[resolved.source, default: 0] += 1
 
                     if index % 50 == 0 {
-                        takeoutActivity?.itemIndex = index
-                        takeoutActivity?.note = "\(recovered.values.reduce(0, +)) date(s) recovered"
+                        takeoutActivity?.itemIndex = settledFromCatalog.count + index
+                        takeoutActivity?.note = "\(recovered.values.reduce(0, +)) date(s) recovered, "
+                            + "\(identified) source(s) identified"
                     }
                 }
             } catch {
@@ -924,7 +978,15 @@ final class AppStore: ObservableObject {
                 .sorted { $0.value > $1.value }
                 .map { "\($0.value) \($0.key.displayName.lowercased())" }
                 .joined(separator: ", ")
-            audit(.system, "Capture dates: linked \(linked) edited photo(s) to their originals; recovered \(recovered.values.reduce(0, +)) date(s)\(summary.isEmpty ? "" : " (\(summary))").")
+            // The declined count is worth saying out loud rather than leaving
+            // as a silent shortfall: it is the honest part of the result, and
+            // a run that identifies nothing new should look settled rather
+            // than broken.
+            let declined = needingProvenance.count - identified
+            audit(.system, "Capture dates: linked \(linked) edited photo(s) to their originals; "
+                + "recovered \(recovered.values.reduce(0, +)) date(s)\(summary.isEmpty ? "" : " (\(summary))"); "
+                + "identified \(identified) previously unrecorded source(s)"
+                + (declined > 0 ? ", left \(declined) unknown for want of evidence" : "") + ".")
             takeoutActivity = nil
             loadAll()
         }

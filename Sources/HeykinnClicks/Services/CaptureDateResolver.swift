@@ -222,6 +222,37 @@ enum CaptureDateResolver {
         return .unknown
     }
 
+    // MARK: - Recovering provenance for a date already held
+
+    /// Whether re-deriving a capture date landed on the one the catalog holds.
+    /// EXIF is written to the second and the catalog stores a real number, so
+    /// "the same instant" is a sub-second comparison rather than equality.
+    static func reproduces(_ stored: Date, _ derived: Date) -> Bool {
+        abs(stored.timeIntervalSince(derived)) < 1
+    }
+    /// Recovers where a stored capture date came from, using only what the
+    /// catalog already holds — no drive need be connected.
+    ///
+    /// Rows imported before `capture_date_source` existed carry a real date and
+    /// no record of its origin, so the app understates itself: an EXIF
+    /// timestamp known to the second displays as an approximate year, because
+    /// `.unknown` is not exact. The evidence to settle that is already in
+    /// `exifSummary`, which kept the raw `DateTimeOriginal` string.
+    ///
+    /// A source is adopted only when re-deriving it reproduces the stored date.
+    /// Anything else stays unknown — a source that cannot be re-derived is a
+    /// guess about a guess, and the common cause of the mismatch (an EXIF
+    /// string parsed under a different local timezone) is exactly the case
+    /// where asserting `fileMetadata` would attach the camera's authority to a
+    /// date the camera did not give.
+    static func provenance(forStoredDate stored: Date, exifSummary: [String: String]) -> CaptureDateSource? {
+        guard let text = exifSummary["DateTimeOriginal"],
+              let parsed = MetadataExtractor.parseExifDate(text),
+              reproduces(stored, parsed)
+        else { return nil }
+        return .fileMetadata
+    }
+
     /// Creation date from a movie's container metadata — the video equivalent
     /// of EXIF, and previously not read at all.
     static func movieCreationDate(_ url: URL) async -> Date? {

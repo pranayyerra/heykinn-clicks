@@ -66,7 +66,11 @@ enum MetadataExtractor {
         return metadata
     }
 
-    private static func parseExifDate(_ string: String) -> Date? {
+    /// EXIF carries no zone, so the string is read in the machine's current
+    /// one. That is what import did, and re-reading it later on a Mac that has
+    /// since moved zones lands hours away — which is why provenance recovery
+    /// treats a failure to reproduce a stored date as a refusal, not a repair.
+    static func parseExifDate(_ string: String) -> Date? {
         let formatter = DateFormatter()
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"

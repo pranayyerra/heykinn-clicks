@@ -149,6 +149,59 @@ final class CaptureDateResolverTests: XCTestCase {
         )
     }
 
+    // MARK: - Recovering provenance for a date already held
+
+    /// The 16,284-row case: the date was read from EXIF at import, but the
+    /// provenance column did not exist yet, so the row says `unknown` and the
+    /// UI demotes a to-the-second timestamp to "(approximate)". The raw string
+    /// is still in the catalog, so no drive is needed to settle it.
+    func testProvenanceIsRecoveredFromTheStoredExifString() {
+        let text = "2016:05:08 14:22:07"
+        let stored = try? XCTUnwrap(MetadataExtractor.parseExifDate(text))
+        let source = CaptureDateResolver.provenance(
+            forStoredDate: try! XCTUnwrap(stored), exifSummary: ["DateTimeOriginal": text]
+        )
+        XCTAssertEqual(source, .fileMetadata)
+        XCTAssertTrue(try! XCTUnwrap(source).isExact, "This is what stops the UI saying 'approximate'")
+    }
+
+    /// EXIF carries no timezone, so a Mac that has changed zones since the
+    /// import reparses the same string to a different instant. On the real
+    /// catalog that is 2,091 rows, all at half-hour offsets. Asserting
+    /// `fileMetadata` there would attach the camera's authority to a date the
+    /// camera did not give — invariant 2 — so it must decline.
+    func testAStringThatNoLongerReproducesTheStoredDateIsDeclined() {
+        let text = "2016:05:08 14:22:07"
+        let stored = try! XCTUnwrap(MetadataExtractor.parseExifDate(text))
+        XCTAssertNil(CaptureDateResolver.provenance(
+            forStoredDate: stored.addingTimeInterval(5.5 * 3600),
+            exifSummary: ["DateTimeOriginal": text]
+        ), "A 5.5-hour offset is a timezone, not a camera")
+        XCTAssertNil(CaptureDateResolver.provenance(
+            forStoredDate: stored.addingTimeInterval(-3600),
+            exifSummary: ["DateTimeOriginal": text]
+        ))
+    }
+
+    func testNoExifStringYieldsNoProvenance() {
+        let stored = Date(timeIntervalSince1970: 1_462_710_127)
+        XCTAssertNil(CaptureDateResolver.provenance(forStoredDate: stored, exifSummary: [:]))
+        XCTAssertNil(CaptureDateResolver.provenance(
+            forStoredDate: stored, exifSummary: ["Make": "GoPro", "Model": "HERO9 Black"]
+        ), "Other EXIF keys say nothing about when")
+        XCTAssertNil(CaptureDateResolver.provenance(
+            forStoredDate: stored, exifSummary: ["DateTimeOriginal": "not a date"]
+        ))
+    }
+
+    /// Sub-second, because EXIF is written to the second and the catalog
+    /// stores a floating-point interval.
+    func testReproducesToleratesOnlySubSecondDifference() {
+        let base = Date(timeIntervalSince1970: 1_462_710_127)
+        XCTAssertTrue(CaptureDateResolver.reproduces(base, base.addingTimeInterval(0.4)))
+        XCTAssertFalse(CaptureDateResolver.reproduces(base, base.addingTimeInterval(2)))
+    }
+
     // MARK: - Dates that cannot be true
 
     private func makeAsset(
