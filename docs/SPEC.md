@@ -211,3 +211,5 @@ Earned against a real 248 GB archive; the stories are in git history.
 18. Reclamation, when it comes, is automatic and gated on proof, not prompts.
 19. The spec holds vision, invariants, and path; for shipped behavior the code
     is the source of truth.
+20. A date the file states can still be impossible; say so where it shows, and
+    change nothing.

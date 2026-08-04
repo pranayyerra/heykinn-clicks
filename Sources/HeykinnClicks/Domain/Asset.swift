@@ -119,6 +119,52 @@ struct Asset: Identifiable, Hashable {
     }
 }
 
+/// A capture date that falls after the day this archive imported the file.
+/// Impossible as a fact about a photograph — nothing is photographed after it
+/// has been copied off a disk — so the date is wrong even though the
+/// provenance behind it is honest. In practice it means a camera whose clock
+/// was never set: every file that camera wrote carries the same fiction.
+///
+/// Derived, never stored. It compares two fields the catalog already holds, so
+/// it costs no column, no migration and no backfill, and it cannot go stale
+/// against the row it describes. Nothing here rewrites the date or weakens the
+/// recorded source: the app says what the file said and, separately, that the
+/// file is wrong. A corrected date would be a guess wearing the camera's
+/// authority.
+struct ImpossibleCaptureDate: Hashable {
+    /// What the file, or its sidecar, claims.
+    var claimed: Date
+    /// When this archive first read the file — the upper bound on any real
+    /// capture time.
+    var imported: Date
+    /// Where the wrong date came from, kept rather than downgraded: the fault
+    /// is the camera's, and the provenance is the only clue to the cause.
+    var source: CaptureDateSource
+
+    /// How far past the import the claim sits.
+    var ahead: TimeInterval { claimed.timeIntervalSince(imported) }
+
+    /// A photo can legitimately be imported moments after it was taken, and
+    /// device clocks disagree by seconds to minutes. Only a claim that no
+    /// ordinary skew explains is worth putting in front of the user — a whole
+    /// day is far past any drift, and far short of the years an unset camera
+    /// clock produces.
+    static let clockSkewTolerance: TimeInterval = 24 * 60 * 60
+}
+
+extension Asset {
+    /// Non-nil when this asset dates itself after its own import. See
+    /// `ImpossibleCaptureDate`.
+    var impossibleCaptureDate: ImpossibleCaptureDate? {
+        guard let captureDate,
+              captureDate.timeIntervalSince(importDate) > ImpossibleCaptureDate.clockSkewTolerance
+        else { return nil }
+        return ImpossibleCaptureDate(
+            claimed: captureDate, imported: importDate, source: captureDateSource
+        )
+    }
+}
+
 enum AssetVariantKind: String, Codable, CaseIterable, Hashable {
     case original
     case livePhotoVideo

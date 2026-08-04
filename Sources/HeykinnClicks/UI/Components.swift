@@ -34,6 +34,45 @@ enum Formatters {
         formatter.unitsStyle = .abbreviated
         return formatter.localizedString(for: date, relativeTo: Date())
     }
+
+    /// A gap between two dates, in its own right rather than relative to now.
+    static func span(_ interval: TimeInterval) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.year, .month, .day]
+        formatter.unitsStyle = .full
+        formatter.maximumUnitCount = 2
+        return formatter.string(from: abs(interval)) ?? ""
+    }
+}
+
+extension ImpossibleCaptureDate {
+    /// Worded once, so the timeline header and the asset detail cannot drift
+    /// apart about what is wrong or about what the app did with it.
+    static let headline = "Dated after it was imported"
+    static let symbolName = "calendar.badge.exclamationmark"
+
+    /// The finding, with both dates named so the user can check it. Worded
+    /// without naming a source — the row above already says which one — so it
+    /// stays true whether the date came from EXIF or from a sidecar.
+    var finding: String {
+        """
+        The recorded capture date is \(Formatters.dateTime.string(from: claimed)), but \
+        this archive imported the file on \(Formatters.dateTime.string(from: imported)) — \
+        \(Formatters.span(ahead)) earlier. A photograph cannot be taken after it has been \
+        copied, so the camera's clock was wrong. A clock that was never set is the usual \
+        cause, and when it is, every file from that card carries the same offset.
+        """
+    }
+
+    /// What the app did about it, which is deliberately nothing.
+    var restraint: String {
+        """
+        The date is left exactly as it was found, and the timeline shows it where the \
+        file claims rather than where it belongs. Correcting it here would put a guess \
+        in place of a known-wrong fact, and a guess must never read as though it came \
+        from the camera.
+        """
+    }
 }
 
 extension ResidencyDomain {

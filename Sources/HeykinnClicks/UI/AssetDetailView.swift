@@ -53,6 +53,12 @@ struct AssetDetailView: View {
                             )
                             LabeledRow(label: "Date known from", value: asset.captureDateSource.displayName)
                             LabeledRow(label: "Imported", value: Formatters.dateTime.string(from: asset.importDate))
+                            // Sits between the two rows it is about, rather
+                            // than in a panel further down: the caveat is
+                            // useless anywhere the claim is not visible.
+                            if let impossible = asset.impossibleCaptureDate {
+                                impossibleDateNote(impossible)
+                            }
                             LabeledRow(label: "Size", value: Formatters.bytes.string(fromByteCount: asset.fileSize))
                             if let width = asset.pixelWidth, let height = asset.pixelHeight {
                                 LabeledRow(label: "Dimensions", value: "\(width) × \(height)")
@@ -220,6 +226,27 @@ struct AssetDetailView: View {
         } else {
             ContentUnavailableView("Asset not found", systemImage: "questionmark.square")
         }
+    }
+
+    /// The full account of an impossible capture date: what is wrong, and that
+    /// the app deliberately did not fix it. Both halves are needed — a warning
+    /// with no statement of restraint reads as a defect the app failed to
+    /// handle, rather than as a fact about the file.
+    private func impossibleDateNote(_ impossible: ImpossibleCaptureDate) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            Label(ImpossibleCaptureDate.headline, systemImage: ImpossibleCaptureDate.symbolName)
+                .font(.callout)
+                .foregroundStyle(.orange)
+            Text(impossible.finding)
+            Text(impossible.restraint)
+                .foregroundStyle(.secondary)
+        }
+        .font(.caption)
+        .fixedSize(horizontal: false, vertical: true)
+        .padding(8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
+        .padding(.top, 4)
     }
 
     private func presenceChips(_ asset: Asset) -> some View {

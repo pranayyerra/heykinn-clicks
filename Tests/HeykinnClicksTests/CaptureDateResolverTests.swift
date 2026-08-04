@@ -148,4 +148,106 @@ final class CaptureDateResolverTests: XCTestCase {
             )
         )
     }
+
+    // MARK: - Dates that cannot be true
+
+    private func makeAsset(
+        _ name: String = "GOPR1411.JPG",
+        captured: Date?,
+        imported: Date,
+        source: CaptureDateSource = .fileMetadata
+    ) -> Asset {
+        Asset(
+            id: UUID(), kind: .photo, originalFilename: name, importOrigin: .googleTakeout,
+            captureDate: captured, importDate: imported, updatedDate: imported, fileSize: 1,
+            pixelWidth: nil, pixelHeight: nil, contentHash: UUID().uuidString,
+            residency: .local, residencySource: .importDefault, presence: .localOnly,
+            stagingRelativePath: nil, importBatchID: nil, exifSummary: [:],
+            captureDateSource: source
+        )
+    }
+
+    /// The GoPro case: a camera whose clock was never set stamps every file
+    /// with a date years ahead of the import that read it.
+    func testCaptureDateAfterImportIsFlagged() {
+        let imported = Date(timeIntervalSince1970: 1_785_660_745)  // 2026-08
+        let asset = makeAsset(captured: Date(timeIntervalSince1970: 1_808_882_116), imported: imported)  // 2027-04
+        let impossible = try? XCTUnwrap(asset.impossibleCaptureDate)
+        XCTAssertNotNil(impossible)
+        XCTAssertEqual(impossible?.imported, imported)
+        XCTAssertGreaterThan(impossible?.ahead ?? 0, 0)
+    }
+
+    /// The provenance is honest and must survive: the file really did say
+    /// this. Flagging the value may never quietly downgrade the source.
+    func testFlaggingPreservesTheRecordedSourceAndDate() {
+        let captured = Date(timeIntervalSince1970: 1_808_882_116)
+        var asset = makeAsset(captured: captured, imported: Date(timeIntervalSince1970: 1_785_660_745))
+        let impossible = asset.impossibleCaptureDate
+        XCTAssertEqual(impossible?.claimed, captured)
+        XCTAssertEqual(impossible?.source, .fileMetadata, "The camera is at fault, not the reading of it")
+        XCTAssertEqual(asset.captureDate, captured, "Detection is derived; it never rewrites the row")
+        XCTAssertEqual(asset.captureDateSource, .fileMetadata)
+
+        // And it holds for a date the app already calls approximate: a wrong
+        // year from a folder is still a date that cannot be in the future.
+        asset.captureDateSource = .folderYear
+        XCTAssertEqual(asset.impossibleCaptureDate?.source, .folderYear)
+    }
+
+    func testOrdinaryPastDatesAreNotFlagged() {
+        let imported = Date(timeIntervalSince1970: 1_785_660_745)
+        XCTAssertNil(makeAsset(captured: Date(timeIntervalSince1970: 1_390_612_940), imported: imported)
+            .impossibleCaptureDate)
+        XCTAssertNil(makeAsset(captured: nil, imported: imported).impossibleCaptureDate,
+                     "No date is not a wrong date")
+    }
+
+    /// A photo imported moments after it was taken, off a device whose clock
+    /// runs a little fast, is not evidence of anything. Only a gap no ordinary
+    /// skew explains is worth telling the user about.
+    func testClockSkewWithinADayIsNotReportedAsImpossible() {
+        let imported = Date(timeIntervalSince1970: 1_785_660_745)
+        XCTAssertNil(makeAsset(captured: imported.addingTimeInterval(90), imported: imported)
+            .impossibleCaptureDate)
+        XCTAssertNil(makeAsset(captured: imported.addingTimeInterval(23 * 3600), imported: imported)
+            .impossibleCaptureDate)
+        XCTAssertNotNil(makeAsset(captured: imported.addingTimeInterval(25 * 3600), imported: imported)
+            .impossibleCaptureDate)
+    }
+
+    /// The bound is the import date, not "now": a catalog opened years later
+    /// must reach the same verdict about the same row.
+    func testTheBoundIsTheImportDateNotTheCurrentClock() {
+        let longAgo = Date(timeIntervalSince1970: 1_000_000_000)  // 2001
+        let asset = makeAsset(captured: longAgo.addingTimeInterval(86_400 * 400), imported: longAgo)
+        XCTAssertNotNil(asset.impossibleCaptureDate,
+                        "Both dates are in the past, and the claim is still impossible")
+    }
+
+    /// The wording is the whole feature — the finding is useless if it does not
+    /// let the user check it, and saying what is wrong without saying that the
+    /// app left it alone reads as a defect the app failed to handle.
+    func testTheExplanationNamesBothDatesAndTheRestraint() throws {
+        let asset = makeAsset(
+            captured: Date(timeIntervalSince1970: 1_808_882_116),
+            imported: Date(timeIntervalSince1970: 1_785_660_745)
+        )
+        let impossible = try XCTUnwrap(asset.impossibleCaptureDate)
+
+        // Both dates appear as the app formats them elsewhere, so the claim is
+        // checkable against the rows directly above it.
+        XCTAssertTrue(impossible.finding.contains(Formatters.dateTime.string(from: impossible.claimed)))
+        XCTAssertTrue(impossible.finding.contains(Formatters.dateTime.string(from: impossible.imported)))
+        XCTAssertTrue(impossible.finding.contains(Formatters.span(impossible.ahead)),
+                      "The gap is stated, not left for the user to subtract")
+        XCTAssertFalse(Formatters.span(impossible.ahead).isEmpty)
+
+        // Invariant 2 in the copy itself: the app must say it changed nothing.
+        XCTAssertTrue(impossible.restraint.contains("left exactly as it was found"))
+
+        print("headline:  \(ImpossibleCaptureDate.headline)")
+        print("finding:   \(impossible.finding)")
+        print("restraint: \(impossible.restraint)")
+    }
 }

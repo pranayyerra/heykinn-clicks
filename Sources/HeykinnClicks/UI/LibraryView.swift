@@ -42,7 +42,13 @@ struct LibraryView: View {
     }
 
     /// Timeline-friendly grouping by capture month (falling back to import date).
-    private var monthGroups: [(month: String, assets: [Asset])] {
+    ///
+    /// Months that cannot exist — a camera whose clock was never set dates its
+    /// files years ahead — sort to the top like any other. They are labelled
+    /// rather than moved: the grouping follows the recorded date, and quietly
+    /// filing a file somewhere other than where its own metadata puts it would
+    /// be the same guess as rewriting the date.
+    private var monthGroups: [(month: String, assets: [Asset], impossibleCount: Int)] {
         let grouped = Dictionary(grouping: filteredAssets) { asset -> Date in
             let date = asset.captureDate ?? asset.importDate
             let components = Calendar.current.dateComponents([.year, .month], from: date)
@@ -50,7 +56,13 @@ struct LibraryView: View {
         }
         return grouped
             .sorted { $0.key > $1.key }
-            .map { (Formatters.monthYear.string(from: $0.key), $0.value) }
+            .map { month, assets in
+                (
+                    Formatters.monthYear.string(from: month),
+                    assets,
+                    assets.count { $0.impossibleCaptureDate != nil }
+                )
+            }
     }
 
     var body: some View {
@@ -69,12 +81,28 @@ struct LibraryView: View {
                             }
                             .padding(.horizontal)
                         } header: {
-                            Text(group.month)
-                                .font(.headline)
-                                .padding(.horizontal)
-                                .padding(.vertical, 6)
-                                .frame(maxWidth: .infinity, alignment: .leading)
-                                .background(.bar)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(group.month)
+                                    .font(.headline)
+                                // Said on the section, not on every cell: an
+                                // unset camera clock takes a whole month with
+                                // it, and a badge repeated down every
+                                // thumbnail would compete with the protection
+                                // marks, which are about the archive's safety
+                                // rather than about a wrong date.
+                                if group.impossibleCount > 0 {
+                                    Label(
+                                        impossibleNote(count: group.impossibleCount, of: group.assets.count),
+                                        systemImage: ImpossibleCaptureDate.symbolName
+                                    )
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.horizontal)
+                            .padding(.vertical, 6)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(.bar)
                         }
                     }
                     if filteredAssets.isEmpty {
@@ -140,6 +168,17 @@ struct LibraryView: View {
                 }
             }
         }
+    }
+
+    /// A month that has not happened yet needs its position explained, not
+    /// defended: one line saying what the files claim and that nothing was
+    /// done about it.
+    private func impossibleNote(count: Int, of total: Int) -> String {
+        let subject = count == total
+            ? "These files date themselves"
+            : "\(count) of these files date themselves"
+        return "\(subject) after the day this archive imported them — usually a camera "
+            + "clock that was never set. Shown where the files claim, unchanged."
     }
 
     private func assetCell(_ asset: Asset) -> some View {
