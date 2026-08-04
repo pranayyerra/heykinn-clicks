@@ -6,8 +6,9 @@ extension CatalogStore {
         try database.run("""
         INSERT INTO takeout_archives (id, path, kind, size_bytes, drive_id, discovered_at,
             imported_at, import_batch_id, imported_asset_count, skipped_duplicate_count, note,
-            export_set_id, part_number, content_hash, imported_through_index, imported_file_total, quick_checksum)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            export_set_id, part_number, content_hash, imported_through_index, imported_file_total, quick_checksum,
+            missing_since)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             path = excluded.path,
             kind = excluded.kind,
@@ -24,7 +25,8 @@ extension CatalogStore {
             content_hash = excluded.content_hash,
             imported_through_index = excluded.imported_through_index,
             imported_file_total = excluded.imported_file_total,
-            quick_checksum = excluded.quick_checksum;
+            quick_checksum = excluded.quick_checksum,
+            missing_since = excluded.missing_since;
         """, [
             .text(archive.id.uuidString),
             .text(archive.path),
@@ -43,6 +45,7 @@ extension CatalogStore {
             .int(Int64(archive.importedThroughIndex)),
             .int(Int64(archive.importedFileTotal)),
             .optionalText(archive.quickChecksum),
+            .date(archive.missingSince),
         ])
     }
 
@@ -50,7 +53,8 @@ extension CatalogStore {
         try database.query("""
         SELECT id, path, kind, size_bytes, drive_id, discovered_at, imported_at,
                import_batch_id, imported_asset_count, skipped_duplicate_count, note,
-               export_set_id, part_number, content_hash, imported_through_index, imported_file_total, quick_checksum
+               export_set_id, part_number, content_hash, imported_through_index, imported_file_total, quick_checksum,
+               missing_since
         FROM takeout_archives ORDER BY discovered_at DESC;
         """) { row in
             TakeoutArchive(
@@ -70,7 +74,8 @@ extension CatalogStore {
                 importedThroughIndex: Int(row.int(14)),
                 importedFileTotal: Int(row.int(15)),
                 contentHash: row.optionalText(13),
-                quickChecksum: row.optionalText(16)
+                quickChecksum: row.optionalText(16),
+                missingSince: row.optionalDate(17)
             )
         }
     }

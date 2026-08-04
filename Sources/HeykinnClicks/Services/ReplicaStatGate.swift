@@ -46,8 +46,13 @@ enum ReplicaStatGate {
         case baselineRecorded
         /// Size or modification date moved: the bytes must be read again.
         case changed(reason: String)
-        /// Not where the catalog says it is. Path repair's business, not this
-        /// gate's — saying anything else here would double-report one fault.
+        /// Not there. Path repair runs first and owns *relocation* — content
+        /// the user moved is repointed before this gate looks, and a replica
+        /// it could not place is already recorded missing and never reaches
+        /// here. What is left is the case path repair cannot see: one file
+        /// deleted from inside a directory that still resolves, and the
+        /// archive-backed replicas whose recorded path it does not even
+        /// examine. Reporting absence is not a claim about bytes.
         case absent
     }
 

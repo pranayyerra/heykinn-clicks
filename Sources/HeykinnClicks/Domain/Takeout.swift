@@ -51,10 +51,37 @@ struct TakeoutArchive: Identifiable, Hashable {
     /// Fast partial fingerprint (see `HashingService.quickChecksum`). Kept
     /// apart from `contentHash` so a spot check is never presented as proof.
     var quickChecksum: String? = nil
+    /// When the app looked for this archive on its own connected target and
+    /// the file was not there.
+    ///
+    /// The row survives the file, because the row also records what was
+    /// imported from this part and that history is true whether or not the
+    /// bytes still exist. What it must stop doing is counting as a copy: a
+    /// deleted export part is a copy the archive no longer has, and an archive
+    /// still listed as a holder is the app claiming redundancy it does not
+    /// have. Only ever set from a target that was reachable at the time —
+    /// an unplugged drive still holds what it held.
+    var missingSince: Date? = nil
 
     var displayName: String { (path as NSString).lastPathComponent }
     var url: URL { URL(fileURLWithPath: path) }
     var isImported: Bool { importedAt != nil }
+    /// Whether this archive's bytes can still be counted as a copy of its part.
+    var holdsBytes: Bool { missingSince == nil }
+
+    /// The export part this archive is a copy of, named the way a replica
+    /// names the part backing it (`archivepart:takeout-<set>-<part>`).
+    var exportPartStem: String? {
+        guard let exportSetID, let partNumber else { return nil }
+        return Self.partStem(setID: exportSetID, partNumber: partNumber)
+    }
+
+    /// The one place an export part's stem is spelled, so a zip, the folder
+    /// extracted from it, the replica pointing at it and the plan that counts
+    /// it all agree on the name.
+    static func partStem(setID: String, partNumber: Int) -> String {
+        "takeout-\(setID)-\(String(format: "%03d", partNumber))"
+    }
 
     /// Parses `takeout-<session>-<part>.zip` (Google's split-download naming)
     /// or the same name without `.zip` — the natural name of a folder someone

@@ -382,6 +382,153 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertEqual(store.replicationTasks.filter { $0.action == .verify }.count, 0)
     }
 
+    // MARK: - Deleted export archives
+
+    /// Seeds a target holding one export part as a zip, with the assets inside
+    /// it recorded as zip-member replicas — the shape a Takeout drive actually
+    /// has after reconciliation.
+    private func seedExportZip(
+        store: AppStore,
+        directory: URL,
+        mount: URL,
+        targetID: UUID
+    ) throws -> (asset: Asset, zip: URL, archiveID: UUID) {
+        let zip = mount.appendingPathComponent("Exports/takeout-S1-001.zip")
+        try FileManager.default.createDirectory(
+            at: zip.deletingLastPathComponent(), withIntermediateDirectories: true
+        )
+        try Data("a zip standing in for ten gigabytes".utf8).write(to: zip)
+
+        let asset = makeAsset(hash: "hash-inside-the-zip", filename: "IMG_0001.jpg")
+        let archiveID = UUID()
+        let seed = try catalog(at: directory)
+        try seed.upsertAsset(asset)
+        try seed.upsertReplicaState(TargetReplicaState(
+            assetID: asset.id, targetID: targetID, state: .present,
+            relativePath: "zipmember:Exports/takeout-S1-001.zip!Takeout/Google Photos/IMG_0001.jpg",
+            lastVerifiedAt: Date()
+        ))
+        try seed.upsertTakeoutArchive(TakeoutArchive(
+            id: archiveID, path: zip.path, kind: .zip, sizeBytes: 34,
+            targetID: targetID, discoveredAt: Date(), importedAt: Date(),
+            importBatchID: nil, importedAssetCount: 1, skippedDuplicateCount: 0,
+            note: nil, exportSetID: "S1", partNumber: 1
+        ))
+        store.loadAll()
+        return (asset, zip, archiveID)
+    }
+
+    /// The reported bug: a Takeout zip deleted from a connected drive left the
+    /// archive reading as fully protected. Nothing saw it — the recorded hashes
+    /// did not change so the trees agreed, the directory holding the zip was
+    /// still there so the anchor check was happy, and path repair never looks
+    /// at archive-backed replicas at all.
+    func testADeletedExportZipStopsCountingAsProtection() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        let seeded = try seedExportZip(
+            store: store, directory: directory, mount: mount, targetID: targetID
+        )
+
+        store.checkReplicaStats(for: targetID)
+        XCTAssertEqual(
+            store.protectionStates[seeded.asset.id], .fullyReplicated,
+            "While the zip is there, the copy inside it is real"
+        )
+
+        try FileManager.default.removeItem(at: seeded.zip)
+
+        XCTAssertEqual(store.checkArchivePresence(for: targetID).vanished, 1)
+        XCTAssertEqual(store.checkReplicaStats(for: targetID).missing, 1)
+
+        XCTAssertEqual(
+            store.replicaStates.first { $0.assetID == seeded.asset.id }?.state, .missing,
+            "The bytes backing this copy are gone, so the copy is gone"
+        )
+        XCTAssertNotEqual(
+            store.protectionStates[seeded.asset.id], .fullyReplicated,
+            "An archive that lost its only copy of a photo is not fully replicated"
+        )
+        XCTAssertEqual(
+            store.takeoutArchives.first { $0.id == seeded.archiveID }?.holdsBytes, false
+        )
+        XCTAssertTrue(
+            store.archivePlan.partsNeedingWork.contains { $0.displayName == "takeout-S1-001" },
+            "The part is now short a copy, which is the work the user needs offered"
+        )
+    }
+
+    /// The row outlives the file: what was imported out of that part happened,
+    /// and stays true. What must stop is the row counting as a copy.
+    func testADeletedArchiveKeepsItsImportHistory() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        let seeded = try seedExportZip(
+            store: store, directory: directory, mount: mount, targetID: targetID
+        )
+
+        try FileManager.default.removeItem(at: seeded.zip)
+        store.checkArchivePresence(for: targetID)
+
+        let archive = try XCTUnwrap(store.takeoutArchives.first { $0.id == seeded.archiveID })
+        XCTAssertTrue(archive.isImported)
+        XCTAssertEqual(archive.importedAssetCount, 1)
+        XCTAssertNotNil(archive.missingSince)
+    }
+
+    /// A file put back is not a permanent verdict — the next look clears it,
+    /// and the replicas it backs are claimable again.
+    func testAnArchivePutBackIsNoLongerRecordedAsGone() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        let seeded = try seedExportZip(
+            store: store, directory: directory, mount: mount, targetID: targetID
+        )
+
+        try FileManager.default.removeItem(at: seeded.zip)
+        XCTAssertEqual(store.checkArchivePresence(for: targetID).vanished, 1)
+
+        try Data("a zip standing in for ten gigabytes".utf8).write(to: seeded.zip)
+        XCTAssertEqual(store.checkArchivePresence(for: targetID).returned, 1)
+        XCTAssertNil(store.takeoutArchives.first { $0.id == seeded.archiveID }?.missingSince)
+        XCTAssertEqual(
+            store.archivePlan.parts.first { $0.displayName == "takeout-S1-001" }?.targetIDs,
+            [targetID],
+            "The drive holds the part again"
+        )
+    }
+
+    /// A drive pulled mid-check makes every `stat` fail at once. Writing that
+    /// down as loss would turn an unplug into a catalog full of missing copies
+    /// — the loudest possible way for a check to be wrong.
+    func testAnUnpluggedDriveIsNotRecordedAsDataLoss() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        let seeded = try seedExportZip(
+            store: store, directory: directory, mount: mount, targetID: targetID
+        )
+        store.checkReplicaStats(for: targetID)
+
+        // The whole volume goes away, not one file on it.
+        try FileManager.default.removeItem(at: mount)
+
+        XCTAssertEqual(store.checkArchivePresence(for: targetID).vanished, 0)
+        XCTAssertEqual(store.checkReplicaStats(for: targetID).missing, 0)
+        XCTAssertEqual(
+            store.replicaStates.first { $0.assetID == seeded.asset.id }?.state, .present,
+            "Out of reach is not gone"
+        )
+        XCTAssertNil(store.takeoutArchives.first { $0.id == seeded.archiveID }?.missingSince)
+    }
+
     // MARK: - Apple Photos: index
 
     private func libraryItem(

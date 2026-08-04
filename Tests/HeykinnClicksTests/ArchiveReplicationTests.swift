@@ -193,6 +193,47 @@ final class ArchiveReplicationTests: XCTestCase {
         XCTAssertEqual(plan.partsNeedingWork.map(\.partNumber).sorted(), [10, 11, 12])
         XCTAssertEqual(plan.bytesOutstanding, 3_000)
     }
+
+    /// An archive the app looked for on its connected drive and did not find is
+    /// not a copy. Counting the row rather than the file is how a deleted
+    /// export part went on reading as redundancy.
+    func testAnArchiveFoundToBeGoneStopsCountingAsACopy() {
+        let a = UUID(), b = UUID()
+        var deleted = archive(part: 1, drive: a)
+        deleted.missingSince = Date()
+
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [deleted, archive(part: 1, drive: b)], managedTargetIDs: [a, b]
+        )
+        XCTAssertEqual(
+            plan.parts.first?.redundancy(acrossTargets: [a, b]), .singleCopy,
+            "One drive still has the part; the other's copy was deleted"
+        )
+        XCTAssertFalse(plan.isSatisfied)
+        XCTAssertEqual(
+            plan.parts.first?.targetsNeedingACopy(managedTargetIDs: [a, b]), [a],
+            "The drive that lost it is the one owed a copy"
+        )
+    }
+
+    /// The extracted folder is the same part. A drive that still has the folder
+    /// has not lost the part just because its zip twin was deleted.
+    func testAPartSurvivingAsItsExtractedTwinIsStillHeld() {
+        let a = UUID(), b = UUID()
+        var deletedZip = archive(part: 1, drive: a)
+        deletedZip.missingSince = Date()
+
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [
+                deletedZip,
+                archive(part: 1, drive: a, kind: .folder),
+                archive(part: 1, drive: b),
+            ],
+            managedTargetIDs: [a, b]
+        )
+        XCTAssertEqual(plan.parts.first?.redundancy(acrossTargets: [a, b]), .redundantUnverified)
+        XCTAssertTrue(plan.isSatisfied)
+    }
 }
 
 /// An asset is only protected by the targets holding *its own* part. Treating

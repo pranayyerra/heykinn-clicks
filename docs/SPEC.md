@@ -69,10 +69,13 @@ Shipped and tested; the pointers are where to look.
 - **Verification** — binary protection verdict with check-standing as
   evidence; the aimed-reads triad complete (Merkle-tree agreement between
   targets, anchor checks with in-place path repair, and the size/mtime gate on
-  connect, which is the only thing that sees a file edited under an intact
-  path); background rot patrol; sampled quick checksum with its limits stated
+  connect, which is the only thing that sees a file edited *or deleted* under
+  an intact path — including the export archives, which path repair never
+  examines and the discovery scan only ever adds to); background rot patrol;
+  sampled quick checksum with its limits stated
   in type, UI, and tests: `Domain/Protection.swift`, `Domain/MerkleTree.swift`,
-  `Services/ReplicaPathRepair.swift`, `Services/ReplicaStatGate.swift`.
+  `Services/ReplicaPathRepair.swift`, `Services/ReplicaStatGate.swift`,
+  `AppStore.checkArchivePresence`.
 - **Ingest** — Google Takeout in full: split parts, cross-part dedupe, Live
   Photo pairing across parts, capture-date precedence with provenance,
   structural year detection, edited-variant linking: `Services/Takeout*`,
@@ -213,3 +216,8 @@ Earned against a real 248 GB archive; the stories are in git history.
     is the source of truth.
 20. A date the file states can still be impossible; say so where it shows, and
     change nothing.
+21. A discovery scan only ever adds; something has to notice what left. A
+    deleted export part is a copy the archive no longer has, and the catalog
+    row that outlives it must stop counting as one — but only ever from a
+    target that was reachable at the time, because an unplug makes every
+    check fail at once.

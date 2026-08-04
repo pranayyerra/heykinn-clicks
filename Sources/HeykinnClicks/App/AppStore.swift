@@ -1499,6 +1499,13 @@ final class AppStore: ObservableObject {
         // backlog starts syncing on its own (serially, behind any running sync),
         // and gets a Takeout sweep so newly landed archives surface unprompted.
         let newlyConnected = Set(targetMonitor.reachablePaths.keys).subtracting(previouslyConnected)
+        // A target that went away has to be looked at properly when it comes
+        // back: its content can have changed entirely while it was gone, which
+        // is the whole reason connect-time work exists. Without this the
+        // pipeline ran once per launch and a reconnect was a no-op.
+        for targetID in previouslyConnected.subtracting(Set(targetMonitor.reachablePaths.keys)) {
+            takeoutPipelineCompletedTargetIDs.remove(targetID)
+        }
         for targetID in newlyConnected {
             let name = targetsByID[targetID]?.name ?? "drive"
             endQuiesce(targetID)
@@ -1507,6 +1514,11 @@ final class AppStore: ObservableObject {
             // Before anything reads or copies: confirm the paths still resolve.
             // Content the user moved must be repointed, not copied again.
             repairReplicaPaths(for: targetID)
+            // Then: are the export archives this drive is credited with still
+            // on it? One stat each, and it must come before the replica gate
+            // so a part that survives only as its extracted twin is stat-ed
+            // where the bytes actually are.
+            checkArchivePresence(for: targetID)
             // Then the cheap look at what those paths now contain. Runs after
             // the repair so a moved file is stat-ed where it actually is.
             checkReplicaStats(for: targetID)
@@ -1728,7 +1740,12 @@ final class AppStore: ObservableObject {
                             || existing.exportSetID != discovered.exportSetID
                             || existing.partNumber != discovered.partNumber
                             || (existing.targetID == nil && attributedDriveID != nil)
+                            // The scan is looking straight at it, so whatever
+                            // the catalog remembered about it being gone is
+                            // out of date.
+                            || existing.missingSince != nil
                         if changed {
+                            existing.missingSince = nil
                             existing.sizeBytes = discovered.sizeBytes
                             existing.exportSetID = discovered.exportSetID
                             existing.partNumber = discovered.partNumber
@@ -2690,6 +2707,17 @@ final class AppStore: ObservableObject {
                now.timeIntervalSince(last) < Self.anchorCheckInterval { continue }
             lastAnchorCheck[targetID] = now
 
+            // A whole export part deleted under an intact directory is
+            // invisible to the anchor check, and there are a handful of these
+            // files against tens of thousands of replicas — so confirming they
+            // are still there fits the same budget, and is the difference
+            // between a lost copy noticed in a minute and one noticed at the
+            // next reconnect. The replica pass is only worth its stats once
+            // something has actually gone.
+            if checkArchivePresence(for: targetID).vanished > 0 {
+                checkReplicaStats(for: targetID)
+            }
+
             guard let anchors = targetAnchors[targetID], !anchors.isEmpty else { continue }
             let moved = anchors.contains { anchor in
                 !FileManager.default.fileExists(atPath: mountURL.appendingPathComponent(anchor).path)
@@ -2793,6 +2821,105 @@ final class AppStore: ObservableObject {
         return (repaired, unresolved)
     }
 
+    /// Re-confirms the target is still the thing sitting at this path, checked
+    /// immediately before an absence is written down.
+    ///
+    /// A drive pulled mid-pass makes every `stat` fail at once, and the marker
+    /// is what separates "the file is gone" from "the drive is gone". Without
+    /// it an unplug would be recorded as data loss across the whole target —
+    /// the loudest possible way to be wrong.
+    private func targetIsStillMounted(_ targetID: UUID) -> Bool {
+        guard let target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
+            return false
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: mountURL.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return false }
+        // A marker naming a different target means another volume is mounted
+        // where this one was; absences measured against it are about the wrong
+        // disk. No marker at all is not disqualifying — a volume matched by
+        // UUID after its marker was deleted is still that volume.
+        if let marker = TargetMonitor.readMarker(at: mountURL) {
+            return marker.targetID == target.id && marker.markerToken == target.markerToken
+        }
+        return true
+    }
+
+    /// Confirms the export archives recorded on a connected target are still
+    /// there, and records the ones that are not.
+    ///
+    /// The scan that discovers archives only ever adds, and path repair only
+    /// looks at whole directories moving — so a zip deleted from inside a
+    /// folder that still exists was invisible to both, and the catalog went on
+    /// counting it as one of the part's copies. That is the archive claiming
+    /// redundancy it does not have, which is the one thing it may never do.
+    ///
+    /// Only ever run against a target that is reachable right now. An archive
+    /// on an unplugged drive is not missing, it is out of reach, and the two
+    /// must never be confused: absent targets still count.
+    @discardableResult
+    func checkArchivePresence(for targetID: UUID) -> (vanished: Int, returned: Int) {
+        guard let target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
+            return (0, 0)
+        }
+        // Only archives whose recorded path is under this target's *current*
+        // mount. One recorded at a mount point the volume no longer has is not
+        // missing, it is being looked for in the wrong place — repointing that
+        // is path repair's job, and calling it loss here would be a claim made
+        // from the wrong address.
+        let prefix = mountURL.path.hasSuffix("/") ? mountURL.path : mountURL.path + "/"
+        let mine = takeoutArchives.filter { $0.path.hasPrefix(prefix) }
+        guard !mine.isEmpty else { return (0, 0) }
+
+        var vanished: [TakeoutArchive] = []
+        var returned: [TakeoutArchive] = []
+        for archive in mine {
+            let exists = FileManager.default.fileExists(atPath: archive.path)
+            if !exists, archive.holdsBytes {
+                vanished.append(archive)
+            } else if exists, !archive.holdsBytes {
+                returned.append(archive)
+            }
+        }
+        guard !vanished.isEmpty || !returned.isEmpty else { return (0, 0) }
+
+        // Absence is only news if the drive is still here to be absent from.
+        if !vanished.isEmpty, !targetIsStillMounted(targetID) { return (0, 0) }
+
+        do {
+            try catalog.transaction {
+                for var archive in vanished {
+                    archive.missingSince = Date()
+                    try catalog.upsertTakeoutArchive(archive)
+                }
+                for var archive in returned {
+                    archive.missingSince = nil
+                    try catalog.upsertTakeoutArchive(archive)
+                }
+            }
+        } catch {
+            lastError = "Could not record what \(target.name) still holds: \(error.localizedDescription)"
+            return (0, 0)
+        }
+
+        if !vanished.isEmpty {
+            audit(
+                .violation,
+                "\(target.name): \(vanished.count) export archive(s) the catalog recorded are no longer on the drive (e.g. \(vanished[0].displayName)). They no longer count as copies of their parts.",
+                targetID: targetID
+            )
+        }
+        if !returned.isEmpty {
+            audit(
+                .drive,
+                "\(target.name): \(returned.count) export archive(s) previously recorded as gone are back where the catalog expects them.",
+                targetID: targetID
+            )
+        }
+        loadAll()
+        return (vanished.count, returned.count)
+    }
+
     /// How one target compares with every other, by root. No reads: this is
     /// the comparison the trees exist for.
     ///
@@ -2811,19 +2938,45 @@ final class AppStore: ObservableObject {
     /// the app last saw, not that its bytes are wrong; the queued read is what
     /// settles that. Marking the replica stale instead would report drift
     /// nobody checked.
+    ///
+    /// A file that is not there at all is the exception, and it is not a claim
+    /// about bytes — it is the file's absence, which is exactly what a stat
+    /// establishes. Path repair has already run by this point and found
+    /// nowhere else on the target for it to be, so the honest record is
+    /// `missing`. Nothing else in the app sees a single file deleted from
+    /// inside a directory that still exists: the trees hold recorded hashes
+    /// and go on agreeing, the anchor check only watches whole directories,
+    /// and path repair never looks at archive-backed replicas at all.
     @discardableResult
-    func checkReplicaStats(for targetID: UUID) -> (files: Int, changed: Int, baselines: Int) {
+    func checkReplicaStats(for targetID: UUID) -> (files: Int, changed: Int, baselines: Int, missing: Int) {
         guard let target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
-            return (0, 0, 0)
+            return (0, 0, 0, 0)
         }
         let mine = replicaStates.filter { $0.targetID == targetID && $0.state == .present }
-        guard !mine.isEmpty else { return (0, 0, 0) }
+        guard !mine.isEmpty else { return (0, 0, 0, 0) }
 
         // Where each export part sits on this target, so the thousands of
         // replicas it backs cost one stat between them.
+        //
+        // Taken from the archives themselves rather than the replication plan:
+        // the plan drops an archive already known to be gone, and that is
+        // precisely the archive whose replicas still need stat-ing. Preference
+        // goes to a copy that holds bytes, then to the pristine zip over the
+        // folder extracted from it — and when every copy of a part on this
+        // target is gone, the preferred path is still named, so the stat can
+        // report it absent rather than the part being quietly skipped.
         var archivePartPaths: [String: String] = [:]
-        for part in archivePlan.parts {
-            if let copy = part.copies[targetID] { archivePartPaths[part.displayName] = copy.path }
+        let ranked = takeoutArchives
+            .filter { $0.targetID == targetID }
+            .sorted { a, b in
+                func rank(_ archive: TakeoutArchive) -> Int {
+                    (archive.holdsBytes ? 0 : 2) + (archive.kind == .zip ? 0 : 1)
+                }
+                return rank(a) < rank(b)
+            }
+        for archive in ranked {
+            guard let stem = archive.exportPartStem else { continue }
+            if archivePartPaths[stem] == nil { archivePartPaths[stem] = archive.path }
         }
 
         let subjects = ReplicaStatGate.subjects(
@@ -2836,7 +2989,9 @@ final class AppStore: ObservableObject {
 
         var updated: [TargetReplicaState] = []
         var changedAssetIDs: Set<UUID> = []
+        var absent: [TargetReplicaState] = []
         var firstReason: String?
+        var absentExample: String?
         var baselines = 0
 
         for subject in subjects {
@@ -2846,7 +3001,15 @@ final class AppStore: ObservableObject {
                 switch ReplicaStatGate.finding(
                     for: replica, expectedSize: expectedSize, observed: observed
                 ) {
-                case .unchanged, .absent:
+                case .unchanged:
+                    continue
+                case .absent:
+                    // Path repair ran first and had its chance to find where
+                    // this went. Still not there means it did not move, it is
+                    // gone — and leaving it counted as present is the app
+                    // claiming a copy nobody has.
+                    absent.append(replica)
+                    if absentExample == nil { absentExample = subject.url.lastPathComponent }
                     continue
                 case .changed(let reason):
                     // Deliberately *not* re-baselined here. The read that
@@ -2867,16 +3030,37 @@ final class AppStore: ObservableObject {
             }
         }
 
-        guard !updated.isEmpty || !changedAssetIDs.isEmpty else {
-            return (subjects.count, 0, 0)
+        // Every stat fails alike when the drive is pulled mid-pass, so an
+        // absence is only worth recording if the target is still there to be
+        // absent from. Silence is the right answer to an unplug; writing
+        // "missing" across a whole target because it went away is not.
+        if !absent.isEmpty, !targetIsStillMounted(targetID) {
+            absent = []
+            absentExample = nil
+        }
+
+        guard !updated.isEmpty || !changedAssetIDs.isEmpty || !absent.isEmpty else {
+            return (subjects.count, 0, 0, 0)
         }
         do {
             try catalog.transaction {
                 for replica in updated { try catalog.upsertReplicaState(replica) }
+                for var replica in absent {
+                    replica.state = .missing
+                    try catalog.upsertReplicaState(replica)
+                }
             }
         } catch {
             lastError = "Could not record what \(target.name) holds: \(error.localizedDescription)"
-            return (subjects.count, changedAssetIDs.count, baselines)
+            return (subjects.count, changedAssetIDs.count, baselines, 0)
+        }
+
+        if !absent.isEmpty {
+            audit(
+                .violation,
+                "\(target.name): \(absent.count) cop(ies) the catalog recorded are not on the drive (e.g. \(absentExample ?? "a file the catalog expected")), and were not found anywhere else on it. They no longer count towards the redundancy policy.",
+                targetID: targetID
+            )
         }
 
         if changedAssetIDs.isEmpty {
@@ -2891,7 +3075,7 @@ final class AppStore: ObservableObject {
                 )
             }
             loadAll()
-            return (subjects.count, 0, baselines)
+            return (subjects.count, 0, baselines, absent.count)
         }
 
         audit(
@@ -2901,7 +3085,7 @@ final class AppStore: ObservableObject {
         )
         loadAll()
         queueVerificationSweep(targetID, budget: .unlimited, restrictedTo: changedAssetIDs)
-        return (subjects.count, changedAssetIDs.count, baselines)
+        return (subjects.count, changedAssetIDs.count, baselines, absent.count)
     }
 
     func agreement(for targetID: UUID) -> [(other: ReplicationTarget, agrees: Bool, divergentCount: Int)] {

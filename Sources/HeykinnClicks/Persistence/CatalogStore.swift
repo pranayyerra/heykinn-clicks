@@ -179,6 +179,10 @@ final class CatalogStore {
         // underneath it rather than re-reading the target.
         try? database.exec("ALTER TABLE replica_states ADD COLUMN observed_size INTEGER;")
         try? database.exec("ALTER TABLE replica_states ADD COLUMN observed_modified_at REAL;")
+        // An export archive the app looked for on a connected target and did
+        // not find. The row stays for the import history it carries; this is
+        // what stops it counting as a copy of its part.
+        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN missing_since REAL;")
     }
 
     /// Writes a consistent, compacted copy of the whole catalog to `path`.

@@ -43,14 +43,20 @@ enum PartRedundancy: String, Codable, Hashable {
 struct ExportPart: Identifiable, Hashable {
     var setID: String
     var partNumber: Int
-    /// Copies of this part, keyed by the drive holding them.
+    /// Copies of this part, keyed by the drive holding them. Only copies whose
+    /// bytes are actually there — an archive the app looked for and did not
+    /// find is not a copy of anything.
     var copies: [UUID: TakeoutArchive]
+    /// How big this part was when a copy of it last existed. A part whose every
+    /// copy has been deleted still has to be reported, and reported with the
+    /// size of the transfer that would restore it.
+    var lastKnownSizeBytes: Int64 = 0
 
     var id: String { "\(setID)-\(partNumber)" }
-    var displayName: String { "takeout-\(setID)-\(String(format: "%03d", partNumber))" }
+    var displayName: String { TakeoutArchive.partStem(setID: setID, partNumber: partNumber) }
 
     var targetIDs: Set<UUID> { Set(copies.keys) }
-    var sizeBytes: Int64 { copies.values.first?.sizeBytes ?? 0 }
+    var sizeBytes: Int64 { copies.values.first?.sizeBytes ?? lastKnownSizeBytes }
 
     /// True when every copy that has been fingerprinted agrees, and at least
     /// two have been.
@@ -144,6 +150,17 @@ enum ArchiveReplicationPlanner {
             else { continue }
             let key = "\(setID)-\(partNumber)"
             var part = byPart[key] ?? ExportPart(setID: setID, partNumber: partNumber, copies: [:])
+            part.lastKnownSizeBytes = max(part.lastKnownSizeBytes, archive.sizeBytes)
+            // An archive the app looked for and did not find is not a copy of
+            // anything. Counting it would have the plan report redundancy for a
+            // part that exists once, and the drive that still has it would look
+            // like it needed nothing. The part itself stays in the plan — a
+            // part whose copies have all gone is the loudest thing the plan has
+            // to say, not something to drop off the end of it.
+            guard archive.holdsBytes else {
+                byPart[key] = part
+                continue
+            }
             // Prefer the zip as the canonical copy: it is the pristine original
             // and what gets transferred between targets.
             if let existing = part.copies[targetID], existing.kind == .zip, archive.kind != .zip {
@@ -175,7 +192,7 @@ struct HeldExportPart: Identifiable, Hashable {
 
     var id: String { "\(setID)-\(partNumber)" }
     var url: URL { URL(fileURLWithPath: path) }
-    var displayName: String { "takeout-\(setID)-\(String(format: "%03d", partNumber))" }
+    var displayName: String { TakeoutArchive.partStem(setID: setID, partNumber: partNumber) }
 }
 
 /// One move that gets an export part closer to living on enough targets.
@@ -205,7 +222,7 @@ struct ExportPartTransfer: Identifiable, Hashable {
     var sizeBytes: Int64
 
     var id: String { "\(setID)-\(partNumber)-\(route.recipient.uuidString)" }
-    var displayName: String { "takeout-\(setID)-\(String(format: "%03d", partNumber))" }
+    var displayName: String { TakeoutArchive.partStem(setID: setID, partNumber: partNumber) }
 }
 
 /// What can be moved right now, given which targets are actually plugged in.
