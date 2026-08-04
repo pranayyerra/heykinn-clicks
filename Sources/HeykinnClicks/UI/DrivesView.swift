@@ -45,7 +45,7 @@ struct DrivesView: View {
         if store.assets.isEmpty { return "Nothing in the archive yet." }
         if holders == 0 { return "No drive is holding your photos yet." }
         if damaged > 0 {
-            return "\(damaged.formatted()) photo(s) have a copy that no longer matches."
+            return "\(Formatters.count(damaged, "photo")) \(damaged == 1 ? "has" : "have") a copy that no longer matches."
         }
         if short > 0 {
             return "\(short.formatted()) of \(store.protectionStates.count.formatted()) photos do not have \(store.redundancyPolicy.description) yet."
@@ -97,6 +97,21 @@ struct DrivesView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
+                // Both of these are answers to "is it safe", and both are
+                // empty on a healthy archive — which is exactly why they were
+                // wrong as permanent tabs. Here they are silent until they
+                // have something, and unmissable when they do.
+                if !store.violations.isEmpty {
+                    CardBox(title: "Things to review", systemImage: "exclamationmark.triangle") {
+                        ViolationsSummary()
+                    }
+                }
+                if !store.migrationJobs.filter({ $0.state.isActive }).isEmpty {
+                    CardBox(title: "Photos on the move", systemImage: "arrow.left.arrow.right") {
+                        MigrationsSummary()
+                    }
+                }
+
                 if !store.heldExportParts.isEmpty || !store.partTransferPlan.transfers.isEmpty {
                     CardBox(title: "Export parts in transit", systemImage: "shippingbox") {
                         VStack(alignment: .leading, spacing: 8) {
@@ -118,7 +133,7 @@ struct DrivesView: View {
                             }
                             if !store.partTransferPlan.transfers.isEmpty {
                                 HStack {
-                                    Text("\(store.partTransferPlan.transfers.count) part(s) can move now — \(Formatters.bytes.string(fromByteCount: store.partTransferPlan.bytesToMove)).")
+                                    Text("\(Formatters.count(store.partTransferPlan.transfers.count, "file")) can be copied now — \(Formatters.bytes.string(fromByteCount: store.partTransferPlan.bytesToMove)).")
                                         .font(.caption)
                                         .foregroundStyle(.secondary)
                                     Spacer()

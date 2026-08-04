@@ -136,7 +136,7 @@ extension ViolationKind {
 
     var symbolName: String {
         switch self {
-        case .multiDomainCoexistence: return "square.stack.3d.up.badge.exclamationmark"
+        case .multiDomainCoexistence: return "rectangle.on.rectangle"
         case .residencyPresenceMismatch: return "questionmark.folder"
         case .migrationCleanupPending: return "clock.badge.exclamationmark"
         case .replicaDrift: return "exclamationmark.triangle"
@@ -149,6 +149,52 @@ extension ViolationKind {
         case .multiDomainCoexistence, .replicaDrift: return .red
         case .residencyPresenceMismatch: return .orange
         case .migrationCleanupPending, .orphanReplica: return .yellow
+        }
+    }
+}
+
+/// The violations, inline on the safety page.
+///
+/// Not a link to a screen: "3 things to review" with an arrow makes the reader
+/// navigate to find out whether it matters. The kinds and counts fit in the
+/// space the link would have taken, and the full list is one click away for
+/// the reader who wants it.
+struct ViolationsSummary: View {
+    @EnvironmentObject private var store: AppStore
+    @State private var isPresented = false
+
+    var body: some View {
+        let byKind = Dictionary(grouping: store.violations, by: \.kind)
+            .sorted { ($0.key.severity, $0.value.count) > ($1.key.severity, $1.value.count) }
+        VStack(alignment: .leading, spacing: 8) {
+            ForEach(byKind, id: \.key) { kind, violations in
+                HStack(spacing: 8) {
+                    Image(systemName: kind.symbolName)
+                        .foregroundStyle(kind.tint)
+                        .frame(width: 18)
+                    Text(kind.displayName)
+                        .font(.callout)
+                    Spacer()
+                    Text(Formatters.count(violations.count, "photo"))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+            }
+            Button("Look at these…") { isPresented = true }
+                .buttonStyle(.link)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(isPresented: $isPresented) {
+            NavigationStack {
+                ViolationsView()
+                    .frame(minWidth: 620, minHeight: 460)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button("Done") { isPresented = false }
+                        }
+                    }
+            }
         }
     }
 }

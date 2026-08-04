@@ -114,12 +114,20 @@ enum Question: String, CaseIterable, Identifiable {
 
     /// The screens that answer this question, in the order they are offered.
     /// The first is what opens when the question is picked.
+    ///
+    /// "Is it safe" used to list five, and five tabs is the nine-item sidebar
+    /// wearing a hat: the reader still had to know that a damaged copy lives
+    /// under Violations and a half-finished move under Migrations. Both are
+    /// answers to *this* question and both are usually empty, so they are
+    /// sections on the safety page now, appearing only when there is something
+    /// to say. What is left are the two that are genuinely their own subject:
+    /// the rules, and the log.
     var pages: [SidebarSection] {
         switch self {
         case .overview: return [.overview]
         case .have: return [.library, .duplicates]
         case .from: return [.takeout]
-        case .safe: return [.targets, .violations, .migrations, .policies, .activity]
+        case .safe: return [.targets, .policies, .activity]
         }
     }
 }
