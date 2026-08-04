@@ -46,12 +46,17 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     }
 
     /// What this page's badge is counting, so "1" can say what it is one of.
+    ///
+    /// Kept to one or two words: the badge sits at the right-hand end of a
+    /// sidebar row and takes its width from the row's text, so "3 duplicate
+    /// sets" pushed "Every photo and video" into an ellipsis. The subtitle is
+    /// what makes the row legible to somebody new; the badge is a nudge.
     func badgeNoun(count: Int) -> String {
         switch self {
-        case .violations: return count == 1 ? "to review" : "to review"
-        case .duplicates: return count == 1 ? "duplicate set" : "duplicate sets"
-        case .migrations: return count == 1 ? "move running" : "moves running"
-        case .takeout: return count == 1 ? "file to import" : "files to import"
+        case .violations: return "to review"
+        case .duplicates: return count == 1 ? "dupe set" : "dupe sets"
+        case .migrations: return count == 1 ? "move" : "moves"
+        case .takeout: return count == 1 ? "to import" : "to import"
         default: return ""
         }
     }
@@ -93,8 +98,8 @@ enum Question: String, CaseIterable, Identifiable {
         switch self {
         case .overview: return "The short answer"
         case .have: return "Every photo and video"
-        case .from: return "Places photos come in from"
-        case .safe: return "Copies, drives and checks"
+        case .from: return "Where photos come from"
+        case .safe: return "Copies, drives, checks"
         }
     }
 
@@ -164,7 +169,11 @@ struct ContentView: View {
                     .tag(question)
                 }
             }
-            .navigationSplitViewColumnWidth(min: 210, ideal: 230)
+            // Wide enough for the subtitle *and* a badge beside it: at 230
+            // the badge took its width off the subtitle, so the line that
+            // exists to make the row legible was the line that got an
+            // ellipsis.
+            .navigationSplitViewColumnWidth(min: 240, ideal: 260)
             // Settings stays a ⌘, window — this is just a door to it where the
             // pointer already lives, pinned under the sidebar rather than
             // scrolling with it.
@@ -283,10 +292,11 @@ struct ContentView: View {
         let carried = question.pages
             .map { (page: $0, count: badge(for: $0)) }
             .filter { $0.count > 0 }
-        guard !carried.isEmpty else { return nil }
-        if carried.count == 1, let only = carried.first {
-            return "\(only.count) \(only.page.badgeNoun(count: only.count))"
-        }
-        return carried.reduce(0) { $0 + $1.count }.formatted()
+        // The first page that has something, named — rather than a sum across
+        // pages, which added violations to migrations and produced a number
+        // ("33") that counts nothing anybody can name. Whatever else is
+        // waiting is on the tab bar inside, with its own count.
+        guard let leading = carried.first else { return nil }
+        return "\(leading.count) \(leading.page.badgeNoun(count: leading.count))"
     }
 }

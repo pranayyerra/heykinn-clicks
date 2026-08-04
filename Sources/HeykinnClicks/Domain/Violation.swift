@@ -15,13 +15,35 @@ enum ViolationKind: String, Codable, CaseIterable, Hashable {
     /// A drive holds a replica for an asset that is not Local-resident.
     case orphanReplica
 
+    /// Named for what happened, not for the invariant that caught it. These are
+    /// the headings a reader meets first, and four of the five were the model's
+    /// vocabulary: "multi-domain coexistence" describes a photo that is in two
+    /// places at once, which is a sentence anybody can act on, and the other
+    /// one is not.
     var displayName: String {
         switch self {
-        case .multiDomainCoexistence: return "Multi-domain coexistence"
-        case .residencyPresenceMismatch: return "Residency/presence mismatch"
-        case .migrationCleanupPending: return "Migration cleanup pending"
-        case .replicaDrift: return "File changed on disk"
-        case .orphanReplica: return "Orphan replica"
+        case .multiDomainCoexistence: return "In two places at once"
+        case .residencyPresenceMismatch: return "Not where it is meant to be"
+        case .migrationCleanupPending: return "A move that never finished"
+        case .replicaDrift: return "A copy no longer matches"
+        case .orphanReplica: return "A drive is holding something it should not"
+        }
+    }
+
+    /// What the reader should understand about a group of these, once, instead
+    /// of inferring it from twenty-five near-identical rows.
+    var explanation: String {
+        switch self {
+        case .multiDomainCoexistence:
+            return "Every photo is meant to live in exactly one place. These are in more than one, and no move is running to settle them — so you are likely paying to store the same photo twice."
+        case .residencyPresenceMismatch:
+            return "These photos are recorded as living somewhere the app cannot find them. Nothing is lost; the record is wrong and needs correcting."
+        case .migrationCleanupPending:
+            return "A move copied these to their new place but never released the old one, so they are still in both."
+        case .replicaDrift:
+            return "The file on the drive is no longer what was imported — damage, or something edited it in place. The other drive's copy is the good one to re-copy from."
+        case .orphanReplica:
+            return "A drive is holding copies of photos that are not meant to live on your drives at all. Nothing is at risk; the space is being used for nothing."
         }
     }
 }

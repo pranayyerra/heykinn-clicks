@@ -73,7 +73,7 @@ struct MigrationsView: View {
                 Image(systemName: "arrow.right")
                     .foregroundStyle(.secondary)
                 ResidencyBadge(domain: job.toDomain)
-                Text("\(job.assetIDs.count) asset(s)")
+                Text(Formatters.count(job.assetIDs.count, "photo"))
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()

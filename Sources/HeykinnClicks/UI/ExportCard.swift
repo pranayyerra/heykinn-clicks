@@ -1,77 +1,10 @@
 import SwiftUI
 
-/// One row per export, not per file.
+/// Everything the Sources screen needs to say about one Google download.
 ///
-/// Scanning, extracting, importing, pairing and redundancy all happen on their
-/// own now, so the screen's job is to answer one question — is this export
-/// safe? — and keep the manual escapes out of the way.
-struct TakeoutView: View {
-    @EnvironmentObject private var store: AppStore
-    @State private var isFolderPickerPresented = false
-    @State private var importRequest: TakeoutImportRequest?
-
-    var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 16) {
-                if let activity = store.takeoutActivity {
-                    TakeoutActivityBanner(activity: activity)
-                }
-
-                if exports.isEmpty {
-                    ContentUnavailableView(
-                        "No Google exports found",
-                        systemImage: "shippingbox",
-                        description: Text("Connect a drive holding a Takeout download, or look in a folder. Exports are found, unpacked and imported without further prompting.")
-                    )
-                    .padding(.top, 40)
-                } else {
-                    ForEach(exports) { export in
-                        ExportCard(export: export, importRequest: $importRequest)
-                    }
-                }
-            }
-            .padding()
-        }
-        .navigationTitle("Google Takeout")
-        .toolbar {
-            ToolbarItem {
-                Menu {
-                    ForEach(store.targets.filter { store.reachablePaths[$0.id] != nil }) { drive in
-                        Button("Look on \(drive.name)") {
-                            if let mount = store.reachablePaths[drive.id] {
-                                store.scanForTakeout(rootURL: mount, targetID: drive.id)
-                            }
-                        }
-                    }
-                    Button("Look in a folder…") { isFolderPickerPresented = true }
-                } label: {
-                    Label("Look for exports", systemImage: "magnifyingglass")
-                }
-                .disabled(store.takeoutActivity != nil)
-            }
-        }
-        .fileImporter(
-            isPresented: $isFolderPickerPresented,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.scanForTakeout(rootURL: url, targetID: nil)
-            }
-        }
-        .sheet(item: $importRequest) { TakeoutImportSheet(request: $0) }
-    }
-
-    /// Archives grouped into the exports they belong to, newest first.
-    private var exports: [ExportSummary] {
-        let grouped = Dictionary(grouping: store.takeoutArchives) { $0.exportSetID ?? "" }
-        return grouped
-            .map { ExportSummary(setID: $0.key, archives: $0.value, plan: store.archivePlan) }
-            .sorted { $0.setID > $1.setID }
-    }
-}
-
-/// Everything the screen needs to say about one export, derived once.
+/// The standalone Takeout screen this used to belong to is gone: Sources
+/// covers every place photos come from, and keeping a second screen for one
+/// of them meant an export's state was written twice, in two vocabularies.
 struct ExportSummary: Identifiable {
     var setID: String
     var archives: [TakeoutArchive]
@@ -80,7 +13,7 @@ struct ExportSummary: Identifiable {
     var id: String { setID.isEmpty ? "loose" : setID }
 
     var title: String {
-        guard !setID.isEmpty else { return "Individual archives" }
+        guard !setID.isEmpty else { return "Archives not part of a numbered download" }
         // Google names an export with the moment it was produced.
         let stamp = setID.prefix(8)
         guard stamp.count == 8, let year = Int(stamp.prefix(4)),
@@ -339,12 +272,12 @@ struct ExportCard: View {
     }
 
     private var subtitle: String {
-        var pieces = ["\(export.partCount) file(s)"]
+        var pieces = [Formatters.count(export.partCount, "file")]
         if export.totalBytes > 0 {
             pieces.append(Formatters.bytes.string(fromByteCount: export.totalBytes))
         }
         if export.importedAssetCount > 0 {
-            pieces.append("\(export.importedAssetCount) photos and videos")
+            pieces.append("\(export.importedAssetCount.formatted()) photos and videos")
         }
         if !export.unimported.isEmpty {
             pieces.append("\(export.unimported.count) still to read")
@@ -413,7 +346,7 @@ struct TakeoutImportSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Import \(request.archives.count) part(s)")
+            Text("Import \(Formatters.count(request.archives.count, "file"))")
                 .font(.title3)
                 .bold()
             Text("Photos and videos are added to the library with their dates and locations from Google's metadata. Anything already in the library is skipped.")

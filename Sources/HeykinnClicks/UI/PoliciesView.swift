@@ -17,7 +17,12 @@ struct PoliciesView: View {
                     ruleRow(rule)
                 }
             } header: {
-                Text("Rules apply at import and re-apply whenever a rule changes; the first match (highest priority) decides. Manual overrides on an asset always win. A rule naming a cloud queues a pending migration — content never changes residency without one.")
+                // A List section header is a single truncating line, and this
+                // ran to four — the reader got "…Manual overrides on an asset
+                // always win. A" and a full stop that never came.
+                Text("Rules apply as photos come in, and again whenever you change one. The highest-priority rule that matches decides, and anything you set on a photo yourself beats all of them. A rule naming a cloud only ever proposes a move — nothing leaves your drives without one you can see.")
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textCase(nil)
             }
         }
         .navigationTitle("Policies")

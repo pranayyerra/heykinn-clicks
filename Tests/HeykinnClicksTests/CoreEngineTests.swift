@@ -411,3 +411,52 @@ final class CoreEngineTests: XCTestCase {
         XCTAssertEqual(outcome.completedTasks.count, 0)
     }
 }
+
+/// "12 file(s)" was in twenty-odd strings and the audit log. It reads as a
+/// template somebody forgot to finish, and it is wrong in the only case a
+/// person notices.
+final class PluralisationTests: XCTestCase {
+
+    func testSingularAndPluralAreBothRight() {
+        XCTAssertEqual(Formatters.count(1, "file"), "1 file")
+        XCTAssertEqual(Formatters.count(2, "file"), "2 files")
+        XCTAssertEqual(Formatters.count(0, "file"), "0 files")
+    }
+
+    func testAnIrregularPluralCanBeGiven() {
+        XCTAssertEqual(Formatters.count(1, "copy", "copies"), "1 copy")
+        XCTAssertEqual(Formatters.count(3, "copy", "copies"), "3 copies")
+    }
+
+    func testLargeNumbersAreGrouped() {
+        XCTAssertEqual(Formatters.count(21397, "photo"), "21,397 photos")
+    }
+}
+
+/// Worst first. A damaged copy is a photo at risk; a drive holding something
+/// it need not is housekeeping, and catalog order made those read as equally
+/// urgent.
+final class ViolationOrderingTests: XCTestCase {
+
+    func testDamageOutranksHousekeeping() {
+        XCTAssertGreaterThan(ViolationKind.replicaDrift.severity, ViolationKind.orphanReplica.severity)
+        XCTAssertGreaterThan(
+            ViolationKind.multiDomainCoexistence.severity,
+            ViolationKind.migrationCleanupPending.severity
+        )
+    }
+
+    /// Every kind says what happened rather than which invariant caught it,
+    /// and carries an explanation the reader meets once per group instead of
+    /// inferring from twenty-five near-identical rows.
+    func testEveryKindReadsAsSomethingThatHappened() {
+        for kind in ViolationKind.allCases {
+            XCTAssertFalse(kind.displayName.isEmpty)
+            XCTAssertFalse(
+                kind.displayName.contains("coexistence") || kind.displayName.contains("mismatch"),
+                "\(kind) still names the invariant: \(kind.displayName)"
+            )
+            XCTAssertGreaterThan(kind.explanation.count, 40, "\(kind) needs an explanation worth reading")
+        }
+    }
+}

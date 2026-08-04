@@ -2,6 +2,23 @@ import SwiftUI
 import AppKit
 
 enum Formatters {
+
+    /// "1 file", "12 files" — never "12 file(s)".
+    ///
+    /// The parenthesised plural was in twenty-odd strings across the app and
+    /// the audit log, and it reads as a template somebody forgot to finish. It
+    /// also gets it wrong in the only case that matters: "1 file(s)" is exactly
+    /// where a person notices.
+    static func count(_ number: Int, _ singular: String, _ plural: String? = nil) -> String {
+        let word = number == 1 ? singular : (plural ?? singular + "s")
+        return "\(number.formatted()) \(word)"
+    }
+
+    /// The same, for a number already spelled out elsewhere in the sentence.
+    static func pluralise(_ number: Int, _ singular: String, _ plural: String? = nil) -> String {
+        number == 1 ? singular : (plural ?? singular + "s")
+    }
+
     static let bytes: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file

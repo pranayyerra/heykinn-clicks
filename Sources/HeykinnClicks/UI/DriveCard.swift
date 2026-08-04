@@ -173,7 +173,7 @@ struct DriveCard: View {
                             .help("Their recorded contents match. Confirming the bytes themselves still needs a read.")
                     } else {
                         Label(
-                            "Differs from \(comparison.other.name) on \(comparison.divergentCount.formatted()) file(s)",
+                            "Differs from \(comparison.other.name) on \(Formatters.count(comparison.divergentCount, "file"))",
                             systemImage: "arrow.triangle.branch"
                         )
                         .font(.caption2)
@@ -228,7 +228,7 @@ struct DriveCard: View {
                         .disabled(store.isSyncing)
                 }
                 if summary.verifyCount > 0 {
-                    Button("Clear \(summary.verifyCount) queued check(s)", role: .destructive) {
+                    Button("Clear \(Formatters.count(summary.verifyCount, "queued check"))", role: .destructive) {
                         store.clearQueuedTasks(for: drive.id, action: .verify)
                     }
                 }

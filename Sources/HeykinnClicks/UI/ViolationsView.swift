@@ -1,30 +1,49 @@
 import SwiftUI
 
+/// What is wrong with the archive, grouped by what is wrong with it.
+///
+/// This was a flat list, one row per affected photo. Twenty-five damaged
+/// copies meant twenty-five rows carrying the same heading and the same
+/// sentence with a different filename in it — the reader scrolled past a wall
+/// to learn one thing, and the only affordance was "Show asset", twenty-five
+/// times. Grouping says the thing once, with the count, and opens on demand.
 struct ViolationsView: View {
     @EnvironmentObject private var store: AppStore
+    @State private var expanded: Set<ViolationKind> = []
+
+    private struct Group: Identifiable {
+        let kind: ViolationKind
+        let violations: [Violation]
+        var id: ViolationKind { kind }
+    }
+
+    private var groups: [Group] {
+        Dictionary(grouping: store.violations, by: \.kind)
+            .map { Group(kind: $0.key, violations: $0.value) }
+            .sorted { ($0.kind.severity, $0.violations.count) > ($1.kind.severity, $1.violations.count) }
+    }
 
     var body: some View {
         NavigationStack {
-            Group {
+            Group_ {
                 if store.violations.isEmpty {
                     ContentUnavailableView(
-                        "No violations",
+                        "Nothing to review",
                         systemImage: "checkmark.seal",
-                        description: Text("Every asset satisfies the exclusive-residency and replication invariants.")
+                        description: Text("Every photo is in one place, and every copy matches what was imported.")
                     )
                 } else {
-                    List {
-                        // Unverified cloud-presence claims are no longer
-                        // offered here to withdraw by hand: nothing creates
-                        // them any more, and startup reconciliation drops the
-                        // ones earlier versions wrote.
-                        Section {
-                            ForEach(store.violations) { violation in
-                                violationRow(violation)
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 14) {
+                            Text("The app finds these and shows them; it never quietly fixes them, because every fix here moves or forgets somebody's photos.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            ForEach(groups) { group in
+                                groupCard(group)
                             }
-                        } header: {
-                            Text("Violations are surfaced, never auto-fixed. Resolve them with a migration or by correcting presence records.")
                         }
+                        .padding(20)
                     }
                 }
             }
@@ -35,30 +54,88 @@ struct ViolationsView: View {
         }
     }
 
-    private func violationRow(_ violation: Violation) -> some View {
-        HStack(alignment: .top, spacing: 10) {
-            Image(systemName: symbol(for: violation.kind))
-                .foregroundStyle(color(for: violation.kind))
-                .frame(width: 22)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(violation.kind.displayName)
-                    .font(.headline)
-                Text(violation.detail)
+    private func groupCard(_ group: Group) -> some View {
+        let isOpen = expanded.contains(group.kind)
+        return CardBox(
+            title: group.kind.displayName,
+            systemImage: group.kind.symbolName
+        ) {
+            VStack(alignment: .leading, spacing: 10) {
+                Text(Formatters.count(group.violations.count, "photo"))
+                    .font(.title3)
+                    .foregroundStyle(group.kind.tint)
+                Text(group.kind.explanation)
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                if let assetID = violation.assetID, store.assetsByID[assetID] != nil {
-                    NavigationLink(value: assetID) {
-                        Text("Show asset")
-                            .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Button {
+                    if isOpen { expanded.remove(group.kind) } else { expanded.insert(group.kind) }
+                } label: {
+                    Label(
+                        isOpen ? "Hide the list" : "Show which photos",
+                        systemImage: isOpen ? "chevron.down" : "chevron.right"
+                    )
+                    .font(.callout)
+                }
+                .buttonStyle(.link)
+
+                if isOpen {
+                    VStack(alignment: .leading, spacing: 4) {
+                        // Capped: a group of twenty-five thousand is a fact
+                        // about the archive, not a list anybody reads to the
+                        // end of, and rendering it is the screen locking up.
+                        ForEach(group.violations.prefix(50)) { violation in
+                            row(violation)
+                        }
+                        if group.violations.count > 50 {
+                            Text("…and \(Formatters.count(group.violations.count - 50, "more")).")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
                     }
+                    .padding(.leading, 2)
                 }
             }
         }
-        .padding(.vertical, 4)
     }
 
-    private func symbol(for kind: ViolationKind) -> String {
-        switch kind {
+    private func row(_ violation: Violation) -> some View {
+        HStack(spacing: 8) {
+            Text(violation.detail)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+            Spacer(minLength: 0)
+            if let assetID = violation.assetID, store.assetsByID[assetID] != nil {
+                NavigationLink(value: assetID) {
+                    Text("Open")
+                        .font(.caption)
+                }
+            }
+        }
+    }
+}
+
+/// `Group` is taken by the nested type above; this keeps SwiftUI's own.
+private typealias Group_ = SwiftUI.Group
+
+extension ViolationKind {
+    /// Worst first. A damaged copy is a photo at risk; a drive holding
+    /// something it need not is housekeeping, and putting them in catalog
+    /// order made those read as equally urgent.
+    var severity: Int {
+        switch self {
+        case .replicaDrift: return 5
+        case .multiDomainCoexistence: return 4
+        case .residencyPresenceMismatch: return 3
+        case .migrationCleanupPending: return 2
+        case .orphanReplica: return 1
+        }
+    }
+
+    var symbolName: String {
+        switch self {
         case .multiDomainCoexistence: return "square.stack.3d.up.badge.exclamationmark"
         case .residencyPresenceMismatch: return "questionmark.folder"
         case .migrationCleanupPending: return "clock.badge.exclamationmark"
@@ -67,8 +144,8 @@ struct ViolationsView: View {
         }
     }
 
-    private func color(for kind: ViolationKind) -> Color {
-        switch kind {
+    var tint: Color {
+        switch self {
         case .multiDomainCoexistence, .replicaDrift: return .red
         case .residencyPresenceMismatch: return .orange
         case .migrationCleanupPending, .orphanReplica: return .yellow

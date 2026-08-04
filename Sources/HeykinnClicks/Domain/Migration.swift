@@ -14,12 +14,12 @@ enum MigrationState: String, Codable, CaseIterable, Hashable {
 
     var displayName: String {
         switch self {
-        case .pending: return "Pending"
-        case .copyingToTarget: return "Copying to target"
-        case .verifyingTarget: return "Verifying target"
-        case .clearingSource: return "Clearing source"
-        case .completed: return "Completed"
-        case .failed: return "Failed"
+        case .pending: return "Not started"
+        case .copyingToTarget: return "Copying across"
+        case .verifyingTarget: return "Checking the new copies"
+        case .clearingSource: return "Releasing the old place"
+        case .completed: return "Done"
+        case .failed: return "Stopped"
         }
     }
 

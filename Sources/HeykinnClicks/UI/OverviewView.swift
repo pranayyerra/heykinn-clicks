@@ -285,30 +285,15 @@ struct OverviewView: View {
         let destination: SidebarSection
     }
 
+    /// Things the protection card has not already said.
+    ///
+    /// It used to lead with damaged copies and photos short of the policy —
+    /// both of which are the second and third rows of the legend six inches
+    /// above, with more context there than a tile can carry. The reader met
+    /// "25" twice on one screen and had to work out whether it was the same 25.
+    /// A card called "Needs attention" earns its place by adding something.
     private var attentionTiles: [AttentionTile] {
         var tiles: [AttentionTile] = []
-        if damagedCount > 0 {
-            tiles.append(.init(
-                id: "damaged",
-                symbol: "exclamationmark.triangle.fill",
-                value: damagedCount.formatted(),
-                title: "copies no longer match what was imported",
-                tint: .red,
-                destination: .violations
-            ))
-        }
-        if unprotectedCount > 0 {
-            tiles.append(.init(
-                id: "unprotected",
-                symbol: "shield.lefthalf.filled",
-                value: unprotectedCount.formatted(),
-                title: unprotectedCount == 1
-                    ? "photo not on \(store.redundancyPolicy.description) yet"
-                    : "photos not on \(store.redundancyPolicy.description) yet",
-                tint: .orange,
-                destination: .targets
-            ))
-        }
         if !store.violations.isEmpty {
             tiles.append(.init(
                 id: "violations",
