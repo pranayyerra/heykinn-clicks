@@ -89,7 +89,9 @@ struct OverviewView: View {
     private var unprotectedCount: Int {
         (protectionCounts[.stagedOnly] ?? 0) + (protectionCounts[.replicatedToOneDrive] ?? 0)
     }
-    private var pendingArchiveCount: Int { store.takeoutArchives.filter { !$0.isImported }.count }
+    private var pendingArchiveCount: Int {
+        TakeoutExportSet.partsAwaitingImport(in: store.takeoutArchives)
+    }
     private var activeMigrationCount: Int { store.migrationJobs.filter { $0.state.isActive }.count }
 
     // MARK: - Body
@@ -285,7 +287,10 @@ struct OverviewView: View {
                 id: "takeout",
                 symbol: "shippingbox",
                 value: pendingArchiveCount.formatted(),
-                title: "Google exports not imported yet",
+                // Parts, because that is the unit: "13 exports" for one export
+                // whose twelve parts are all imported said the archive was
+                // barely started when it was finished.
+                title: "export part(s) not imported yet",
                 tint: .blue,
                 destination: .takeout
             ))

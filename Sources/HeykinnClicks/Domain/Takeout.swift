@@ -144,6 +144,37 @@ struct TakeoutExportSet: Identifiable {
                 reps.first { $0.kind == .folder } ?? reps[0]
             }
     }
+
+    /// How much of the archive is still waiting to be imported, counted in
+    /// parts across every export discovered anywhere.
+    ///
+    /// Counted in parts, not in rows. One part of one export is typically
+    /// three or four rows — the zip on each drive that holds it, and the
+    /// folder extracted from it — and `importedAt` is stamped on the single
+    /// representation the importer actually read, never on the others. A flat
+    /// count of rows without an import date therefore reported a fully
+    /// imported twelve-part export as thirteen exports still to do, one for
+    /// every copy nobody happened to read.
+    ///
+    /// A part with no copy left on any drive is not counted. It cannot be
+    /// imported, so offering it as work would be an instruction the user
+    /// cannot follow; that content's absence is the archive checks' business,
+    /// not this number's.
+    static func partsAwaitingImport(in archives: [TakeoutArchive]) -> Int {
+        var byPart: [String: [TakeoutArchive]] = [:]
+        for archive in archives {
+            // A discovery that is not part of a numbered export — a bare
+            // `Takeout` folder, say — is its own unit and counts as one.
+            let key = archive.exportSetID.flatMap { setID in
+                archive.partNumber.map { "\(setID)-\($0)" }
+            } ?? archive.id.uuidString
+            byPart[key, default: []].append(archive)
+        }
+        return byPart.values.filter { representations in
+            !representations.contains { $0.isImported }
+                && representations.contains { $0.holdsBytes }
+        }.count
+    }
 }
 
 /// What the Takeout pipeline is doing right now. Phases are distinct so the

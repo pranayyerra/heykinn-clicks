@@ -1026,3 +1026,89 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(withSidecar.captureDate, Date(timeIntervalSince1970: 1_600_000_000))
     }
 }
+
+/// "13 Google exports not imported yet" for one twelve-part export whose every
+/// part was imported. The unit was rows, and one part is three or four rows.
+final class PartsAwaitingImportTests: XCTestCase {
+
+    private func archive(
+        part: Int?, kind: TakeoutArchiveKind = .zip, drive: String = "A",
+        imported: Bool = false, missing: Bool = false, setID: String? = "S1"
+    ) -> TakeoutArchive {
+        var archive = TakeoutArchive(
+            id: UUID(),
+            path: "/Volumes/\(drive)/takeout-\(part.map(String.init) ?? "loose")\(kind == .zip ? ".zip" : "")",
+            kind: kind, sizeBytes: 10, targetID: UUID(), discoveredAt: Date(),
+            importedAt: imported ? Date() : nil, importBatchID: nil,
+            importedAssetCount: imported ? 2_432 : 0, skippedDuplicateCount: 0,
+            note: nil, exportSetID: setID, partNumber: part
+        )
+        if missing { archive.missingSince = Date() }
+        return archive
+    }
+
+    /// The reported number, reproduced: twelve parts, each held as a zip on one
+    /// drive and a zip plus an extracted folder on another, all imported. The
+    /// import stamp lands on whichever representation was actually read.
+    func testEveryPartImportedFromSomeCopyLeavesNothingPending() {
+        var archives: [TakeoutArchive] = []
+        for part in 1...12 {
+            archives.append(archive(part: part, drive: "My Passport", imported: true))
+            archives.append(archive(part: part, kind: .folder, drive: "Owner's Back", imported: true))
+            archives.append(archive(part: part, drive: "Owner's Back"))
+        }
+        XCTAssertEqual(archives.filter { !$0.isImported }.count, 12, "Twelve rows carry no import date")
+        XCTAssertEqual(
+            TakeoutExportSet.partsAwaitingImport(in: archives), 0,
+            "…and every one of them is a second copy of a part already imported"
+        )
+    }
+
+    func testAPartNoCopyOfWhichWasImportedIsCounted() {
+        let archives = [
+            archive(part: 1, imported: true),
+            archive(part: 2),
+            archive(part: 2, kind: .folder, drive: "B"),
+        ]
+        XCTAssertEqual(TakeoutExportSet.partsAwaitingImport(in: archives), 1)
+    }
+
+    func testPartsOfDifferentExportsAreCountedSeparately() {
+        let archives = [
+            archive(part: 1, setID: "S1"),
+            archive(part: 1, setID: "S2"),
+        ]
+        XCTAssertEqual(
+            TakeoutExportSet.partsAwaitingImport(in: archives), 2,
+            "Part 1 of two different exports is two parts, not one"
+        )
+    }
+
+    /// Work the user cannot do is not work to offer. A part with no copy left
+    /// on any drive cannot be imported; its absence is the archive checks'
+    /// business, not this number's.
+    func testAPartWithNoCopyLeftIsNotOfferedAsWork() {
+        XCTAssertEqual(
+            TakeoutExportSet.partsAwaitingImport(in: [archive(part: 1, missing: true)]), 0
+        )
+        XCTAssertEqual(
+            TakeoutExportSet.partsAwaitingImport(in: [
+                archive(part: 1, missing: true),
+                archive(part: 1, drive: "B"),
+            ]),
+            1,
+            "One copy gone and another still here is still a part to import"
+        )
+    }
+
+    func testADiscoveryOutsideAnyNumberedExportCountsAsOne() {
+        let archives = [
+            archive(part: nil, kind: .folder, setID: nil),
+            archive(part: nil, kind: .folder, drive: "B", setID: nil),
+        ]
+        XCTAssertEqual(
+            TakeoutExportSet.partsAwaitingImport(in: archives), 2,
+            "Two bare Takeout folders are two things to import, not one"
+        )
+    }
+}
