@@ -620,8 +620,18 @@ final class ShortfallReportingTests: XCTestCase {
         let a = UUID(), b = UUID()
         let export = summary([archive(part: 7, drive: a)], targets: [a, b])
         let text = export.protection(driveNames: [a: "A", b: "B"]).text
-        XCTAssertTrue(text.hasPrefix("Part 7"), text)
-        XCTAssertFalse(text.hasPrefix("Parts"), text)
+        XCTAssertTrue(text.hasPrefix("File 7 of this download is"), text)
+        XCTAssertFalse(text.contains("Files"), text)
+    }
+
+    /// The numbers are what the reader goes looking for on the drive, so they
+    /// are listed the way a person would say them.
+    func testSeveralShortPartsAreListedReadably() {
+        let a = UUID(), b = UUID()
+        var archives = [archive(part: 1, drive: a), archive(part: 1, drive: b)]
+        archives += [archive(part: 3, drive: a), archive(part: 4, drive: a), archive(part: 7, drive: a)]
+        let text = summary(archives, targets: [a, b]).protection(driveNames: [a: "A", b: "B"]).text
+        XCTAssertTrue(text.hasPrefix("Files 3, 4 and 7 of this download are"), text)
     }
 }
 

@@ -75,10 +75,19 @@ enum ReplicaPathRepair {
         return plan
     }
 
-    /// `Owner/Backup_Google/takeout-…/Google Photos/x.jpg` anchors on
-    /// `Owner/Backup_Google/takeout-…`. Renaming any ancestor breaks the
-    /// anchor, and the leaf of the anchor is the part with a name distinctive
-    /// enough to find again.
+    /// `Photos/Backups/takeout-…/Google Photos/x.jpg` anchors on
+    /// `Photos/Backups/takeout-…`. Renaming any ancestor breaks the anchor,
+    /// and the leaf of the anchor is the part with a name distinctive enough
+    /// to find again.
+    ///
+    /// Three components is a heuristic about how deep people file things, and
+    /// it is chosen to fail in the safe direction. On a shallower layout the
+    /// anchor reaches past the export into a folder inside it, which is still
+    /// a real directory and still repairs. On a much deeper one the anchor is
+    /// some generic ancestor that did not move, so nothing is repaired and the
+    /// replica is reported missing — a job not done, never a wrong answer
+    /// written down. It never anchors on a path the content is not under.
+    ///
     /// Scans for the third separator rather than splitting the whole path:
     /// this runs once per replica on every catalog change, and building an
     /// array of components for fifty thousand paths to throw all but three

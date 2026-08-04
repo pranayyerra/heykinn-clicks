@@ -8,20 +8,31 @@ import SwiftUI
 /// holding photos, some already in the archive and some not, with work to do
 /// about the difference. So they read the same, and Settings goes back to
 /// holding preferences rather than jobs.
+///
+/// Written for someone opening the app for the first time. Every source says
+/// what it is before it says what state it is in, because "3 of 12 parts
+/// imported" means nothing to a reader who does not yet know what a part is;
+/// the app's own words for things — target, export part, replica — are
+/// explained here or not used here. The precision is kept: plainer wording is
+/// not permission to claim more than the app checked.
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var isFolderPickerPresented = false
+    @State private var isExportSearchPickerPresented = false
+    @State private var isFolderImportPickerPresented = false
     @State private var importRequest: TakeoutImportRequest?
 
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
+                introduction
+
                 if let activity = store.takeoutActivity {
                     TakeoutActivityBanner(activity: activity)
                 }
 
                 applePhotosCard
                 takeoutSection
+                folderCard
             }
             .padding(20)
         }
@@ -30,22 +41,22 @@ struct SourcesView: View {
             ToolbarItem {
                 Menu {
                     ForEach(store.targets.filter { store.reachablePaths[$0.id] != nil }) { target in
-                        Button("Look on \(target.name)") {
+                        Button("Search \(target.name)") {
                             if let mount = store.reachablePaths[target.id] {
                                 store.scanForTakeout(rootURL: mount, targetID: target.id)
                             }
                         }
                     }
-                    Button("Look in a folder…") { isFolderPickerPresented = true }
+                    Button("Search a folder…") { isExportSearchPickerPresented = true }
                 } label: {
-                    Label("Look for exports", systemImage: "magnifyingglass")
+                    Label("Search for Google downloads", systemImage: "magnifyingglass")
                 }
                 .disabled(store.takeoutActivity != nil)
             }
         }
         .sheet(item: $importRequest) { TakeoutImportSheet(request: $0) }
         .fileImporter(
-            isPresented: $isFolderPickerPresented,
+            isPresented: $isExportSearchPickerPresented,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
@@ -53,28 +64,50 @@ struct SourcesView: View {
                 store.scanForTakeout(rootURL: url, targetID: nil)
             }
         }
+        .fileImporter(
+            isPresented: $isFolderImportPickerPresented,
+            allowedContentTypes: [.folder, .image, .movie],
+            allowsMultipleSelection: true
+        ) { result in
+            if case .success(let urls) = result { store.importFolders(urls) }
+        }
+    }
+
+    /// What this screen is, in the two sentences someone needs before any of
+    /// the numbers below mean anything — including the reassurance they are
+    /// most likely to want first, which is that pointing the app at their
+    /// photos does not put those photos at risk.
+    private var introduction: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Places your photos already live")
+                .font(.title3)
+            Text("The app looks through each place below, works out which photos it is already keeping safe copies of, and brings in the rest. It only ever reads a source — nothing here moves or deletes your originals.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 
     // MARK: - Apple Photos
 
     private var applePhotosCard: some View {
-        CardBox(title: "Apple Photos", systemImage: "photo.on.rectangle.angled") {
+        CardBox(title: "The Photos app on this Mac", systemImage: "photo.on.rectangle.angled") {
             switch store.applePhotosState {
             case .connected:
                 connectedApplePhotos
             case .notDetermined:
                 VStack(alignment: .leading, spacing: 10) {
-                    Text("The Photos library on this Mac holds photos this archive may not. Connecting lets the app see them, work out which it already protects, and bring in the rest.")
+                    Text("Your Photos library probably holds pictures this archive does not. Connecting lets the app look through it, spot the ones it already has, and copy in the ones it is missing. It reads the library and never changes it.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Connect Apple Photos…") {
+                    Button("Connect Photos…") {
                         Task { await store.connectApplePhotos() }
                     }
                     .buttonStyle(.borderedProminent)
                 }
             case .denied:
-                Label("Access denied — grant it under System Settings → Privacy & Security → Photos, then relaunch.", systemImage: "xmark.circle")
+                Label("macOS is blocking access. Allow it in System Settings → Privacy & Security → Photos, then reopen the app.", systemImage: "xmark.circle")
                     .font(.callout)
                     .foregroundStyle(.orange)
             case .unavailable(let reason):
@@ -97,15 +130,20 @@ struct SourcesView: View {
 
             if store.iCloudPhotosEnabled == nil {
                 // Topology the app cannot detect and must not assume. Asked
-                // here, where the work is, rather than buried in preferences.
+                // here, where the work is, rather than buried in preferences —
+                // and asked in terms of the setting the user themselves turned
+                // on, not in terms of what the app will do with the answer.
                 VStack(alignment: .leading, spacing: 6) {
-                    Text("Does this library sync to iCloud? It decides whether photos found here mean “in Apple Cloud” or “on this Mac”, and the app has no way to tell.")
+                    Text("One question first: is iCloud Photos turned on for this library?")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text("macOS does not let the app find this out for itself, and the answer changes what a photo found here means — a copy in Apple's cloud, or a copy on this Mac. It is safer to ask you than to guess. You can check in Photos → Settings → iCloud.")
                         .font(.caption)
-                        .foregroundStyle(.orange)
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack {
-                        Button("Yes — it syncs") { store.iCloudPhotosEnabled = true }
-                        Button("No — local to this Mac") { store.iCloudPhotosEnabled = false }
+                        Button("Yes, it syncs to iCloud") { store.iCloudPhotosEnabled = true }
+                        Button("No, these stay on this Mac") { store.iCloudPhotosEnabled = false }
                     }
                 }
             } else if indexed == 0 {
@@ -119,7 +157,7 @@ struct SourcesView: View {
                     value: Double(indexed - awaiting),
                     total: Double(max(indexed, 1))
                 )
-                Text("Bringing originals in so your targets can hold them. Photos already in the archive are matched and merged, never stored twice.")
+                Text("Copying the full-size originals in, so your drives can hold them. A photo the archive already has is recognised and left alone rather than stored twice.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -138,23 +176,32 @@ struct SourcesView: View {
         }
     }
 
-    /// What reclamation would release, and what is holding the rest up.
+    /// What could be freed from Apple's cloud, and what is holding the rest up.
     ///
     /// Shown only once there is a verified cloud copy to talk about. Reclaiming
     /// is not built — this removes nothing — but the preconditions are the
     /// safety mechanism, and a mechanism nobody can see is one nobody can
     /// trust. Drawn here rather than on a screen of its own because it is a
-    /// fact about this connector's library.
+    /// fact about this connector's library. Worded so the reader learns what it
+    /// is for before they are given a number: the point is paying iCloud for
+    /// copies of photos you already own outright.
     @ViewBuilder
     private var reclamationPreview: some View {
         let plan = store.reclamationPlan
         if !plan.isEmpty {
             Divider()
             VStack(alignment: .leading, spacing: 6) {
+                Text("Freeing up iCloud")
+                    .font(.callout)
+                Text("Once the app can prove your own drives hold a photo safely, its iCloud copy is no longer paying for itself.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Text(
                     plan.releasableAssetIDs.isEmpty
-                        ? "Nothing in Apple Cloud is ready to release yet."
-                        : "\(plan.releasableAssetIDs.count.formatted()) photo(s) — \(Formatters.bytes.string(fromByteCount: plan.releasableBytes)) — are protected locally well enough to release their Apple Cloud copy."
+                        ? "Nothing is ready to be freed yet."
+                        : "\(plan.releasableAssetIDs.count.formatted()) photo(s) — \(Formatters.bytes.string(fromByteCount: plan.releasableBytes)) — are safe enough on your own drives that their iCloud copy could go."
                 )
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
@@ -162,7 +209,7 @@ struct SourcesView: View {
                 ForEach(ReclamationPlanner.Blocker.allCases, id: \.self) { blocker in
                     if let count = plan.blocked[blocker], count > 0 {
                         Label(
-                            "\(count.formatted()) waiting: \(blocker.displayName)",
+                            "\(count.formatted()) not ready: \(blocker.displayName)",
                             systemImage: "circle.dotted"
                         )
                         .font(.caption)
@@ -170,7 +217,7 @@ struct SourcesView: View {
                     }
                 }
 
-                Text("Releasing is not built yet, and nothing here is removed. When it is, it happens on this proof rather than on a prompt.")
+                Text("This is a preview. Nothing is deleted from iCloud, and that part of the app is not built yet — when it is, it will go on this proof rather than on asking you to confirm.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -180,7 +227,7 @@ struct SourcesView: View {
 
     private func appleHeadline(indexed: Int, awaiting: Int) -> String {
         if store.applePhotosLibraryCount == 0 {
-            return "The library is empty, or its photos are not on this Mac."
+            return "The library is empty, or its photos are not stored on this Mac."
         }
         if store.iCloudPhotosEnabled == nil {
             return "\(store.applePhotosLibraryCount.formatted()) photos in the library."
@@ -197,7 +244,7 @@ struct SourcesView: View {
     private func appleDetail(indexed: Int, awaiting: Int) -> String {
         var parts = ["\(store.applePhotosLibraryCount.formatted()) in library"]
         if indexed > 0 { parts.append("\(indexed.formatted()) matched to the archive") }
-        if awaiting > 0 { parts.append("\(awaiting.formatted()) being brought in") }
+        if awaiting > 0 { parts.append("\(awaiting.formatted()) being copied in") }
         return parts.joined(separator: " · ")
     }
 
@@ -206,15 +253,54 @@ struct SourcesView: View {
     @ViewBuilder
     private var takeoutSection: some View {
         if exports.isEmpty {
-            CardBox(title: "Google Takeout", systemImage: "shippingbox") {
-                Text("No exports found yet. Connect a target holding a Takeout download, or look in a folder — exports are unpacked and imported without further prompting.")
+            CardBox(title: "A download of your Google Photos", systemImage: "shippingbox") {
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("None found yet.")
+                        .font(.callout)
+                    Text("Google calls this a Takeout: you ask for a copy of your photos at takeout.google.com and it emails you a set of large .zip files, usually about 10 GB each. Put them on one of your drives, or anywhere on this Mac, and use Search for Google downloads above. The app unpacks and reads them on its own from there.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("Downloads of your Google Photos")
+                    .font(.headline)
+                Text("Google delivers one download as several large .zip files. The app treats each .zip as a piece of the whole and keeps track of them together, so a download counts as safe only when every piece of it does.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                ForEach(exports) { export in
+                    ExportCard(export: export, importRequest: $importRequest)
+                }
+            }
+        }
+    }
+
+    // MARK: - Plain folders
+
+    /// The most ordinary case there is, and until now the one this screen had
+    /// no answer for: photos sitting in a folder. It was reachable only from
+    /// the Library screen's toolbar, which is not where someone goes looking
+    /// for a place to add photos from.
+    private var folderCard: some View {
+        CardBox(title: "A folder of photos", systemImage: "folder") {
+            VStack(alignment: .leading, spacing: 10) {
+                Text("An old backup, a memory card, a Downloads folder — anywhere photos and videos are sitting loose. The app copies them into the archive and leaves the folder exactly as it found it.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-            }
-        } else {
-            ForEach(exports) { export in
-                ExportCard(export: export, importRequest: $importRequest)
+                Button("Choose a folder…") { isFolderImportPickerPresented = true }
+                    .disabled(store.isImporting)
+                if store.isImporting {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Reading photos in…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
             }
         }
     }

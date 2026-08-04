@@ -132,20 +132,35 @@ struct ExportSummary: Identifiable {
         shortfall.reduce(0) { $0 + $1.part.sizeBytes * Int64($1.destinations.count) }
     }
 
+    /// "3, 4 and 7" — read aloud the way a person would, because these are
+    /// numbers the reader is about to go looking for on a drive.
+    static func list(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
+    }
+
     /// Plain answer to "is this safe?", and when it is not, which parts are
     /// short and where they need to go — a count alone gives nothing to act on.
     func protection(driveNames: [UUID: String]) -> (text: String, symbol: String, tint: Color) {
         guard !parts.isEmpty else {
-            return ("Not part of a tracked export", "questionmark.circle", .secondary)
+            return ("Not recognised as part of a Google download", "questionmark.circle", .secondary)
         }
         let outstanding = shortfall
         if !outstanding.isEmpty {
-            let numbers = outstanding.map { String($0.part.partNumber) }.sorted { $0.localizedStandardCompare($1) == .orderedAscending }
+            let numbers = outstanding
+                .map { $0.part.partNumber }
+                .sorted()
+                .map(String.init)
             let targets = Set(outstanding.flatMap(\.destinations))
                 .map { driveNames[$0] ?? "another drive" }
                 .sorted()
+            // Which files, not just how many: "2 of 12 are missing" leaves the
+            // reader with nothing to look for on the drive.
+            let subject = numbers.count == 1
+                ? "File \(numbers[0]) of this download is"
+                : "Files \(Self.list(numbers)) of this download are"
             return (
-                "Part\(numbers.count == 1 ? "" : "s") \(numbers.joined(separator: ", ")) not yet on \(targets.joined(separator: " and ")) — \(Formatters.bytes.string(fromByteCount: bytesOutstanding)) to copy",
+                "\(subject) not on \(targets.joined(separator: " and ")) yet — \(Formatters.bytes.string(fromByteCount: bytesOutstanding)) still to copy",
                 "exclamationmark.triangle.fill",
                 .orange
             )
@@ -161,28 +176,28 @@ struct ExportSummary: Identifiable {
         // Saying "not yet compared" would promise a check that is not coming.
         if soleCopies.count == parts.count {
             return (
-                "On the one managed drive — \(plan.policy.description) is what the policy asks for, and there is no second copy to compare against",
+                "Safe on your one drive. You have asked for \(plan.policy.description), so there is no second copy to check this one against.",
                 "checkmark.circle",
                 .teal
             )
         }
         if verified.count == parts.count {
-            return ("On every drive, copies verified byte for byte", "checkmark.seal.fill", .green)
+            return ("On every drive, and every copy checked in full", "checkmark.seal.fill", .green)
         }
         if verified.count + spotChecked.count == parts.count {
-            return ("On every drive, copies match on a quick check", "checkmark.seal", .green)
+            return ("On every drive, and the copies match on a spot check", "checkmark.seal", .green)
         }
         // Parts held as a single copy are not waiting on a comparison, so
         // counting them as pending would overstate the work outstanding.
         let pending = parts.count - verified.count - spotChecked.count - soleCopies.count
         guard pending > 0 else {
             return (
-                "On every drive — \(soleCopies.count) part(s) exist as a single copy, with nothing to compare",
+                "On every drive. \(soleCopies.count) file(s) exist as one copy, so there is nothing to check them against.",
                 "checkmark.circle",
                 .teal
             )
         }
-        return ("On every drive — \(pending) part(s) not yet compared", "checkmark.circle", .teal)
+        return ("On every drive. \(pending) file(s) have not been checked against their other copy yet.", "checkmark.circle", .teal)
     }
 }
 
@@ -206,25 +221,25 @@ struct ExportCard: View {
                     Spacer()
                     Menu {
                         if !export.unimported.isEmpty {
-                            Button("Import \(export.unimported.count) remaining part(s)…") {
+                            Button("Read the \(export.unimported.count) remaining file(s)…") {
                                 importRequest = TakeoutImportRequest(
                                     archives: export.unimported, setID: export.setID
                                 )
                             }
                         }
                         if !export.extractableZips.isEmpty {
-                            Button("Unpack \(export.extractableZips.count) zip(s) onto the drive") {
+                            Button("Unzip \(export.extractableZips.count) file(s) onto the drive") {
                                 store.extractTakeoutZips(export.extractableZips.map(\.id))
                             }
                         }
-                        Button("Quick compare copies") {
+                        Button("Spot-check that the copies match") {
                             store.spotCheckExportParts()
                         }
-                        Button("Compare copies byte for byte…") {
+                        Button("Check the copies in full (slow)…") {
                             store.verifyExportPartsByChecksum()
                         }
                         Divider()
-                        Button("Forget this export", role: .destructive) {
+                        Button("Stop tracking this download (deletes nothing)", role: .destructive) {
                             for archive in export.archives { store.forgetTakeoutArchive(archive.id) }
                         }
                     } label: {
@@ -248,7 +263,7 @@ struct ExportCard: View {
 
                 if !export.missingPartNumbers.isEmpty {
                     Label(
-                        "Parts \(export.missingPartNumbers.map(String.init).joined(separator: ", ")) were never found — this export looks incomplete.",
+                        "File(s) \(export.missingPartNumbers.map(String.init).joined(separator: ", ")) of this download were never found, so some photos in it are missing. Check whether every .zip Google gave you was copied across.",
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.caption)
@@ -273,7 +288,7 @@ struct ExportCard: View {
         if !mine.isEmpty {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Label(
-                    "\(mine.count) part(s) can move now (\(Formatters.bytes.string(fromByteCount: mine.reduce(0) { $0 + $1.sizeBytes }))) — \(routeSummary(mine))",
+                    "\(mine.count) file(s) can be copied now (\(Formatters.bytes.string(fromByteCount: mine.reduce(0) { $0 + $1.sizeBytes }))) — \(routeSummary(mine))",
                     systemImage: "arrow.left.arrow.right"
                 )
                 .font(.caption)
@@ -289,7 +304,7 @@ struct ExportCard: View {
         }
         if !stranded.isEmpty {
             Label(
-                "\(stranded.count) part(s) are waiting for the drive that holds them to be connected.",
+                "\(stranded.count) file(s) are waiting for the drive that holds them to be plugged in.",
                 systemImage: "clock"
             )
             .font(.caption)
@@ -297,7 +312,7 @@ struct ExportCard: View {
         }
         if !deferred.isEmpty {
             Label(
-                "\(deferred.count) part(s) need to wait on the Mac while the other drive is away, and there is not enough free space for them. Connect both targets at once, or free up space.",
+                "\(deferred.count) file(s) would have to wait on this Mac while the other drive is away, and there is not enough free space. Plug both drives in together, or free up space on the Mac.",
                 systemImage: "internaldrive"
             )
             .font(.caption)
@@ -324,7 +339,7 @@ struct ExportCard: View {
     }
 
     private var subtitle: String {
-        var pieces = ["\(export.partCount) part(s)"]
+        var pieces = ["\(export.partCount) file(s)"]
         if export.totalBytes > 0 {
             pieces.append(Formatters.bytes.string(fromByteCount: export.totalBytes))
         }
@@ -332,7 +347,7 @@ struct ExportCard: View {
             pieces.append("\(export.importedAssetCount) photos and videos")
         }
         if !export.unimported.isEmpty {
-            pieces.append("\(export.unimported.count) part(s) still to import")
+            pieces.append("\(export.unimported.count) still to read")
         }
         return pieces.joined(separator: " · ")
     }
