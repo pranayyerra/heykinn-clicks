@@ -116,3 +116,42 @@ final class ImportParityTests: XCTestCase {
         XCTAssertEqual(second.duplicateFilenames, ["photo.jpg"])
     }
 }
+
+/// An ImportBatch is written by every import path, not only by somebody
+/// choosing a folder — and `sourcePath` holds a label rather than a path for
+/// three of the four things that write it. A screen that took either at face
+/// value showed a user seven Google Takeout imports as folders they had added,
+/// with no paths under them, none of which they remembered doing.
+final class ImportBatchOriginTests: XCTestCase {
+
+    private func batch(_ path: String, _ origin: ImportOrigin?) -> ImportBatch {
+        ImportBatch(
+            id: UUID(), sourcePath: path, startedAt: Date(), completedAt: nil,
+            importedCount: 1, duplicateCount: 0, failedCount: 0, origin: origin
+        )
+    }
+
+    func testATakeoutImportIsNotAFolderSomebodyAdded() {
+        XCTAssertFalse(batch("Takeout export 20260710T081521Z-2 (3 parts)", .googleTakeout).isFolderImport)
+        XCTAssertFalse(batch("Recovered import (Google Takeout)", .googleTakeout).isFolderImport)
+        XCTAssertFalse(batch("/Users/me/Photos", .appleExport).isFolderImport)
+    }
+
+    func testAFolderImportIs() {
+        XCTAssertTrue(batch("/Users/me/Pictures/Camera Roll", .localFolder).isFolderImport)
+        XCTAssertTrue(batch("/Users/me/WhatsApp", .whatsapp).isFolderImport)
+    }
+
+    /// A batch from before the app recorded this says nothing rather than
+    /// guessing, so it cannot be filed under a source it did not come from.
+    func testAnUnrecordedOriginClaimsNothing() {
+        XCTAssertFalse(batch("/Users/me/Pictures", nil).isFolderImport)
+    }
+
+    /// Only a real path is shown as one, or offered to Finder.
+    func testALabelIsNotTreatedAsAPath() {
+        XCTAssertFalse(batch("Takeout: Takeout_Archive_2026", .googleTakeout).isFilesystemPath)
+        XCTAssertFalse(batch("Recovered import (Google Takeout)", .googleTakeout).isFilesystemPath)
+        XCTAssertTrue(batch("/Volumes/Field Drive/Exports", .localFolder).isFilesystemPath)
+    }
+}

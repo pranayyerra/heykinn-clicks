@@ -98,15 +98,16 @@ extension CatalogStore {
 
     func upsertImportBatch(_ batch: ImportBatch) throws {
         try database.run("""
-        INSERT INTO import_batches (id, source_path, started_at, completed_at, imported_count, duplicate_count, failed_count)
-        VALUES (?,?,?,?,?,?,?)
+        INSERT INTO import_batches (id, source_path, started_at, completed_at, imported_count, duplicate_count, failed_count, origin)
+        VALUES (?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             source_path = excluded.source_path,
             started_at = excluded.started_at,
             completed_at = excluded.completed_at,
             imported_count = excluded.imported_count,
             duplicate_count = excluded.duplicate_count,
-            failed_count = excluded.failed_count;
+            failed_count = excluded.failed_count,
+            origin = excluded.origin;
         """, [
             .text(batch.id.uuidString),
             .text(batch.sourcePath),
@@ -115,12 +116,13 @@ extension CatalogStore {
             .int(Int64(batch.importedCount)),
             .int(Int64(batch.duplicateCount)),
             .int(Int64(batch.failedCount)),
+            .optionalText(batch.origin?.rawValue),
         ])
     }
 
     func fetchImportBatches() throws -> [ImportBatch] {
         try database.query("""
-        SELECT id, source_path, started_at, completed_at, imported_count, duplicate_count, failed_count
+        SELECT id, source_path, started_at, completed_at, imported_count, duplicate_count, failed_count, origin
         FROM import_batches ORDER BY started_at DESC;
         """) { row in
             ImportBatch(
@@ -130,7 +132,8 @@ extension CatalogStore {
                 completedAt: row.optionalDate(3),
                 importedCount: Int(row.int(4)),
                 duplicateCount: Int(row.int(5)),
-                failedCount: Int(row.int(6))
+                failedCount: Int(row.int(6)),
+                origin: row.optionalText(7).flatMap(ImportOrigin.init(rawValue:))
             )
         }
     }

@@ -183,6 +183,11 @@ final class CatalogStore {
         // not find. The row stays for the import history it carries; this is
         // what stops it counting as a copy of its part.
         try? database.exec("ALTER TABLE takeout_archives ADD COLUMN missing_since REAL;")
+        // What kind of import a batch was. `source_path` holds a label rather
+        // than a path for three of the four things that write it, so it can
+        // not be used to tell a folder somebody chose from a Takeout the app
+        // unpacked — which is a question the Sources screen has to answer.
+        try? database.exec("ALTER TABLE import_batches ADD COLUMN origin TEXT;")
     }
 
     /// Writes a consistent, compacted copy of the whole catalog to `path`.

@@ -13,10 +13,18 @@ struct FolderSourceList: View {
     @EnvironmentObject private var store: AppStore
     @State private var opened: UUID?
 
-    /// Newest first — a folder added this morning is the one being asked
-    /// about; one added last year is history.
+    /// Folder imports, newest first.
+    ///
+    /// Filtered, because an `ImportBatch` is written by every import path —
+    /// Takeout and Apple Photos as much as a folder somebody chose. Listing
+    /// them all under "folders you have added" showed a user seven Google
+    /// Takeout imports as folders they had picked, none of which they
+    /// remembered doing, and with no paths under them because three of the
+    /// four writers put a label in `sourcePath` rather than a path.
     private var batches: [ImportBatch] {
-        store.importBatches.sorted { $0.startedAt > $1.startedAt }
+        store.importBatches
+            .filter(\.isFolderImport)
+            .sorted { $0.startedAt > $1.startedAt }
     }
 
     var body: some View {
@@ -46,14 +54,18 @@ struct FolderSourceList: View {
                     // The folder's own name, big enough to recognise, with the
                     // path it sits at underneath. A full path as the heading
                     // is unreadable and truncates from the wrong end.
-                    Text((batch.sourcePath as NSString).lastPathComponent)
+                    Text(batch.isFilesystemPath
+                         ? (batch.sourcePath as NSString).lastPathComponent
+                         : batch.sourcePath)
                         .font(.callout.weight(.medium))
                         .lineLimit(1)
-                    Text((batch.sourcePath as NSString).deletingLastPathComponent)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.head)
+                    if batch.isFilesystemPath {
+                        Text((batch.sourcePath as NSString).deletingLastPathComponent)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(1)
+                            .truncationMode(.head)
+                    }
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 2) {
@@ -95,15 +107,17 @@ struct FolderSourceList: View {
                     stat(batch.failedCount, "could not be read", .orange)
                 }
             }
-            HStack(spacing: 10) {
-                Text(batch.sourcePath)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
-                RevealButton(path: batch.sourcePath)
-                Spacer(minLength: 0)
+            if batch.isFilesystemPath {
+                HStack(spacing: 10) {
+                    Text(batch.sourcePath)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                    RevealButton(path: batch.sourcePath)
+                    Spacer(minLength: 0)
+                }
             }
 
             if assets.isEmpty {

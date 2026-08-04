@@ -103,13 +103,16 @@ struct SourcesView: View {
         // folder on a disk" describes what this kind of source *is*, which the
         // reader worked out from the word "folder" — and leaves out the only
         // thing they cannot know without being told: which folders.
-        let newest = store.importBatches.max { $0.startedAt < $1.startedAt }
+        let folderBatches = store.importBatches.filter(\.isFolderImport)
+        let newest = folderBatches.max { $0.startedAt < $1.startedAt }
         let detail: String
-        if let newest, !store.importBatches.isEmpty {
-            let name = (newest.sourcePath as NSString).lastPathComponent
-            detail = store.importBatches.count == 1
+        if let newest {
+            let name = newest.isFilesystemPath
+                ? (newest.sourcePath as NSString).lastPathComponent
+                : newest.sourcePath
+            detail = folderBatches.count == 1
                 ? name
-                : "\(Formatters.count(store.importBatches.count, "folder")) · most recently \(name)"
+                : "\(Formatters.count(folderBatches.count, "folder")) · most recently \(name)"
         } else {
             detail = "A backup, a memory card, anywhere photos sit loose"
         }
@@ -445,7 +448,7 @@ struct SourcesView: View {
     private var folderCard: some View {
         Group {
             VStack(alignment: .leading, spacing: 10) {
-                if store.importBatches.isEmpty {
+                if store.importBatches.filter(\.isFolderImport).isEmpty {
                     Text("An old backup, a memory card, a Downloads folder — anywhere photos and videos are sitting loose. The app copies them into the archive and leaves the folder exactly as it found it.")
                         .font(.callout)
                         .foregroundStyle(.secondary)

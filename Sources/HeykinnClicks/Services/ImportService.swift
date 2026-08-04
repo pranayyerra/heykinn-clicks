@@ -56,6 +56,7 @@ enum ImportService {
     static func importFiles(
         _ fileURLs: [URL],
         sourceDescription: String,
+        batchOrigin: ImportOrigin = .localFolder,
         existingAssets: [Asset],
         policyRules: [PolicyRule],
         staging: StagingStore,
@@ -69,7 +70,8 @@ enum ImportService {
             completedAt: nil,
             importedCount: 0,
             duplicateCount: 0,
-            failedCount: 0
+            failedCount: 0,
+            origin: batchOrigin
         )
         var imported: [Asset] = []
         var duplicates: [String] = []

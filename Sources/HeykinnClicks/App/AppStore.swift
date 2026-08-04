@@ -1338,6 +1338,27 @@ final class AppStore: ObservableObject {
                 repairs.append("attributed \(attributed) archive(s) to the drive holding them")
             }
 
+            // Batches written before the app recorded what kind of import they
+            // were. The information was never lost — every asset carries its
+            // own origin — but nothing had asked the batch, so a screen listing
+            // folder imports had to take a free-text description at its word
+            // and showed Takeout imports as folders somebody had chosen.
+            var typed = 0
+            for var batch in importBatches where batch.origin == nil {
+                let members = assets.filter { $0.importBatchID == batch.id }
+                guard let origin = members.first?.importOrigin else { continue }
+                // One kind or it stays unknown: a batch whose assets disagree
+                // is not evidence of anything, and guessing the majority would
+                // file it under a source it only partly came from.
+                guard members.allSatisfy({ $0.importOrigin == origin }) else { continue }
+                batch.origin = origin
+                try catalog.upsertImportBatch(batch)
+                typed += 1
+            }
+            if typed > 0 {
+                repairs.append("recorded what kind of import \(typed) earlier batch(es) were")
+            }
+
             // A folder registered as an export while holding other exports —
             // counted twice in every total, and shown as an export of its own.
             let containers = dropContainerArchives()
@@ -1359,7 +1380,8 @@ final class AppStore: ObservableObject {
                     completedAt: members.map(\.updatedDate).max(),
                     importedCount: members.count,
                     duplicateCount: 0,
-                    failedCount: 0
+                    failedCount: 0,
+                    origin: members.first?.importOrigin
                 ))
             }
             if !orphanBatchIDs.isEmpty {
@@ -1887,7 +1909,8 @@ final class AppStore: ObservableObject {
             completedAt: nil,
             importedCount: 0,
             duplicateCount: 0,
-            failedCount: 0
+            failedCount: 0,
+            origin: .googleTakeout
         )
         do {
             try catalog.upsertImportBatch(batch)

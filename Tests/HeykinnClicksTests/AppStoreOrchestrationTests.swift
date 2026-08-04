@@ -1336,3 +1336,103 @@ final class RedundancyPolicyBoundTests: XCTestCase {
         XCTAssertEqual(reopened.requestedCopies, 3)
     }
 }
+
+/// Batches written before the app recorded what kind of import they were.
+/// The information was never lost — every asset carries its own origin — but
+/// nothing had asked the batch, so a screen listing folder imports had to read
+/// a free-text description and got it wrong.
+@MainActor
+final class ImportBatchBackfillTests: XCTestCase {
+
+    private var roots: [URL] = []
+    private var suiteNames: [String] = []
+
+    override func tearDown() {
+        for url in roots { try? FileManager.default.removeItem(at: url) }
+        for name in suiteNames { UserDefaults.standard.removePersistentDomain(forName: name) }
+        roots = []; suiteNames = []
+        super.tearDown()
+    }
+
+    private func makeStore() throws -> (AppStore, CatalogStore) {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-backfill-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        roots.append(root)
+        let suiteName = "heykinn-backfill-\(root.lastPathComponent)"
+        suiteNames.append(suiteName)
+        let store = AppStore(environment: AppEnvironment(
+            appDirectory: root, defaults: UserDefaults(suiteName: suiteName)!, runsBackgroundWork: false
+        ))
+        let catalog = try CatalogStore(
+            databasePath: root.appendingPathComponent("catalog.sqlite").path
+        )
+        return (store, catalog)
+    }
+
+    private func asset(_ origin: ImportOrigin, batch: UUID) -> Asset {
+        Asset(
+            id: UUID(), kind: .photo, originalFilename: "IMG.jpg", importOrigin: origin,
+            captureDate: nil, importDate: Date(), updatedDate: Date(), fileSize: 1,
+            pixelWidth: nil, pixelHeight: nil, contentHash: UUID().uuidString,
+            residency: .local, residencySource: .importDefault, presence: .localOnly,
+            stagingRelativePath: nil, importBatchID: batch, exifSummary: [:]
+        )
+    }
+
+    private func batch(_ label: String) -> ImportBatch {
+        ImportBatch(
+            id: UUID(), sourcePath: label, startedAt: Date(), completedAt: nil,
+            importedCount: 1, duplicateCount: 0, failedCount: 0, origin: nil
+        )
+    }
+
+    /// The reported shape: seven Takeout imports, described in prose, showing
+    /// up as folders somebody had added.
+    func testATakeoutBatchIsTypedFromItsOwnPhotos() throws {
+        let (store, catalog) = try makeStore()
+        let takeout = batch("Recovered import (Google Takeout)")
+        let folder = batch("/Users/me/Pictures/Camera Roll")
+        try catalog.upsertImportBatch(takeout)
+        try catalog.upsertImportBatch(folder)
+        try catalog.upsertAsset(asset(.googleTakeout, batch: takeout.id))
+        try catalog.upsertAsset(asset(.localFolder, batch: folder.id))
+        store.loadAll()
+
+        store.reconcileAfterRestart()
+
+        let typed = Dictionary(uniqueKeysWithValues: store.importBatches.map { ($0.id, $0) })
+        XCTAssertEqual(typed[takeout.id]?.origin, .googleTakeout)
+        XCTAssertFalse(typed[takeout.id]?.isFolderImport ?? true)
+        XCTAssertEqual(typed[folder.id]?.origin, .localFolder)
+        XCTAssertTrue(typed[folder.id]?.isFolderImport ?? false)
+    }
+
+    /// A batch whose photos disagree is not evidence of anything. Filing it
+    /// under the majority would put it under a source it only partly came from.
+    func testAMixedBatchIsLeftUnrecorded() throws {
+        let (store, catalog) = try makeStore()
+        let mixed = batch("Some import")
+        try catalog.upsertImportBatch(mixed)
+        try catalog.upsertAsset(asset(.googleTakeout, batch: mixed.id))
+        try catalog.upsertAsset(asset(.localFolder, batch: mixed.id))
+        store.loadAll()
+
+        store.reconcileAfterRestart()
+
+        XCTAssertNil(store.importBatches.first { $0.id == mixed.id }?.origin)
+    }
+
+    /// It survives the round trip, so the next launch has nothing to do.
+    func testTheRecordedOriginIsPersisted() throws {
+        let (store, catalog) = try makeStore()
+        let takeout = batch("Takeout export S1 (3 parts)")
+        try catalog.upsertImportBatch(takeout)
+        try catalog.upsertAsset(asset(.googleTakeout, batch: takeout.id))
+        store.loadAll()
+        store.reconcileAfterRestart()
+
+        let reread = try catalog.fetchImportBatches().first { $0.id == takeout.id }
+        XCTAssertEqual(reread?.origin, .googleTakeout)
+    }
+}
