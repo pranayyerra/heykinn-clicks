@@ -633,7 +633,7 @@ final class AppStore: ObservableObject {
             guard !covered.isEmpty else { return }
             audit(
                 .replication,
-                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist on two targets, covering \(covered.count) asset(s). Recorded \(claimed) second cop(ies) against the parts holding them, replacing \(pendingCleared) pending entr(ies), and withdrew \(cancelled) file copies that are no longer needed."
+                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist as \(redundancyPolicy.description), covering \(covered.count) asset(s). Recorded \(claimed) cop(ies) against the parts holding them, replacing \(pendingCleared) pending entr(ies), and withdrew \(cancelled) file copies that are no longer needed."
             )
             loadAll()
         } catch {
@@ -655,12 +655,17 @@ final class AppStore: ObservableObject {
         archivePlan = ArchiveReplicationPlanner.plan(
             archives: takeoutArchives, managedTargetIDs: managedIDs, policy: redundancyPolicy
         )
+        // Meeting the policy no longer implies more than one copy — under a
+        // one-copy policy a part is protected by the only copy there is. That
+        // part is not a candidate: a comparison needs something to compare to,
+        // and running one over a lone file would report agreement with itself.
         let candidates = archivePlan.partsMeetingPolicy.filter { part in
-            part.copies.values.contains { $0.kind == .zip }
+            part.copies.count >= redundancyPolicy.copiesNeededToCompare
+                && part.copies.values.contains { $0.kind == .zip }
                 && part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
         }
         guard !candidates.isEmpty else {
-            audit(.replication, "Spot check: no export part has all of its copies connected.")
+            audit(.replication, "Spot check: no export part has two connected copies to compare.")
             return
         }
 
@@ -692,7 +697,7 @@ final class AppStore: ObservableObject {
                     }
                     checksums[targetID] = archive.quickChecksum
                 }
-                guard checksums.count >= redundancyPolicy.desiredCopies else { continue }
+                guard checksums.count >= redundancyPolicy.copiesNeededToCompare else { continue }
 
                 if Set(checksums.values).count == 1 {
                     assetsConfirmed += markPartVerified(part, onTargets: Set(checksums.keys))
@@ -726,12 +731,14 @@ final class AppStore: ObservableObject {
         archivePlan = ArchiveReplicationPlanner.plan(
             archives: takeoutArchives, managedTargetIDs: managedIDs, policy: redundancyPolicy
         )
-        // Only parts whose copies are all reachable can be compared now.
+        // Only parts whose copies are all reachable can be compared now — and
+        // only parts that have a second copy to be compared against at all.
         let candidates = archivePlan.partsMeetingPolicy.filter { part in
-            part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+            part.copies.count >= redundancyPolicy.copiesNeededToCompare
+                && part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
         }
         guard !candidates.isEmpty else {
-            audit(.replication, "Checksum check: no export part has all of its copies connected.")
+            audit(.replication, "Checksum check: no export part has two connected copies to compare.")
             return
         }
 
@@ -756,7 +763,7 @@ final class AppStore: ObservableObject {
                     guard let hash = await fingerprintZipIfNeeded(archive) else { continue }
                     hashes[targetID] = hash
                 }
-                guard hashes.count >= redundancyPolicy.desiredCopies else { continue }
+                guard hashes.count >= redundancyPolicy.copiesNeededToCompare else { continue }
 
                 if Set(hashes.values).count == 1 {
                     assetsConfirmed += markPartVerified(part, onTargets: Set(hashes.keys))

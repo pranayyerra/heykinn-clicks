@@ -154,6 +154,121 @@ final class ArchiveReplicationTests: XCTestCase {
         XCTAssertEqual(underThree.bytesOutstanding, 100)
     }
 
+    /// The state of every single-target install, because the policy is clamped
+    /// to the number of registered targets. One copy is exactly what the policy
+    /// asks for, so it cannot be work outstanding — the card used to report a
+    /// shortfall that no amount of copying could ever clear.
+    func testOneCopyUnderAOneCopyPolicyIsNotAShortfall() {
+        let a = UUID()
+        let onlyCopy = LocalRedundancyPolicy(desiredCopies: 1)
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [archive(part: 1, drive: a, size: 5_000)],
+            managedTargetIDs: [a], policy: onlyCopy
+        )
+        let redundancy = plan.parts[0].redundancy(acrossTargets: [a], policy: onlyCopy)
+
+        XCTAssertEqual(redundancy, .singleCopyByPolicy)
+        XCTAssertTrue(redundancy.meetsPolicy, "One copy is what was asked for")
+        XCTAssertEqual(plan.partsNeedingWork, [], "There is no copy left to make")
+        XCTAssertTrue(plan.isSatisfied)
+        XCTAssertEqual(plan.bytesOutstanding, 0)
+    }
+
+    /// The other half of the same claim: the fix must not turn a genuine
+    /// shortfall into a pass. The same lone copy under the default policy is
+    /// still a part that needs a second home.
+    func testTheSameLoneCopyIsStillAShortfallUnderATwoCopyPolicy() {
+        let a = UUID(), b = UUID()
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [archive(part: 1, drive: a, size: 5_000)],
+            managedTargetIDs: [a, b]
+        )
+        let redundancy = plan.parts[0].redundancy(acrossTargets: [a, b])
+
+        XCTAssertEqual(redundancy, .singleCopy)
+        XCTAssertFalse(redundancy.meetsPolicy)
+        XCTAssertNotEqual(redundancy, .singleCopyByPolicy, "Two states, two different truths")
+        XCTAssertEqual(plan.bytesOutstanding, 5_000)
+    }
+
+    /// Satisfying the policy is not evidence the bytes are good. A copy with a
+    /// hash on it has still been compared to nothing, so it must never be
+    /// reported at any of the grades that mean "the copies agree".
+    func testASingleCopyIsNeverGradedAsVerifiedHoweverMuchIsKnownAboutIt() {
+        let a = UUID()
+        let onlyCopy = LocalRedundancyPolicy(desiredCopies: 1)
+        var hashed = archive(part: 1, drive: a, hash: "abc")
+        hashed.quickChecksum = "abc-quick"
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [hashed], managedTargetIDs: [a], policy: onlyCopy
+        )
+
+        XCTAssertEqual(
+            plan.parts[0].redundancy(acrossTargets: [a], policy: onlyCopy), .singleCopyByPolicy,
+            "A hash agrees with nothing until there is a second copy to hold it against"
+        )
+        XCTAssertFalse(plan.parts[0].hashesAgree)
+        XCTAssertFalse(plan.parts[0].quickChecksumsAgree)
+    }
+
+    /// Comparing takes two copies whatever the policy asks for, which is why
+    /// the checks read this number rather than `desiredCopies`. Without it,
+    /// a lone copy would pass a comparison against itself and be recorded as
+    /// verified across targets.
+    func testAComparisonNeedsTwoCopiesEvenWhenThePolicyAsksForOne() {
+        XCTAssertEqual(LocalRedundancyPolicy(desiredCopies: 1).copiesNeededToCompare, 2)
+        XCTAssertEqual(LocalRedundancyPolicy(desiredCopies: 2).copiesNeededToCompare, 2)
+        XCTAssertEqual(LocalRedundancyPolicy(desiredCopies: 3).copiesNeededToCompare, 3)
+        XCTAssertEqual(
+            LocalRedundancyPolicy(desiredCopies: 1).description, "one copy",
+            "A policy the user can actually set has to read as English"
+        )
+    }
+
+    /// Two drives registered but only one copy asked for: the part that happens
+    /// to exist twice is graded on the evidence, the part that exists once is
+    /// complete as it stands. Both meet the policy, by different routes.
+    func testAnExtraCopyIsStillGradedWhenThePolicyOnlyAsksForOne() {
+        let a = UUID(), b = UUID()
+        let onlyCopy = LocalRedundancyPolicy(desiredCopies: 1)
+        let plan = ArchiveReplicationPlanner.plan(
+            archives: [
+                archive(part: 1, drive: a, size: 100),
+                archive(part: 1, drive: b, size: 100),
+                archive(part: 2, drive: a, size: 100),
+            ],
+            managedTargetIDs: [a, b], policy: onlyCopy
+        )
+        XCTAssertEqual(
+            plan.parts[0].redundancy(acrossTargets: [a, b], policy: onlyCopy), .redundantUnverified
+        )
+        XCTAssertEqual(
+            plan.parts[1].redundancy(acrossTargets: [a, b], policy: onlyCopy), .singleCopyByPolicy
+        )
+        XCTAssertTrue(plan.isSatisfied)
+    }
+
+    /// The consequence the user actually sees: a single-target install has no
+    /// transfers to run, nothing stranded, and nothing parked on the Mac
+    /// waiting for a drive that the policy never asked for.
+    func testASingleTargetInstallHasNoTransfersToRun() {
+        let a = UUID()
+        let onlyCopy = LocalRedundancyPolicy(desiredCopies: 1)
+        let replication = ArchiveReplicationPlanner.plan(
+            archives: [archive(part: 1, drive: a, size: 5_000)],
+            managedTargetIDs: [a], policy: onlyCopy
+        )
+        let transfers = ExportPartTransferPlanner.plan(
+            replication: replication,
+            connectedDriveIDs: [a],
+            heldParts: [],
+            availableHoldingBytes: 500 * 1024 * 1024 * 1024
+        )
+        XCTAssertTrue(transfers.isEmpty)
+        XCTAssertEqual(transfers.stranded, [])
+        XCTAssertEqual(transfers.deferredForSpace, [])
+    }
+
     func testProtectionAlsoFollowsThePolicy() {
         let asset = Asset(
             id: UUID(), kind: .photo, originalFilename: "p.jpg", importOrigin: .localFolder,

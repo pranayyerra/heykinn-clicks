@@ -6,6 +6,16 @@ enum PartRedundancy: String, Codable, Hashable {
     case absent
     /// Exactly one managed drive holds it.
     case singleCopy
+    /// The policy asks for one copy and one copy exists.
+    ///
+    /// Every grade below is a comparison *between* copies, so a part in this
+    /// state can never earn one — there is nothing to compare it against, and
+    /// no amount of checking will change that. Reporting it as `singleCopy`
+    /// would put it in `partsNeedingWork` forever, asking for work that cannot
+    /// be done; reporting it as `redundant*` would claim agreement nobody
+    /// established. It is the same distinction `CheckStanding` draws between a
+    /// check that is weak and a check that was never possible.
+    case singleCopyByPolicy
     /// Enough targets hold it, matched by name and byte size only. Enough to
     /// plan against; not yet proof the bytes agree.
     case redundantUnverified
@@ -20,6 +30,7 @@ enum PartRedundancy: String, Codable, Hashable {
         switch self {
         case .absent: return "Not on any drive"
         case .singleCopy: return "One copy"
+        case .singleCopyByPolicy: return "One copy, which is what the policy asks"
         case .redundantUnverified: return "Enough copies (sizes match)"
         case .redundantSpotChecked: return "Enough copies, spot-checked"
         case .redundantVerified: return "Enough copies, verified"
@@ -27,8 +38,14 @@ enum PartRedundancy: String, Codable, Hashable {
     }
 
     /// Whether this state satisfies the configured local redundancy policy.
+    /// Switched rather than compared, so a state added later has to say which
+    /// side of the only question the user is asked it falls on.
     var meetsPolicy: Bool {
-        self == .redundantUnverified || self == .redundantSpotChecked || self == .redundantVerified
+        switch self {
+        case .absent, .singleCopy: return false
+        case .singleCopyByPolicy, .redundantUnverified, .redundantSpotChecked, .redundantVerified:
+            return true
+        }
     }
 }
 
@@ -89,6 +106,12 @@ struct ExportPart: Identifiable, Hashable {
         let holders = targetIDs.intersection(managedTargetIDs)
         if holders.isEmpty { return .absent }
         guard policy.isSatisfied(byCopies: holders.count) else { return .singleCopy }
+        // A lone copy under a one-copy policy is everything the policy asks
+        // for. None of the evidence grades below can apply to it — they are
+        // all agreements between copies — so answering with any of them, or
+        // falling through to `singleCopy`, would be untrue in a different
+        // direction each way.
+        if holders.count == 1 { return .singleCopyByPolicy }
         if hashesAgree { return .redundantVerified }
         if quickChecksumsAgree { return .redundantSpotChecked }
         if sizesAgree { return .redundantUnverified }

@@ -106,10 +106,20 @@ struct LocalRedundancyPolicy: Equatable {
 
     /// Human phrasing for the policy, used wherever it is explained.
     var description: String {
-        desiredCopies == 2 ? "two copies" : "\(desiredCopies) copies"
+        switch desiredCopies {
+        case 1: return "one copy"
+        case 2: return "two copies"
+        default: return "\(desiredCopies) copies"
+        }
     }
 
     func isSatisfied(byCopies count: Int) -> Bool { count >= desiredCopies }
+
+    /// How many copies must be read before agreement between them can be
+    /// claimed. Comparing takes two, whatever the policy asks for: a lone copy
+    /// under a one-copy policy is fully protected and still has nothing to be
+    /// compared against, so a check over it would confirm nothing.
+    var copiesNeededToCompare: Int { max(desiredCopies, 2) }
 }
 
 /// What a drive's pending backlog actually consists of. A bare task count

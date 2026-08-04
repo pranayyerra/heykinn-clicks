@@ -150,11 +150,21 @@ struct ExportSummary: Identifiable {
                 .orange
             )
         }
-        let verified = parts.filter {
-            $0.redundancy(acrossTargets: plan.managedTargetIDs, policy: plan.policy) == .redundantVerified
+        let grades = parts.map {
+            $0.redundancy(acrossTargets: plan.managedTargetIDs, policy: plan.policy)
         }
-        let spotChecked = parts.filter {
-            $0.redundancy(acrossTargets: plan.managedTargetIDs, policy: plan.policy) == .redundantSpotChecked
+        let verified = grades.filter { $0 == .redundantVerified }
+        let spotChecked = grades.filter { $0 == .redundantSpotChecked }
+        let soleCopies = grades.filter { $0 == .singleCopyByPolicy }
+        // Nothing was compared and nothing ever will be — the policy asks for
+        // one copy, so there is no second copy to hold this one against.
+        // Saying "not yet compared" would promise a check that is not coming.
+        if soleCopies.count == parts.count {
+            return (
+                "On the one managed drive — \(plan.policy.description) is what the policy asks for, and there is no second copy to compare against",
+                "checkmark.circle",
+                .teal
+            )
         }
         if verified.count == parts.count {
             return ("On every drive, copies verified byte for byte", "checkmark.seal.fill", .green)
@@ -162,7 +172,16 @@ struct ExportSummary: Identifiable {
         if verified.count + spotChecked.count == parts.count {
             return ("On every drive, copies match on a quick check", "checkmark.seal", .green)
         }
-        let pending = parts.count - verified.count - spotChecked.count
+        // Parts held as a single copy are not waiting on a comparison, so
+        // counting them as pending would overstate the work outstanding.
+        let pending = parts.count - verified.count - spotChecked.count - soleCopies.count
+        guard pending > 0 else {
+            return (
+                "On every drive — \(soleCopies.count) part(s) exist as a single copy, with nothing to compare",
+                "checkmark.circle",
+                .teal
+            )
+        }
         return ("On every drive — \(pending) part(s) not yet compared", "checkmark.circle", .teal)
     }
 }
