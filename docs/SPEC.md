@@ -115,10 +115,16 @@ Shipped and tested; the pointers are where to look.
   feature. No `PHPhotosError` case names the state, and nothing on the library
   container reports it. Inferring it anyway would write false residency — the
   exact failure the evidence model exists to prevent.
-- **UI** — Overview with the one-answer protection card; Storage & Health with
-  the archive map (the archive at the centre, a node per place, empty slots
-  drawn); ⌘, Settings. Acting by default, escapes in menus, photos leading
-  over files.
+- **UI** — navigation is the three questions somebody actually has: *what I
+  have*, *where it came from*, *is it safe*. The mechanisms — violations,
+  migrations, policies, duplicates, the activity log — are pages inside the
+  question they answer, not top-level names the reader has to already
+  understand. Overview with the one-answer protection card; Storage & Health
+  with the archive map (the archive at the centre, a node per place, empty
+  slots drawn); Sources with the inbound flow (each source, how much of it has
+  made it across, the archive at the end); ⌘, Settings. Acting by default,
+  escapes in menus, photos leading over files, and every screen written for
+  somebody who has not read this document.
 
 Stack: SwiftUI · Swift concurrency · raw `sqlite3` (WAL, `VACUUM INTO`,
 additive migrations) · Apple frameworks only — zero third-party dependencies.
@@ -230,7 +236,10 @@ Earned against a real 248 GB archive; the stories are in git history.
     row that outlives it must stop counting as one — but only ever from a
     target that was reachable at the time, because an unplug makes every
     check fail at once.
-22. Put it back where it was. The catalog already records where content
+22. The sidebar is the user's questions, not the app's mechanisms. A name
+    like "Violations" tells somebody who already knows the model where to
+    click, and tells everyone else nothing.
+23. Put it back where it was. The catalog already records where content
     lived, so restoring a copy to a folder of the app's own choosing invents
     a second location for one file; a part delivered to complete an export
     belongs beside that export, wherever the user keeps it. What the app
