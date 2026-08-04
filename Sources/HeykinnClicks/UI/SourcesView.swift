@@ -20,7 +20,13 @@ struct SourcesView: View {
     @State private var isExportSearchPickerPresented = false
     @State private var isFolderImportPickerPresented = false
     @State private var importRequest: TakeoutImportRequest?
-    @State private var scrollTarget: String?
+    /// Which sources are showing their detail. A source's detail belongs to
+    /// the source: it used to sit further down the page as its own section, so
+    /// clicking a node in the diagram scrolled somewhere else and the reader
+    /// had to keep the connection in their head. Nothing is open to begin
+    /// with, so the screen opens as three sources and a diagram rather than
+    /// everything at once.
+    @State private var expanded: Set<String> = []
 
     // MARK: - The flow diagram
 
@@ -116,13 +122,11 @@ struct SourcesView: View {
         )
     }
 
-    var body: some View {
-        ScrollViewReader { scroller in
-            content.onChange(of: scrollTarget) { _, target in
-                guard let target else { return }
-                withAnimation { scroller.scrollTo(target, anchor: .top) }
-                scrollTarget = nil
-            }
+    var body: some View { content }
+
+    private func toggle(_ id: String) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            if expanded.contains(id) { expanded.remove(id) } else { expanded.insert(id) }
         }
     }
 
@@ -131,10 +135,16 @@ struct SourcesView: View {
             VStack(alignment: .leading, spacing: 16) {
                 introduction
 
+                // The diagram is the list. It already draws every source with
+                // its name, its state and how much of it has made it across —
+                // repeating that as a row of headers underneath was the same
+                // fact twice on one screen, which is the thing this screen was
+                // being fixed for.
                 SourceFlowView(
                     sources: flowSources,
                     photoCount: store.assets.count,
-                    onSelect: { scrollTarget = $0.id }
+                    opened: expanded,
+                    onSelect: { toggle($0.id) }
                 )
                 .padding(.vertical, 4)
 
@@ -142,9 +152,10 @@ struct SourcesView: View {
                     TakeoutActivityBanner(activity: activity)
                 }
 
-                applePhotosCard.id("apple")
-                takeoutSection.id("google")
-                folderCard.id("folder")
+                // Opened detail, directly under the thing it belongs to.
+                ForEach(flowSources.filter { expanded.contains($0.id) }) { source in
+                    detailPanel(source)
+                }
             }
             .padding(20)
         }
@@ -185,6 +196,40 @@ struct SourcesView: View {
         }
     }
 
+    /// The opened source's detail, titled so it is obvious which node it
+    /// belongs to and closable from its own header.
+    @ViewBuilder
+    private func detailPanel(_ source: PhotoSource) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack(spacing: 10) {
+                Image(systemName: source.symbol)
+                    .foregroundStyle(source.isSet ? source.tint : Color.secondary)
+                Text(source.name)
+                    .font(.headline)
+                Spacer(minLength: 0)
+                Button {
+                    toggle(source.id)
+                } label: {
+                    Label("Hide", systemImage: "chevron.up")
+                        .font(.caption)
+                }
+                .buttonStyle(.link)
+            }
+            .padding(12)
+
+            Group {
+                switch source.id {
+                case "apple": applePhotosCard
+                case "google": takeoutSection
+                default: folderCard
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.bottom, 12)
+        }
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+    }
+
     /// What this screen is, in the two sentences someone needs before any of
     /// the numbers below mean anything — including the reassurance they are
     /// most likely to want first, which is that pointing the app at their
@@ -206,7 +251,7 @@ struct SourcesView: View {
     // MARK: - Apple Photos
 
     private var applePhotosCard: some View {
-        CardBox(title: "The Photos app on this Mac", systemImage: "photo.on.rectangle.angled") {
+        Group {
             switch store.applePhotosState {
             case .connected:
                 connectedApplePhotos
@@ -368,7 +413,7 @@ struct SourcesView: View {
     @ViewBuilder
     private var takeoutSection: some View {
         if exports.isEmpty {
-            CardBox(title: "A download of your Google Photos", systemImage: "shippingbox") {
+            VStack(alignment: .leading, spacing: 8) {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("None found yet.")
                         .font(.callout)
@@ -380,9 +425,7 @@ struct SourcesView: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Downloads of your Google Photos")
-                    .font(.headline)
-                Text("Google splits one download into several large .zip files. Each block below is one of them.")
+                Text("Google splits one download into several large .zip files. Each block below is one of them — click one to see which drive holds it, as the .zip or unpacked into a folder.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -400,7 +443,7 @@ struct SourcesView: View {
     /// the Library screen's toolbar, which is not where someone goes looking
     /// for a place to add photos from.
     private var folderCard: some View {
-        CardBox(title: store.importBatches.isEmpty ? "A folder of photos" : "Folders you have added", systemImage: "folder") {
+        Group {
             VStack(alignment: .leading, spacing: 10) {
                 if store.importBatches.isEmpty {
                     Text("An old backup, a memory card, a Downloads folder — anywhere photos and videos are sitting loose. The app copies them into the archive and leaves the folder exactly as it found it.")

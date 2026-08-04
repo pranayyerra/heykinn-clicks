@@ -95,12 +95,16 @@ struct FolderSourceList: View {
                     stat(batch.failedCount, "could not be read", .orange)
                 }
             }
-            Text(batch.sourcePath)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .textSelection(.enabled)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 10) {
+                Text(batch.sourcePath)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                RevealButton(path: batch.sourcePath)
+                Spacer(minLength: 0)
+            }
 
             if assets.isEmpty {
                 Text("Nothing from this folder is in the archive — every photo in it was already here.")

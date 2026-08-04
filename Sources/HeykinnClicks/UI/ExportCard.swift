@@ -195,6 +195,7 @@ struct ExportCard: View {
                 if !export.parts.isEmpty {
                     ExportPartGrid(
                         parts: export.parts,
+                        archives: export.archives,
                         managedTargetIDs: export.plan.managedTargetIDs,
                         policy: export.plan.policy,
                         driveNames: driveNames

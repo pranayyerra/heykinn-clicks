@@ -14,6 +14,11 @@ import SwiftUI
 /// than a list you parse.
 struct ExportPartGrid: View {
     let parts: [ExportPart]
+    /// Every archive of this export, not just the canonical copy per drive.
+    /// A drive can hold both the .zip and the folder unpacked from it, and the
+    /// plan keeps only one of them — so asking the plan "what have I got?"
+    /// silently drops half the answer to the question this detail exists for.
+    let archives: [TakeoutArchive]
     let managedTargetIDs: Set<UUID>
     let policy: LocalRedundancyPolicy
     let driveNames: [UUID: String]
@@ -94,24 +99,49 @@ struct ExportPartGrid: View {
     }
 
     private func detail(_ part: ExportPart) -> some View {
-        let holders = part.targetIDs.intersection(managedTargetIDs)
-            .compactMap { driveNames[$0] }
-            .sorted()
+        // Named per drive with the form it is held in. A part can be the
+        // original .zip or the folder somebody unpacked from it, and both
+        // count as a copy — the app has always treated them alike and never
+        // said which one you actually have, which is the difference between
+        // "I can hand this to the other drive" and "I can browse it".
+        let holders = archives
+            .filter {
+                $0.partNumber == part.partNumber && $0.exportSetID == part.setID
+                    && $0.holdsBytes && $0.targetID.map(managedTargetIDs.contains) == true
+            }
+            .map { (name: driveNames[$0.targetID!] ?? "a drive", archive: $0) }
+            .sorted { ($0.name, $0.archive.kind == .zip ? 0 : 1) < ($1.name, $1.archive.kind == .zip ? 0 : 1) }
         let missing = managedTargetIDs.subtracting(part.targetIDs)
             .compactMap { driveNames[$0] }
             .sorted()
-        return VStack(alignment: .leading, spacing: 2) {
+
+        return VStack(alignment: .leading, spacing: 6) {
             Text("File \(part.partNumber) · \(Formatters.bytes.string(fromByteCount: part.sizeBytes))")
                 .font(.callout)
-            Text(holders.isEmpty
-                 ? "On no drive the app knows about."
-                 : "On \(holders.joined(separator: " and "))."
-                 + (missing.isEmpty ? "" : " Not yet on \(missing.joined(separator: " or "))."))
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            if holders.isEmpty {
+                Text("On no drive the app knows about.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(holders, id: \.archive.id) { holder in
+                    HStack(spacing: 8) {
+                        Image(systemName: holder.archive.kind == .zip ? "doc.zipper" : "folder")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("\(holder.name) — \(holder.archive.kind == .zip ? "the .zip" : "unpacked into a folder")")
+                            .font(.caption)
+                        Spacer(minLength: 0)
+                        RevealButton(path: holder.archive.path, label: "Show")
+                    }
+                }
+            }
+            if !missing.isEmpty {
+                Text("Not yet on \(missing.joined(separator: " or ")).")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
         }
-        .padding(8)
+        .padding(10)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(Color.secondary.opacity(0.08), in: RoundedRectangle(cornerRadius: 8))
     }

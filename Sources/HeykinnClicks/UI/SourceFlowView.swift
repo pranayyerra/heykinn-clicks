@@ -81,6 +81,9 @@ struct PhotoSource: Identifiable {
 struct SourceFlowView: View {
     let sources: [PhotoSource]
     let photoCount: Int
+    /// Sources whose detail is showing, so a node can say it is the one open
+    /// rather than leaving the reader to match a panel to a box by position.
+    var opened: Set<String> = []
     var onSelect: (PhotoSource) -> Void
 
     var body: some View {
@@ -154,7 +157,8 @@ struct SourceFlowView: View {
     }
 
     private func node(_ source: PhotoSource) -> some View {
-        Button {
+        let isOpen = opened.contains(source.id)
+        return Button {
             onSelect(source)
         } label: {
             HStack(spacing: 10) {
@@ -182,6 +186,9 @@ struct SourceFlowView: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -189,8 +196,9 @@ struct SourceFlowView: View {
             .overlay(
                 RoundedRectangle(cornerRadius: 12)
                     .stroke(
-                        source.isSet ? source.tint.opacity(0.35) : Color.secondary.opacity(0.25),
-                        style: StrokeStyle(lineWidth: 1, dash: source.isSet ? [] : [4, 4])
+                        isOpen ? Color.accentColor
+                            : source.isSet ? source.tint.opacity(0.35) : Color.secondary.opacity(0.25),
+                        style: StrokeStyle(lineWidth: isOpen ? 2 : 1, dash: source.isSet ? [] : [4, 4])
                     )
             )
         }
