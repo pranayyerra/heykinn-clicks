@@ -83,12 +83,23 @@ enum Question: String, CaseIterable, Identifiable {
 
     var id: String { rawValue }
 
+    /// Places, not questions.
+    ///
+    /// These were phrased as things the reader wants to know — "What I have",
+    /// "Where it came from" — which casts them as somebody asking, once. The
+    /// same person arrives wearing different hats: first to say where their
+    /// photos are and get them in, later to keep an eye on what is arriving.
+    /// A question-shaped name fits one of those and quietly excludes the
+    /// other, and "Where it came from" is the past tense of a screen whose
+    /// main job is adding things. A noun is a place you go back to; the
+    /// subtitle carries the plain meaning, and names both jobs where there
+    /// are two.
     var title: String {
         switch self {
         case .overview: return "Overview"
-        case .have: return "What I have"
-        case .from: return "Where it came from"
-        case .safe: return "Is it safe"
+        case .have: return "Photos"
+        case .from: return "Sources"
+        case .safe: return "Safety"
         }
     }
 
@@ -97,9 +108,9 @@ enum Question: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .overview: return "The short answer"
-        case .have: return "Every photo and video"
-        case .from: return "Where photos come from"
-        case .safe: return "Copies, drives, checks"
+        case .have: return "The whole archive"
+        case .from: return "Add photos, see what came in"
+        case .safe: return "Copies, drives and checks"
         }
     }
 

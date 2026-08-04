@@ -93,12 +93,26 @@ struct SourcesView: View {
         let fromFolders = store.assets.filter {
             $0.importOrigin == .localFolder || $0.importOrigin == .whatsapp
         }.count
+        // Names the folders rather than the category. "Photos copied in from a
+        // folder on a disk" describes what this kind of source *is*, which the
+        // reader worked out from the word "folder" — and leaves out the only
+        // thing they cannot know without being told: which folders.
+        let newest = store.importBatches.max { $0.startedAt < $1.startedAt }
+        let detail: String
+        if let newest, !store.importBatches.isEmpty {
+            let name = (newest.sourcePath as NSString).lastPathComponent
+            detail = store.importBatches.count == 1
+                ? name
+                : "\(Formatters.count(store.importBatches.count, "folder")) · most recently \(name)"
+        } else {
+            detail = "A backup, a memory card, anywhere photos sit loose"
+        }
         return PhotoSource(
             id: "folder",
             name: "Folders you have added",
             symbol: "folder",
             state: fromFolders == 0 ? .notSet : .allIn(count: fromFolders),
-            detail: "Photos copied in from a folder on a disk"
+            detail: detail
         )
     }
 
@@ -179,10 +193,13 @@ struct SourcesView: View {
         VStack(alignment: .leading, spacing: 6) {
             Text("Places your photos already live")
                 .font(.title3)
-            Text("The app looks through each place below, works out which photos it is already keeping safe copies of, and brings in the rest. It only ever reads a source — nothing here moves or deletes your originals.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Label(
+                "Sources are only ever read. Nothing here moves or deletes your originals.",
+                systemImage: "lock.open.trianglebadge.exclamationmark"
+            )
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -365,7 +382,7 @@ struct SourcesView: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("Downloads of your Google Photos")
                     .font(.headline)
-                Text("Google delivers one download as several large .zip files. The app treats each .zip as a piece of the whole and keeps track of them together, so a download counts as safe only when every piece of it does.")
+                Text("Google splits one download into several large .zip files. Each block below is one of them.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -383,12 +400,16 @@ struct SourcesView: View {
     /// the Library screen's toolbar, which is not where someone goes looking
     /// for a place to add photos from.
     private var folderCard: some View {
-        CardBox(title: "A folder of photos", systemImage: "folder") {
+        CardBox(title: store.importBatches.isEmpty ? "A folder of photos" : "Folders you have added", systemImage: "folder") {
             VStack(alignment: .leading, spacing: 10) {
-                Text("An old backup, a memory card, a Downloads folder — anywhere photos and videos are sitting loose. The app copies them into the archive and leaves the folder exactly as it found it.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if store.importBatches.isEmpty {
+                    Text("An old backup, a memory card, a Downloads folder — anywhere photos and videos are sitting loose. The app copies them into the archive and leaves the folder exactly as it found it.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else {
+                    FolderSourceList()
+                }
                 Button("Choose a folder…") { isFolderImportPickerPresented = true }
                     .disabled(store.isImporting)
                 if store.isImporting {

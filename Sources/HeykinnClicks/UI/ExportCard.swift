@@ -125,12 +125,12 @@ struct ExportSummary: Identifiable {
         let pending = parts.count - verified.count - spotChecked.count - soleCopies.count
         guard pending > 0 else {
             return (
-                "On every drive. \(soleCopies.count) file(s) exist as one copy, so there is nothing to check them against.",
+                "On every drive. \(Formatters.count(soleCopies.count, "file")) \(soleCopies.count == 1 ? "exists" : "exist") as one copy, so there is nothing to check against.",
                 "checkmark.circle",
                 .teal
             )
         }
-        return ("On every drive. \(pending) file(s) have not been checked against their other copy yet.", "checkmark.circle", .teal)
+        return ("On every drive. \(Formatters.count(pending, "file")) \(pending == 1 ? "has" : "have") not been checked against the other copy yet.", "checkmark.circle", .teal)
     }
 }
 
@@ -154,7 +154,7 @@ struct ExportCard: View {
                     Spacer()
                     Menu {
                         if !export.unimported.isEmpty {
-                            Button("Read the \(export.unimported.count) remaining file(s)…") {
+                            Button("Read the \(Formatters.count(export.unimported.count, "remaining file"))…") {
                                 importRequest = TakeoutImportRequest(
                                     archives: export.unimported, setID: export.setID
                                 )
@@ -192,11 +192,20 @@ struct ExportCard: View {
                     .font(.callout)
                     .foregroundStyle(protection.tint)
 
+                if !export.parts.isEmpty {
+                    ExportPartGrid(
+                        parts: export.parts,
+                        managedTargetIDs: export.plan.managedTargetIDs,
+                        policy: export.plan.policy,
+                        driveNames: driveNames
+                    )
+                }
+
                 transferPlan
 
                 if !export.missingPartNumbers.isEmpty {
                     Label(
-                        "File(s) \(export.missingPartNumbers.map(String.init).joined(separator: ", ")) of this download were never found, so some photos in it are missing. Check whether every .zip Google gave you was copied across.",
+                        "\(export.missingPartNumbers.count == 1 ? "File" : "Files") \(ExportSummary.list(export.missingPartNumbers.map(String.init))) of this download were never found, so some photos in it are missing. Check whether every .zip Google gave you was copied across.",
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.caption)
@@ -221,7 +230,7 @@ struct ExportCard: View {
         if !mine.isEmpty {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Label(
-                    "\(mine.count) file(s) can be copied now (\(Formatters.bytes.string(fromByteCount: mine.reduce(0) { $0 + $1.sizeBytes }))) — \(routeSummary(mine))",
+                    "\(Formatters.count(mine.count, "file")) can be copied now (\(Formatters.bytes.string(fromByteCount: mine.reduce(0) { $0 + $1.sizeBytes }))) — \(routeSummary(mine))",
                     systemImage: "arrow.left.arrow.right"
                 )
                 .font(.caption)
@@ -237,7 +246,7 @@ struct ExportCard: View {
         }
         if !stranded.isEmpty {
             Label(
-                "\(stranded.count) file(s) are waiting for the drive that holds them to be plugged in.",
+                "\(Formatters.count(stranded.count, "file")) \(stranded.count == 1 ? "is" : "are") waiting for the drive that holds them to be plugged in.",
                 systemImage: "clock"
             )
             .font(.caption)
@@ -245,7 +254,7 @@ struct ExportCard: View {
         }
         if !deferred.isEmpty {
             Label(
-                "\(deferred.count) file(s) would have to wait on this Mac while the other drive is away, and there is not enough free space. Plug both drives in together, or free up space on the Mac.",
+                "\(Formatters.count(deferred.count, "file")) would have to wait on this Mac while the other drive is away, and there is not enough free space. Plug both drives in together, or free up space on the Mac.",
                 systemImage: "internaldrive"
             )
             .font(.caption)
