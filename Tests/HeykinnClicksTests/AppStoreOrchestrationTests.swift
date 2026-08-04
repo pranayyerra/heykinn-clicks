@@ -529,6 +529,173 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertNil(store.takeoutArchives.first { $0.id == seeded.archiveID }?.missingSince)
     }
 
+    // MARK: - Drive layout
+
+    /// Three folders at a volume root read as three unrelated applications
+    /// having helped themselves to a drive that belongs to the user. They
+    /// become one, by rename, and everything recorded against them follows.
+    func testTheAppsThreeFoldersBecomeOne() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+
+        // A drive as an earlier version of the app left it.
+        let legacyReplica = mount.appendingPathComponent(
+            "\(ReplicationTarget.legacyReplicaRoot)/d6/photo.jpg"
+        )
+        let legacyBackup = mount.appendingPathComponent(
+            "\(CatalogBackupService.legacyDirectoryName)/catalog-1.sqlite"
+        )
+        let legacyPart = mount.appendingPathComponent(
+            "\(ExportPartRelay.legacyOnDriveDirectoryName)/takeout-S1-012.zip"
+        )
+        for file in [legacyReplica, legacyBackup, legacyPart] {
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data("bytes".utf8).write(to: file)
+        }
+        var target = try XCTUnwrap(store.targetsByID[targetID])
+        target.replicaRootComponent = ReplicationTarget.legacyReplicaRoot
+        let seed = try catalog(at: directory)
+        try seed.upsertTarget(target)
+        try seed.upsertTakeoutArchive(TakeoutArchive(
+            id: UUID(), path: legacyPart.path, kind: .zip, sizeBytes: 5, targetID: targetID,
+            discoveredAt: Date(), importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 12
+        ))
+        store.loadAll()
+
+        XCTAssertEqual(store.tidyAppFolders(for: targetID).folders, 3)
+
+        let appFolder = mount.appendingPathComponent(ReplicationTarget.appFolderName)
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: appFolder.appendingPathComponent("Replicas/d6/photo.jpg").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: appFolder.appendingPathComponent("CatalogBackups/catalog-1.sqlite").path
+        ))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: appFolder.appendingPathComponent("ExportParts/takeout-S1-012.zip").path
+        ))
+        XCTAssertEqual(
+            store.targetsByID[targetID]?.replicaRootComponent, ReplicationTarget.defaultReplicaRoot,
+            "One stored value repoints every replica under the root — no per-file write"
+        )
+        XCTAssertEqual(
+            store.takeoutArchives.first?.path,
+            appFolder.appendingPathComponent("ExportParts/takeout-S1-012.zip").path,
+            "An export part records an absolute path, so its row moves with it"
+        )
+        for legacy in [
+            ReplicationTarget.legacyReplicaRoot,
+            CatalogBackupService.legacyDirectoryName,
+            ExportPartRelay.legacyOnDriveDirectoryName,
+        ] {
+            XCTAssertFalse(
+                FileManager.default.fileExists(atPath: mount.appendingPathComponent(legacy).path),
+                "\(legacy) should no longer be at the volume root"
+            )
+        }
+    }
+
+    /// Nothing already in place is written over. A half-migrated drive is worse
+    /// than an untidy one.
+    func testAFolderIsNotMigratedOntoOneAlreadyThere() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+
+        let old = mount.appendingPathComponent("\(ReplicationTarget.legacyReplicaRoot)/d6/old.jpg")
+        let new = mount.appendingPathComponent("\(ReplicationTarget.defaultReplicaRoot)/d6/new.jpg")
+        for file in [old, new] {
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try Data("bytes".utf8).write(to: file)
+        }
+        var target = try XCTUnwrap(store.targetsByID[targetID])
+        target.replicaRootComponent = ReplicationTarget.legacyReplicaRoot
+        try catalog(at: directory).upsertTarget(target)
+        store.loadAll()
+
+        store.tidyAppFolders(for: targetID)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: old.path), "Left alone rather than merged")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: new.path), "Not written over")
+    }
+
+    /// The other half of the reported bug: a part restored to the app's folder
+    /// because the drive held none of its set, on a drive that holds the rest
+    /// of the set. It belongs with the export, and moving it is a rename.
+    func testADeliveredPartMovesInBesideTheRestOfItsExport() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        let seed = try catalog(at: directory)
+
+        // Eleven parts where the user keeps them.
+        let home = mount.appendingPathComponent("Google_Photos_Backup_July2026", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        for part in 1...11 {
+            let url = home.appendingPathComponent("takeout-S1-\(String(format: "%03d", part)).zip")
+            try Data("part".utf8).write(to: url)
+            try seed.upsertTakeoutArchive(TakeoutArchive(
+                id: UUID(), path: url.path, kind: .zip, sizeBytes: 4, targetID: targetID,
+                discoveredAt: Date(), importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+                skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: part
+            ))
+        }
+        // And the twelfth, delivered to the app's folder at the root.
+        let strayDirectory = ExportPartRelay.destinationDirectory(onMount: mount)
+        try FileManager.default.createDirectory(at: strayDirectory, withIntermediateDirectories: true)
+        let stray = strayDirectory.appendingPathComponent("takeout-S1-012.zip")
+        try Data("part".utf8).write(to: stray)
+        let strayID = UUID()
+        try seed.upsertTakeoutArchive(TakeoutArchive(
+            id: strayID, path: stray.path, kind: .zip, sizeBytes: 4, targetID: targetID,
+            discoveredAt: Date(), importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 12
+        ))
+        store.loadAll()
+
+        XCTAssertEqual(store.tidyAppFolders(for: targetID).parts, 1)
+
+        let landed = home.appendingPathComponent("takeout-S1-012.zip")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: landed.path))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stray.path))
+        XCTAssertEqual(
+            store.takeoutArchives.first { $0.id == strayID }?.path, landed.path,
+            "The catalog follows the file in the same pass"
+        )
+    }
+
+    /// With nowhere better to put it, the app's own folder is the right answer
+    /// and the part stays there.
+    func testADeliveredPartStaysPutWhenTheDriveHoldsNoneOfItsSet() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+
+        let strayDirectory = ExportPartRelay.destinationDirectory(onMount: mount)
+        try FileManager.default.createDirectory(at: strayDirectory, withIntermediateDirectories: true)
+        let stray = strayDirectory.appendingPathComponent("takeout-S1-001.zip")
+        try Data("part".utf8).write(to: stray)
+        try catalog(at: directory).upsertTakeoutArchive(TakeoutArchive(
+            id: UUID(), path: stray.path, kind: .zip, sizeBytes: 4, targetID: targetID,
+            discoveredAt: Date(), importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 1
+        ))
+        store.loadAll()
+
+        XCTAssertEqual(store.tidyAppFolders(for: targetID).parts, 0)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
+    }
+
     // MARK: - Apple Photos: index
 
     private func libraryItem(

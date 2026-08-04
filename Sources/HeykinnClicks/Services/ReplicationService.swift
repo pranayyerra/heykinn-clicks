@@ -136,7 +136,10 @@ enum ReplicationService {
             let message: String
             switch task.action {
             case .copy:
-                replica = try performCopy(asset: asset, drive: drive, mountURL: mountURL, sourceURL: sourceURL)
+                replica = try performCopy(
+                    asset: asset, drive: drive, mountURL: mountURL,
+                    sourceURL: sourceURL, existingReplica: existingReplica
+                )
                 message = "Copied \(asset.originalFilename) to \(drive.name)"
             case .verify:
                 replica = try performVerify(asset: asset, drive: drive, mountURL: mountURL, existingReplica: existingReplica)
@@ -225,16 +228,32 @@ enum ReplicationService {
         return outcome
     }
 
+    /// `existingReplica` is what the catalog already recorded for this asset on
+    /// this drive — including a copy that has gone missing. A file the user
+    /// kept somewhere of their own is restored to exactly that path: it is
+    /// where they put it, and re-landing it in the app's replica root under a
+    /// UUID would answer "the file is gone" with a second, differently-named
+    /// file somewhere else. Only content that never had a place of its own on
+    /// the drive goes to the managed root.
     private static func performCopy(
         asset: Asset,
         drive: ReplicationTarget,
         mountURL: URL,
-        sourceURL: URL?
+        sourceURL: URL?,
+        existingReplica: TargetReplicaState?
     ) throws -> TargetReplicaState {
         guard let source = sourceURL, FileManager.default.fileExists(atPath: source.path) else {
             throw ReplicationError.noSourceCopy(asset.originalFilename)
         }
-        let destination = replicaURL(for: asset, drive: drive, mountURL: mountURL)
+        // Only a `volume:` replica names a file of its own. A zip member or a
+        // whole export part is restored by putting the archive back, not by
+        // writing one loose photo where a zip used to be.
+        let restoresInPlace = isVolumeBacked(existingReplica)
+        let destination = restoresInPlace
+            ? resolveReplicaURL(
+                asset: asset, drive: drive, mountURL: mountURL, existingReplica: existingReplica
+            )
+            : replicaURL(for: asset, drive: drive, mountURL: mountURL)
         try FileManager.default.createDirectory(
             at: destination.deletingLastPathComponent(),
             withIntermediateDirectories: true
@@ -260,7 +279,9 @@ enum ReplicationService {
             assetID: asset.id,
             targetID: drive.id,
             state: .present,
-            relativePath: replicaRelativePath(for: asset),
+            relativePath: restoresInPlace
+                ? existingReplica?.relativePath
+                : replicaRelativePath(for: asset),
             lastVerifiedAt: Date()
         )
         // The moment the app knows this file is right is the moment to write

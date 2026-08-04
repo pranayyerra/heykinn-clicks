@@ -21,9 +21,12 @@ struct CatalogSnapshot: Identifiable, Hashable {
 /// metadata.
 enum CatalogBackupService {
 
-    /// Directory at a drive's root holding snapshots. Deliberately outside the
-    /// replica root so replica cleanup can never remove the backups.
-    static let directoryName = "HeykinnClicksCatalogBackups"
+    /// Directory holding snapshots. Beside the replica root under the app's
+    /// folder, deliberately not *inside* it, so replica cleanup can never
+    /// remove the backups.
+    static let directoryName = ReplicationTarget.appFolderName + "/CatalogBackups"
+    /// The pre-consolidation location, still on drives already backed up to.
+    static let legacyDirectoryName = "HeykinnClicksCatalogBackups"
     /// Snapshots retained per drive; older ones are pruned oldest-first.
     static let retainCount = 5
 

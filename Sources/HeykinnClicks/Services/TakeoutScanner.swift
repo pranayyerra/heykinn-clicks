@@ -17,7 +17,9 @@ enum TakeoutScanner {
 
     /// Directories never descended into: our own managed structures.
     private static let excludedDirectoryNames: Set<String> = [
-        ReplicationTarget.defaultReplicaRoot, "Staging", "TakeoutWork", ".Trashes", ".Spotlight-V100",
+        ReplicationTarget.appFolderName, ReplicationTarget.legacyReplicaRoot,
+        CatalogBackupService.legacyDirectoryName,
+        "Staging", "TakeoutWork", ".Trashes", ".Spotlight-V100",
     ]
 
     /// `knownFolderSizes` lets a re-scan reuse sizes recorded at discovery

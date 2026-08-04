@@ -66,6 +66,15 @@ Shipped and tested; the pointers are where to look.
   archive-backed replicas; the host-staging corridor for targets never
   reachable together: `Domain/ArchiveReplication.swift`,
   `Services/ExportPartRelay.swift`.
+- **On-drive layout** — the drive belongs to the user, so the app reads their
+  layout rather than imposing one. A restored file goes back to the path it
+  was recorded at; a delivered export part goes in beside the rest of its set
+  wherever that drive keeps it. Everything the app writes that has no place of
+  its own — replicas of content imported from the Mac, catalog snapshots, a
+  part with no set on that drive yet — lives under one `HeykinnClicks/` folder,
+  migrated from the three that used to sit at the volume root:
+  `Domain/ArchiveReplication.swift` (`ExportSetLayout`),
+  `AppStore.tidyAppFolders`.
 - **Verification** — binary protection verdict with check-standing as
   evidence; the aimed-reads triad complete (Merkle-tree agreement between
   targets, anchor checks with in-place path repair, and the size/mtime gate on
@@ -221,3 +230,9 @@ Earned against a real 248 GB archive; the stories are in git history.
     row that outlives it must stop counting as one — but only ever from a
     target that was reachable at the time, because an unplug makes every
     check fail at once.
+22. Put it back where it was. The catalog already records where content
+    lived, so restoring a copy to a folder of the app's own choosing invents
+    a second location for one file; a part delivered to complete an export
+    belongs beside that export, wherever the user keeps it. What the app
+    writes that has nowhere of its own goes in one folder with the app's name
+    on it, so the user can see at a glance what is theirs.

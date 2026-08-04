@@ -318,6 +318,83 @@ final class CoreEngineTests: XCTestCase {
         XCTAssertFalse(FileManager.default.fileExists(atPath: destination.appendingPathExtension("partial").path))
     }
 
+    /// A file the user kept somewhere of their own is restored to exactly that
+    /// path. Answering "your file is gone" by writing a differently-named copy
+    /// into the app's own folder leaves the user with a hole where their file
+    /// was and a UUID they cannot recognise somewhere else.
+    func testARestoredCopyGoesBackWhereTheUsersFileWas() throws {
+        let root = try makeTempDirectory()
+        let mountRoot = root.appendingPathComponent("mount", isDirectory: true)
+        let staging = StagingStore(rootURL: root.appendingPathComponent("staging", isDirectory: true))
+        try FileManager.default.createDirectory(at: mountRoot, withIntermediateDirectories: true)
+
+        let sourceFile = try makeTempDirectory().appendingPathComponent("photo.jpg")
+        try Data("the user's own photo".utf8).write(to: sourceFile)
+        let assetID = UUID()
+        let stagingPath = try staging.stage(fileAt: sourceFile, assetID: assetID, fileExtension: "jpg")
+        let hash = try HashingService.sha256(of: staging.url(forRelativePath: stagingPath))
+        let asset = makeAsset(id: assetID, hash: hash, stagingPath: stagingPath)
+        let drive = makeDrive()
+
+        // It used to live in a folder of the user's own, and was deleted.
+        let recorded = "volume:Owner/Takeout_Archive_2026/Takeout/Google Photos/IMG_1.jpg"
+        let missing = TargetReplicaState(
+            assetID: asset.id, targetID: drive.id, state: .missing,
+            relativePath: recorded, lastVerifiedAt: Date()
+        )
+        let task = ReplicationTask(
+            id: UUID(), assetID: asset.id, targetID: drive.id, action: .copy,
+            state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
+        )
+
+        let result = ReplicationService.perform(
+            task, drive: drive, mountURL: mountRoot, asset: asset,
+            sourceURL: staging.url(forRelativePath: stagingPath), existingReplica: missing
+        )
+
+        XCTAssertEqual(result.task.state, .completed)
+        XCTAssertEqual(result.replica?.relativePath, recorded, "The recorded location is kept")
+        let restored = mountRoot.appendingPathComponent("Owner/Takeout_Archive_2026/Takeout/Google Photos/IMG_1.jpg")
+        XCTAssertEqual(try HashingService.sha256(of: restored), hash)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: ReplicationService.replicaURL(for: asset, drive: drive, mountURL: mountRoot).path
+            ),
+            "Nothing was left in the app's replica root"
+        )
+    }
+
+    /// Content that never had a place of its own on the drive still goes to the
+    /// managed root — there is nowhere else it could go.
+    func testContentWithNoPlaceOfItsOwnStillGoesToTheReplicaRoot() throws {
+        let root = try makeTempDirectory()
+        let mountRoot = root.appendingPathComponent("mount", isDirectory: true)
+        let staging = StagingStore(rootURL: root.appendingPathComponent("staging", isDirectory: true))
+        try FileManager.default.createDirectory(at: mountRoot, withIntermediateDirectories: true)
+
+        let sourceFile = try makeTempDirectory().appendingPathComponent("photo.jpg")
+        try Data("imported from the Mac".utf8).write(to: sourceFile)
+        let assetID = UUID()
+        let stagingPath = try staging.stage(fileAt: sourceFile, assetID: assetID, fileExtension: "jpg")
+        let hash = try HashingService.sha256(of: staging.url(forRelativePath: stagingPath))
+        let asset = makeAsset(id: assetID, hash: hash, stagingPath: stagingPath)
+        let drive = makeDrive()
+        let task = ReplicationTask(
+            id: UUID(), assetID: asset.id, targetID: drive.id, action: .copy,
+            state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
+        )
+
+        let result = ReplicationService.perform(
+            task, drive: drive, mountURL: mountRoot, asset: asset,
+            sourceURL: staging.url(forRelativePath: stagingPath), existingReplica: nil
+        )
+
+        XCTAssertEqual(result.replica?.relativePath, ReplicationService.replicaRelativePath(for: asset))
+        XCTAssertTrue(FileManager.default.fileExists(
+            atPath: ReplicationService.replicaURL(for: asset, drive: drive, mountURL: mountRoot).path
+        ))
+    }
+
     func testCopyFailsWithoutStagedSource() {
         let staging = StagingStore(rootURL: FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString))
         let drive = makeDrive()

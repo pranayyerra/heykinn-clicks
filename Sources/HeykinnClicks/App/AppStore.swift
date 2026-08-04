@@ -422,10 +422,16 @@ final class AppStore: ObservableObject {
         let partID = "\(transfer.setID)-\(transfer.partNumber)"
         let part = archivePlan.parts.first { $0.id == partID }
 
+        // Beside the set's other parts on the receiving drive, and only in the
+        // app's own folder when that drive holds none of them. A part arriving
+        // to complete an export belongs with the export, not in a second pile
+        // at the volume root.
         func driveDestination(_ targetID: UUID) -> URL? {
             guard let mount = reachablePaths[targetID] else { return nil }
-            return ExportPartRelay.destinationDirectory(onMount: mount)
-                .appendingPathComponent("\(transfer.displayName).zip")
+            let directory = ExportSetLayout.home(
+                forSet: transfer.setID, onMount: mount, archives: takeoutArchives
+            ) ?? ExportPartRelay.destinationDirectory(onMount: mount)
+            return directory.appendingPathComponent("\(transfer.displayName).zip")
         }
 
         switch transfer.route {
@@ -1521,6 +1527,12 @@ final class AppStore: ObservableObject {
             // Before anything reads or copies: confirm the paths still resolve.
             // Content the user moved must be repointed, not copied again.
             repairReplicaPaths(for: targetID)
+            // Then gather what the app has left lying around this drive into
+            // one folder, and put delivered parts beside their export. Renames
+            // within the volume, and it runs before the presence checks so
+            // they read the paths the catalog now holds rather than reporting
+            // everything this moved as gone.
+            tidyAppFolders(for: targetID)
             // Then: are the export archives this drive is credited with still
             // on it? One stat each, and it must come before the replica gate
             // so a part that survives only as its extracted twin is stat-ed
@@ -2826,6 +2838,162 @@ final class AppStore: ObservableObject {
         }
         if repaired > 0 || unresolved > 0 || repairedArchives > 0 { loadAll() }
         return (repaired, unresolved)
+    }
+
+    /// Gathers what the app has scattered over a target into one folder, and
+    /// puts delivered export parts beside the export they belong to.
+    ///
+    /// The app used to write three directories at a volume root —
+    /// `HeykinnClicksReplicas`, `HeykinnClicksCatalogBackups`, and
+    /// `HeykinnClicks Export Parts` — which reads as three unrelated
+    /// applications having helped themselves to a drive that belongs to the
+    /// user. One folder, `HeykinnClicks/`, and what is theirs stays theirs.
+    ///
+    /// Every move here is a rename within one volume: instant, and it moves no
+    /// bytes. Nothing is moved out of a directory the user chose — the only
+    /// files this relocates are ones the app put where it did because it had
+    /// no better idea, and the catalog is repointed in the same pass so no
+    /// copy is ever lost track of.
+    @discardableResult
+    func tidyAppFolders(for targetID: UUID) -> (folders: Int, parts: Int) {
+        guard var target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
+            return (0, 0)
+        }
+        guard !isBusy(targetID), !isQuiescing(targetID), !isTransferringParts else { return (0, 0) }
+
+        let fileManager = FileManager.default
+        var movedFolders: [String] = []
+
+        /// Renames a legacy directory under the app's folder, but only when
+        /// there is nothing already at the destination — a half-migrated drive
+        /// is worse than an untidy one.
+        func relocate(legacy: String, to modern: String) -> Bool {
+            let from = mountURL.appendingPathComponent(legacy, isDirectory: true)
+            let to = mountURL.appendingPathComponent(modern, isDirectory: true)
+            var isDirectory: ObjCBool = false
+            guard fileManager.fileExists(atPath: from.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue,
+                  !fileManager.fileExists(atPath: to.path) else { return false }
+            do {
+                try fileManager.createDirectory(
+                    at: to.deletingLastPathComponent(), withIntermediateDirectories: true
+                )
+                try fileManager.moveItem(at: from, to: to)
+                return true
+            } catch {
+                lastError = "Could not tidy \(legacy) on \(target.name): \(error.localizedDescription)"
+                return false
+            }
+        }
+
+        // Replicas are recorded relative to the target's replica root, so
+        // moving the directory and updating that one stored value repoints
+        // every replica under it at once — no per-file catalog write.
+        if target.replicaRootComponent == ReplicationTarget.legacyReplicaRoot {
+            if relocate(legacy: ReplicationTarget.legacyReplicaRoot, to: ReplicationTarget.defaultReplicaRoot) {
+                target.replicaRootComponent = ReplicationTarget.defaultReplicaRoot
+                do {
+                    try catalog.upsertTarget(target)
+                    movedFolders.append("replicas")
+                } catch {
+                    lastError = "Could not record \(target.name)'s replica root: \(error.localizedDescription)"
+                }
+            } else if !fileManager.fileExists(
+                atPath: mountURL.appendingPathComponent(ReplicationTarget.legacyReplicaRoot).path
+            ) {
+                // Nothing was ever written to the old root on this target, so
+                // the new one is simply where its replicas go from now on.
+                target.replicaRootComponent = ReplicationTarget.defaultReplicaRoot
+                try? catalog.upsertTarget(target)
+            }
+        }
+
+        // Snapshots are found by listing the directory rather than recorded in
+        // the catalog, so moving it is the whole migration.
+        if relocate(legacy: CatalogBackupService.legacyDirectoryName, to: CatalogBackupService.directoryName) {
+            movedFolders.append("catalog backups")
+        }
+
+        // Export parts record absolute paths, so these rows move with the file.
+        let legacyParts = mountURL
+            .appendingPathComponent(ExportPartRelay.legacyOnDriveDirectoryName, isDirectory: true).path
+        if relocate(legacy: ExportPartRelay.legacyOnDriveDirectoryName, to: ExportPartRelay.onDriveDirectoryName) {
+            movedFolders.append("delivered export parts")
+            let modernParts = ExportPartRelay.destinationDirectory(onMount: mountURL).path
+            do {
+                try catalog.transaction {
+                    for var archive in takeoutArchives where archive.path.hasPrefix(legacyParts + "/") {
+                        archive.path = modernParts + archive.path.dropFirst(legacyParts.count)
+                        try catalog.upsertTakeoutArchive(archive)
+                    }
+                }
+            } catch {
+                lastError = "Could not repoint moved export parts on \(target.name): \(error.localizedDescription)"
+            }
+        }
+        if !movedFolders.isEmpty {
+            targets = (try? catalog.fetchTargets()) ?? targets
+            takeoutArchives = (try? catalog.fetchTakeoutArchives()) ?? takeoutArchives
+            audit(
+                .drive,
+                "\(target.name): gathered the app's \(movedFolders.joined(separator: ", ")) into one \(ReplicationTarget.appFolderName) folder. Files were renamed within the drive; nothing was copied and none of your own folders were touched.",
+                targetID: targetID
+            )
+        }
+
+        let parts = rehomeDeliveredParts(for: targetID, mountURL: mountURL, targetName: target.name)
+        if !movedFolders.isEmpty || parts > 0 { loadAll() }
+        return (movedFolders.count, parts)
+    }
+
+    /// Moves a delivered export part out of the app's folder and in beside the
+    /// rest of its export, once the drive shows where that export lives.
+    ///
+    /// A part is delivered to the app's folder only when the receiving drive
+    /// held none of its set — a genuine "nowhere better to put this". That
+    /// answer expires: the moment the drive does hold the rest of the set, the
+    /// part has somewhere it belongs, and leaving it at the root is what split
+    /// a twelve-part export across two directories.
+    private func rehomeDeliveredParts(for targetID: UUID, mountURL: URL, targetName: String) -> Int {
+        let appParts = ExportPartRelay.destinationDirectory(onMount: mountURL).path + "/"
+        let strays = takeoutArchives.filter {
+            $0.targetID == targetID && $0.holdsBytes && $0.path.hasPrefix(appParts)
+        }
+        guard !strays.isEmpty else { return 0 }
+
+        var moved = 0
+        var example: String?
+        for archive in strays {
+            guard let setID = archive.exportSetID,
+                  let home = ExportSetLayout.home(
+                      forSet: setID, onMount: mountURL, archives: takeoutArchives
+                  )
+            else { continue }
+            let destination = home.appendingPathComponent((archive.path as NSString).lastPathComponent)
+            // Never write over something already sitting there. Two files with
+            // this name means a question the app cannot answer by guessing.
+            guard !FileManager.default.fileExists(atPath: destination.path) else { continue }
+            do {
+                try FileManager.default.moveItem(
+                    at: URL(fileURLWithPath: archive.path), to: destination
+                )
+                var updated = archive
+                updated.path = destination.path
+                try catalog.upsertTakeoutArchive(updated)
+                if example == nil { example = archive.displayName }
+                moved += 1
+            } catch {
+                lastError = "Could not move \(archive.displayName) beside its export: \(error.localizedDescription)"
+            }
+        }
+        guard moved > 0 else { return 0 }
+        takeoutArchives = (try? catalog.fetchTakeoutArchives()) ?? takeoutArchives
+        audit(
+            .drive,
+            "\(targetName): moved \(moved) delivered export part(s) (e.g. \(example ?? "one")) in beside the rest of their export, where this drive already keeps it. A rename within the drive; no bytes moved.",
+            targetID: targetID
+        )
+        return moved
     }
 
     /// Re-confirms the target is still the thing sitting at this path, checked

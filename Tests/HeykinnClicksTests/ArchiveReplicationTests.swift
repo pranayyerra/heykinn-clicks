@@ -716,3 +716,124 @@ final class QuickChecksumTests: XCTestCase {
         XCTAssertNotEqual(PartRedundancy.redundantSpotChecked, .redundantVerified)
     }
 }
+
+/// Where an export set lives on a drive is the user's decision, already made
+/// and recorded in the paths of the parts they placed. A part arriving later
+/// reads that decision rather than starting a second pile at the volume root.
+final class ExportSetLayoutTests: XCTestCase {
+
+    private let mount = URL(fileURLWithPath: "/Volumes/My Passport", isDirectory: true)
+
+    private func archive(
+        _ path: String, part: Int, setID: String = "S1", missing: Bool = false,
+        kind: TakeoutArchiveKind = .zip
+    ) -> TakeoutArchive {
+        var archive = TakeoutArchive(
+            id: UUID(), path: path, kind: kind, sizeBytes: 10, targetID: UUID(),
+            discoveredAt: Date(), importedAt: nil, importBatchID: nil,
+            importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
+            exportSetID: setID, partNumber: part
+        )
+        if missing { archive.missingSince = Date() }
+        return archive
+    }
+
+    func testAPartJoinsTheFolderWhereTheSetAlreadyLives() {
+        let archives = (1...11).map {
+            archive("/Volumes/My Passport/Google_Photos_Backup_July2026/takeout-S1-\($0).zip", part: $0)
+        }
+        XCTAssertEqual(
+            ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives)?.path,
+            "/Volumes/My Passport/Google_Photos_Backup_July2026"
+        )
+    }
+
+    /// The reported bug in one assertion: eleven parts in the user's folder and
+    /// one the app dropped at the root must not make the root look like home.
+    func testTheAppsOwnFolderIsNeverTheHome() {
+        var archives = (1...11).map {
+            archive("/Volumes/My Passport/Google_Photos_Backup_July2026/takeout-S1-\($0).zip", part: $0)
+        }
+        archives.append(archive("/Volumes/My Passport/HeykinnClicks/ExportParts/takeout-S1-012.zip", part: 12))
+        archives.append(archive("/Volumes/My Passport/HeykinnClicks Export Parts/takeout-S1-013.zip", part: 13))
+
+        XCTAssertEqual(
+            ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives)?.path,
+            "/Volumes/My Passport/Google_Photos_Backup_July2026"
+        )
+    }
+
+    /// Even when the app's folder holds more of the set than anywhere else: it
+    /// is a waiting room, and a waiting room that filled up is still not a home.
+    func testTheAppsFolderLosesEvenWithMoreParts() {
+        var archives = [archive("/Volumes/My Passport/Mine/takeout-S1-001.zip", part: 1)]
+        archives += (2...9).map {
+            archive("/Volumes/My Passport/HeykinnClicks/ExportParts/takeout-S1-\($0).zip", part: $0)
+        }
+        XCTAssertEqual(
+            ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives)?.path,
+            "/Volumes/My Passport/Mine"
+        )
+    }
+
+    func testTheFolderHoldingMostOfTheSetWins() {
+        let archives = [
+            archive("/Volumes/My Passport/Scattered/takeout-S1-001.zip", part: 1),
+            archive("/Volumes/My Passport/Main/takeout-S1-002.zip", part: 2),
+            archive("/Volumes/My Passport/Main/takeout-S1-003.zip", part: 3),
+        ]
+        XCTAssertEqual(
+            ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives)?.path,
+            "/Volumes/My Passport/Main"
+        )
+    }
+
+    /// A zip and the folder extracted beside it are one part between them, or a
+    /// directory holding both twins of one part would outvote a directory
+    /// holding two real parts.
+    func testAZipAndItsExtractedTwinCountAsOnePart() {
+        let archives = [
+            archive("/Volumes/My Passport/Twins/takeout-S1-001.zip", part: 1),
+            archive("/Volumes/My Passport/Twins/takeout-S1-001", part: 1, kind: .folder),
+            archive("/Volumes/My Passport/Real/takeout-S1-002.zip", part: 2),
+            archive("/Volumes/My Passport/Real/takeout-S1-003.zip", part: 3),
+        ]
+        XCTAssertEqual(
+            ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives)?.path,
+            "/Volumes/My Passport/Real"
+        )
+    }
+
+    func testADeletedPartDoesNotVoteForWhereTheSetLives() {
+        let archives = [
+            archive("/Volumes/My Passport/Gone/takeout-S1-001.zip", part: 1, missing: true),
+            archive("/Volumes/My Passport/Gone/takeout-S1-002.zip", part: 2, missing: true),
+            archive("/Volumes/My Passport/Here/takeout-S1-003.zip", part: 3),
+        ]
+        XCTAssertEqual(
+            ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives)?.path,
+            "/Volumes/My Passport/Here"
+        )
+    }
+
+    func testAnotherExportsFolderIsNotThisExportsHome() {
+        let archives = [
+            archive("/Volumes/My Passport/Export2025/takeout-S2-001.zip", part: 1, setID: "S2"),
+        ]
+        XCTAssertNil(ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives))
+    }
+
+    func testAnotherDrivesFolderIsNotThisDrivesHome() {
+        let archives = [
+            archive("/Volumes/Owner's Back/Owner/takeout-S1-001.zip", part: 1),
+        ]
+        XCTAssertNil(
+            ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives),
+            "A path on another volume says nothing about where this drive keeps the set"
+        )
+    }
+
+    func testNoPartsMeansNoHome() {
+        XCTAssertNil(ExportSetLayout.home(forSet: "S1", onMount: mount, archives: []))
+    }
+}

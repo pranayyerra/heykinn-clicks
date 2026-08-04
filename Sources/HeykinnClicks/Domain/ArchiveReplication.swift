@@ -200,6 +200,58 @@ enum ArchiveReplicationPlanner {
     }
 }
 
+/// Where an export set already lives on a target, so a part arriving later
+/// joins it instead of starting a second pile somewhere else.
+///
+/// The app used to deliver every part to one folder at the volume root,
+/// whatever the drive's own layout was. Restoring a single deleted part
+/// therefore split a twelve-part export across two directories — the eleven
+/// the user had put somewhere, and the one the app had put at the root. The
+/// drive belongs to the user; where their export lives is their decision, and
+/// it is already recorded in the paths of the parts they placed.
+enum ExportSetLayout {
+
+    /// The directory on this target holding the most parts of this set, or nil
+    /// when the target holds none.
+    ///
+    /// The app's own folder is never the answer. It is where a part waits when
+    /// there is nowhere better, and treating it as a home would mean the first
+    /// delivery decided the layout for every delivery after it.
+    static func home(
+        forSet setID: String,
+        onMount mountURL: URL,
+        archives: [TakeoutArchive]
+    ) -> URL? {
+        let prefix = mountURL.path.hasSuffix("/") ? mountURL.path : mountURL.path + "/"
+        let appFolder = prefix + ReplicationTarget.appFolderName + "/"
+        let legacyPartsFolder = prefix + ExportPartRelay.legacyOnDriveDirectoryName + "/"
+
+        // Distinct part numbers, not rows: a zip and the folder extracted from
+        // it sit in the same directory and are one part between them.
+        var partsByDirectory: [String: Set<Int>] = [:]
+        for archive in archives {
+            guard archive.exportSetID == setID, archive.holdsBytes,
+                  let partNumber = archive.partNumber,
+                  archive.path.hasPrefix(prefix),
+                  !archive.path.hasPrefix(appFolder),
+                  !archive.path.hasPrefix(legacyPartsFolder)
+            else { continue }
+            let directory = (archive.path as NSString).deletingLastPathComponent
+            partsByDirectory[directory, default: []].insert(partNumber)
+        }
+
+        // Most parts wins; the shortest path breaks a tie, then alphabetical —
+        // arbitrary, but the same answer every time, which is what stops two
+        // deliveries of the same export disagreeing about where it lives.
+        let best = partsByDirectory.max { a, b in
+            if a.value.count != b.value.count { return a.value.count < b.value.count }
+            if a.key.count != b.key.count { return a.key.count > b.key.count }
+            return a.key > b.key
+        }
+        return best.map { URL(fileURLWithPath: $0.key, isDirectory: true) }
+    }
+}
+
 /// An export part parked on the Mac while it travels between targets.
 ///
 /// Named after the part it holds, so the directory listing *is* the state:
