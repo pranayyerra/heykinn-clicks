@@ -35,6 +35,23 @@ struct TargetReplicaState: Hashable, Identifiable {
     var relativePath: String?
     var lastVerifiedAt: Date?
 
+    /// What the file looked like the last time the app knew it was right: the
+    /// size and modification date observed when the copy was written or last
+    /// verified.
+    ///
+    /// The third leg of the aimed-reads triad. Comparing Merkle roots cannot
+    /// see an in-place edit — no hash the catalog holds changed, so the trees
+    /// go on agreeing — and stat-ing anchors only sees whole directories move.
+    /// A file edited under an intact path is invisible to both, and would wait
+    /// for the rot patrol to reach it. Keeping the observed stat here is what
+    /// lets a connect aim the expensive read at the few files that moved.
+    ///
+    /// Nil until the first observation. A baseline nobody recorded is not
+    /// evidence of anything, so the first pass establishes it and claims
+    /// nothing.
+    var observedSize: Int64?
+    var observedModifiedAt: Date?
+
     var id: String { "\(assetID.uuidString)/\(targetID.uuidString)" }
 }
 

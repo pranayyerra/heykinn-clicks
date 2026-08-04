@@ -4,13 +4,34 @@ struct LibraryView: View {
     @EnvironmentObject private var store: AppStore
     @State private var searchText = ""
     @State private var residencyFilter: ResidencyDomain?
+    @State private var holdingFilter: HoldingFilter = .everything
     @State private var isImporterPresented = false
+
+    /// Whether the archive holds a photograph or merely knows it exists.
+    ///
+    /// One unified Library is the right picture — the archive and the Photos
+    /// library are one collection — but it hid the difference that decides what
+    /// still needs doing: a photo indexed from Photos is one this app protects
+    /// with nothing at all.
+    private enum HoldingFilter: Hashable, CaseIterable {
+        case everything
+        /// Indexed from a provider's library, bytes never read.
+        case notHeld
+
+        var label: String {
+            switch self {
+            case .everything: return "Everything"
+            case .notHeld: return "In Photos, no copy here"
+            }
+        }
+    }
 
     private var filteredAssets: [Asset] {
         store.assets.filter { asset in
             // The movie half of a Live Photo belongs to its still, not to the
             // grid as a separate entry.
             if asset.isLivePhotoMotion { return false }
+            if holdingFilter == .notHeld, !asset.isIndexedOnly { return false }
             if let residencyFilter, asset.residency != residencyFilter { return false }
             if !searchText.isEmpty,
                !asset.originalFilename.localizedCaseInsensitiveContains(searchText) {
@@ -83,6 +104,19 @@ struct LibraryView: View {
                     }
                     .pickerStyle(.menu)
                 }
+                // Only offered once there is something to separate. A filter
+                // that always reads "Everything" is a control that has never
+                // had anything to say.
+                if store.assets.contains(where: \.isIndexedOnly) {
+                    ToolbarItem {
+                        Picker("Holdings", selection: $holdingFilter) {
+                            ForEach(HoldingFilter.allCases, id: \.self) { filter in
+                                Text(filter.label).tag(filter)
+                            }
+                        }
+                        .pickerStyle(.menu)
+                    }
+                }
                 ToolbarItem {
                     Button {
                         isImporterPresented = true
@@ -117,6 +151,15 @@ struct LibraryView: View {
                 .lineLimit(1)
             HStack(spacing: 4) {
                 ResidencyBadge(domain: asset.residency)
+                // The archive can see this photograph and holds nothing of it.
+                // Said in the same words the map uses for a place holding no
+                // copy, because it is the same fact about a different subject.
+                if asset.isIndexedOnly {
+                    Image(systemName: "photo.badge.arrow.down")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .help("In the Photos library · the archive holds no copy here yet")
+                }
                 // Only assets that fail the policy are marked. A badge on every
                 // cell is a field of icons the eye has to decode one by one;
                 // the useful signal is which few are not safe.

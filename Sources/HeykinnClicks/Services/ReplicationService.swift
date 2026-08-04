@@ -256,13 +256,26 @@ enum ReplicationService {
             try FileManager.default.removeItem(at: destination)
         }
         try FileManager.default.moveItem(at: temporary, to: destination)
-        return TargetReplicaState(
+        var replica = TargetReplicaState(
             assetID: asset.id,
             targetID: drive.id,
             state: .present,
             relativePath: replicaRelativePath(for: asset),
             lastVerifiedAt: Date()
         )
+        // The moment the app knows this file is right is the moment to write
+        // down what it looks like, so the next connect can tell whether it
+        // still does without reading it.
+        recordObservation(of: destination, on: &replica)
+        return replica
+    }
+
+    /// Writes what a file looks like right now onto the replica that was just
+    /// confirmed against it.
+    static func recordObservation(of url: URL, on replica: inout TargetReplicaState) {
+        guard let observation = ReplicaStatGate.observe(url) else { return }
+        replica.observedSize = observation.size
+        replica.observedModifiedAt = observation.modifiedAt
     }
 
     private static func performVerify(
@@ -330,6 +343,10 @@ enum ReplicationService {
         }
         let actualHash = try HashingService.sha256(of: replicaFile)
         replica.state = actualHash == asset.contentHash ? .present : .drift
+        // Re-baseline whatever the verdict: a file read back and found wrong is
+        // still a file whose current shape is now known, and re-reporting the
+        // same change on every connect would bury the next real one.
+        recordObservation(of: replicaFile, on: &replica)
         return replica
     }
 

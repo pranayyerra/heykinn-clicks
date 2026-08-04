@@ -133,6 +133,48 @@ struct SourcesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+
+            reclamationPreview
+        }
+    }
+
+    /// What reclamation would release, and what is holding the rest up.
+    ///
+    /// Shown only once there is a verified cloud copy to talk about. Reclaiming
+    /// is not built — this removes nothing — but the preconditions are the
+    /// safety mechanism, and a mechanism nobody can see is one nobody can
+    /// trust. Drawn here rather than on a screen of its own because it is a
+    /// fact about this connector's library.
+    @ViewBuilder
+    private var reclamationPreview: some View {
+        let plan = store.reclamationPlan
+        if !plan.isEmpty {
+            Divider()
+            VStack(alignment: .leading, spacing: 6) {
+                Text(
+                    plan.releasableAssetIDs.isEmpty
+                        ? "Nothing in Apple Cloud is ready to release yet."
+                        : "\(plan.releasableAssetIDs.count.formatted()) photo(s) — \(Formatters.bytes.string(fromByteCount: plan.releasableBytes)) — are protected locally well enough to release their Apple Cloud copy."
+                )
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+
+                ForEach(ReclamationPlanner.Blocker.allCases, id: \.self) { blocker in
+                    if let count = plan.blocked[blocker], count > 0 {
+                        Label(
+                            "\(count.formatted()) waiting: \(blocker.displayName)",
+                            systemImage: "circle.dotted"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    }
+                }
+
+                Text("Releasing is not built yet, and nothing here is removed. When it is, it happens on this proof rather than on a prompt.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

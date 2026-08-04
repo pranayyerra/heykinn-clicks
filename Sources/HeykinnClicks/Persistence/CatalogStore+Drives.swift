@@ -69,31 +69,42 @@ extension CatalogStore {
 
     func upsertReplicaState(_ replica: TargetReplicaState) throws {
         try database.run("""
-        INSERT INTO replica_states (asset_id, drive_id, state, relative_path, last_verified_at)
-        VALUES (?,?,?,?,?)
+        INSERT INTO replica_states (
+            asset_id, drive_id, state, relative_path, last_verified_at,
+            observed_size, observed_modified_at
+        )
+        VALUES (?,?,?,?,?,?,?)
         ON CONFLICT(asset_id, drive_id) DO UPDATE SET
             state = excluded.state,
             relative_path = excluded.relative_path,
-            last_verified_at = excluded.last_verified_at;
+            last_verified_at = excluded.last_verified_at,
+            observed_size = excluded.observed_size,
+            observed_modified_at = excluded.observed_modified_at;
         """, [
             .text(replica.assetID.uuidString),
             .text(replica.targetID.uuidString),
             .text(replica.state.rawValue),
             .optionalText(replica.relativePath),
             .date(replica.lastVerifiedAt),
+            .optionalInt(replica.observedSize),
+            .date(replica.observedModifiedAt),
         ])
     }
 
     func fetchReplicaStates() throws -> [TargetReplicaState] {
         try database.query("""
-        SELECT asset_id, drive_id, state, relative_path, last_verified_at FROM replica_states;
+        SELECT asset_id, drive_id, state, relative_path, last_verified_at,
+               observed_size, observed_modified_at
+        FROM replica_states;
         """) { row in
             TargetReplicaState(
                 assetID: row.uuid(0),
                 targetID: row.uuid(1),
                 state: ReplicaFileState(rawValue: row.text(2)) ?? .pending,
                 relativePath: row.optionalText(3),
-                lastVerifiedAt: row.optionalDate(4)
+                lastVerifiedAt: row.optionalDate(4),
+                observedSize: row.optionalInt(5),
+                observedModifiedAt: row.optionalDate(6)
             )
         }
     }

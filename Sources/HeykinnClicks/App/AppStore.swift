@@ -40,20 +40,20 @@ final class AppStore: ObservableObject {
     @Published var isImporting = false
     @Published private(set) var takeoutActivity: TakeoutActivity?
     @Published var lastError: String?
-    @Published var autoSyncOnConnect: Bool = UserDefaults.standard.object(forKey: "autoSyncOnConnect") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(autoSyncOnConnect, forKey: "autoSyncOnConnect") }
+    @Published var autoSyncOnConnect: Bool = true {
+        didSet { defaults.set(autoSyncOnConnect, forKey: "autoSyncOnConnect") }
     }
     /// When a managed drive connects, scan → extract → import its Takeout
     /// exports without any clicks, using the Takeout files as that drive's
     /// replicas.
-    @Published var autoManageTakeout: Bool = UserDefaults.standard.object(forKey: "autoManageTakeout") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(autoManageTakeout, forKey: "autoManageTakeout") }
+    @Published var autoManageTakeout: Bool = true {
+        didSet { defaults.set(autoManageTakeout, forKey: "autoManageTakeout") }
     }
     /// Reading a small ration of files in the background, which is the only way
     /// rot is ever found. On by default: an archive nobody reads is one whose
     /// damage is discovered when it is needed.
-    @Published var backgroundRotPatrol: Bool = UserDefaults.standard.object(forKey: "backgroundRotPatrol") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(backgroundRotPatrol, forKey: "backgroundRotPatrol") }
+    @Published var backgroundRotPatrol: Bool = true {
+        didSet { defaults.set(backgroundRotPatrol, forKey: "backgroundRotPatrol") }
     }
 
     var isSyncing: Bool { syncProgress != nil }
@@ -67,12 +67,9 @@ final class AppStore: ObservableObject {
     /// than you have places to put them. Registering a target raises this.
     var maxSettableCopies: Int { max(targets.count, 1) }
 
-    @Published var redundancyPolicy: LocalRedundancyPolicy =
-        LocalRedundancyPolicy(
-            desiredCopies: UserDefaults.standard.object(forKey: "desiredCopies") as? Int ?? LocalRedundancyPolicy.default.desiredCopies
-        ) {
+    @Published var redundancyPolicy: LocalRedundancyPolicy = .default {
         didSet {
-            UserDefaults.standard.set(redundancyPolicy.desiredCopies, forKey: "desiredCopies")
+            defaults.set(redundancyPolicy.desiredCopies, forKey: "desiredCopies")
             // Protection is judged against this number, so every verdict in
             // the app changes the moment it does.
             recomputeDerivedState()
@@ -99,9 +96,9 @@ final class AppStore: ObservableObject {
     /// refresh — small enough to feel live, large enough to amortise the
     /// per-chunk commit.
     private static let importChunkSize = 100
-    private var ignoredVolumeKeys: Set<String> =
-        Set(UserDefaults.standard.stringArray(forKey: "ignoredVolumeKeys") ?? [])
+    private var ignoredVolumeKeys: Set<String> = []
 
+    private let defaults: UserDefaults
     let staging: StagingStore
     /// Where export parts wait while travelling between targets that are never
     /// plugged in at the same time.
@@ -121,12 +118,17 @@ final class AppStore: ObservableObject {
         if let hit = thumbnails.cachedInMemory(asset.id) { return hit }
         if let running = thumbnailTasks[asset.id] { return await running.value }
 
+        let cache = thumbnails
+        let sourceURL = localFileURL(for: asset)
+        let assetID = asset.id
+
         // Photos the app does not hold have no file to read: their pictures
         // come from the provider, which serves thumbnails locally without
-        // downloading originals.
-        if let providerLocalID = asset.providerLocalID {
-            let assetID = asset.id
-            let cache = thumbnails
+        // downloading originals. Bytes the archive holds come first, though —
+        // once a library photo has been brought in it has a file, and asking
+        // PhotoKit instead would draw it as a placeholder in any build that
+        // has not been granted Photos access.
+        if sourceURL == nil, let providerLocalID = asset.providerLocalID {
             let task = Task<NSImage?, Never> {
                 guard let image = await ApplePhotosVerifier.thumbnail(forLocalIdentifier: providerLocalID) else { return nil }
                 cache.store(image, for: assetID)
@@ -138,9 +140,6 @@ final class AppStore: ObservableObject {
             return image
         }
 
-        let cache = thumbnails
-        let sourceURL = localFileURL(for: asset)
-        let assetID = asset.id
         let task = Task.detached(priority: .userInitiated) { () -> NSImage? in
             await cache.thumbnail(for: assetID, sourceURL: sourceURL)
         }
@@ -200,21 +199,42 @@ final class AppStore: ObservableObject {
         return nil
     }
 
-    init() {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let appDirectory = support.appendingPathComponent("HeykinnClicks", isDirectory: true)
+    convenience init() {
+        self.init(environment: .production())
+    }
+
+    init(environment: AppEnvironment) {
+        let appDirectory = environment.appDirectory
         try? FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
 
+        defaults = environment.defaults
         staging = StagingStore(rootURL: appDirectory.appendingPathComponent("Staging", isDirectory: true))
         relay = ExportPartRelay(rootURL: appDirectory.appendingPathComponent("ExportPartRelay", isDirectory: true))
         targetMonitor = TargetMonitor()
-        thumbnails = ThumbnailCache.defaultCache()
+        thumbnails = environment.runsBackgroundWork
+            ? ThumbnailCache.defaultCache()
+            : ThumbnailCache(directory: appDirectory.appendingPathComponent("Thumbnails", isDirectory: true))
 
         do {
             catalog = try CatalogStore(databasePath: appDirectory.appendingPathComponent("catalog.sqlite").path)
         } catch {
             fatalError("Could not open catalog database: \(error)")
         }
+
+        // Read before `loadAll`, which clamps the redundancy policy and so
+        // needs the stored one. Assignments in an initialiser do not fire
+        // `didSet`, so nothing is written back on the way in.
+        let stored = environment.defaults
+        autoSyncOnConnect = stored.object(forKey: "autoSyncOnConnect") as? Bool ?? true
+        autoManageTakeout = stored.object(forKey: "autoManageTakeout") as? Bool ?? true
+        backgroundRotPatrol = stored.object(forKey: "backgroundRotPatrol") as? Bool ?? true
+        importFromApplePhotos = stored.object(forKey: "importFromApplePhotos") as? Bool ?? true
+        iCloudPhotosEnabled = stored.object(forKey: "iCloudPhotosEnabled") as? Bool
+        ignoredVolumeKeys = Set(stored.stringArray(forKey: "ignoredVolumeKeys") ?? [])
+        redundancyPolicy = LocalRedundancyPolicy(
+            desiredCopies: stored.object(forKey: "desiredCopies") as? Int
+                ?? LocalRedundancyPolicy.default.desiredCopies
+        )
 
         loadAll()
 
@@ -224,8 +244,14 @@ final class AppStore: ObservableObject {
         targetMonitor.volumeWillUnmount = { [weak self] url in
             self?.handleWillUnmount(volumeURL: url)
         }
-        rescanTargets()
         refreshApplePhotosState()
+
+        // A test drives reachability itself, and enumerating the real machine's
+        // volumes — or backing the catalog up onto the user's actual drives —
+        // is exactly what it must not do.
+        guard environment.runsBackgroundWork else { return }
+
+        rescanTargets()
         // Runs after the drive scan so drive-resident leftovers are visible.
         reconcileAfterRestart()
         refreshCatalogSnapshots()
@@ -1419,6 +1445,9 @@ final class AppStore: ObservableObject {
             // Before anything reads or copies: confirm the paths still resolve.
             // Content the user moved must be repointed, not copied again.
             repairReplicaPaths(for: targetID)
+            // Then the cheap look at what those paths now contain. Runs after
+            // the repair so a moved file is stat-ed where it actually is.
+            checkReplicaStats(for: targetID)
             // Reconcile before syncing. A drive that already holds this
             // content — the same Takeout export, say — should claim it in
             // place; starting the backlog first would copy over the top of
@@ -1455,7 +1484,7 @@ final class AppStore: ObservableObject {
     func ignoreVolumePermanently(_ volume: VolumeInfo) {
         let key = volume.volumeUUID ?? volume.url.path
         ignoredVolumeKeys.insert(key)
-        UserDefaults.standard.set(Array(ignoredVolumeKeys), forKey: "ignoredVolumeKeys")
+        defaults.set(Array(ignoredVolumeKeys), forKey: "ignoredVolumeKeys")
         connectPrompt = nil
     }
 
@@ -2708,6 +2737,111 @@ final class AppStore: ObservableObject {
     /// A match means the two targets record the same content, which is a
     /// different and weaker statement than "the bytes on both are good" — only
     /// reading them back says that.
+    /// The size/mtime gate: stat everything this target holds, and aim a read
+    /// at whatever moved.
+    ///
+    /// Runs on connect, after path repair. A file edited in place is invisible
+    /// to the anchor check and to the trees, so without this it waits for the
+    /// rot patrol — and the patrol reads about forty files every half hour,
+    /// which on an archive this size is a lap measured in weeks.
+    ///
+    /// Nothing here records damage. A changed stat says the file is not what
+    /// the app last saw, not that its bytes are wrong; the queued read is what
+    /// settles that. Marking the replica stale instead would report drift
+    /// nobody checked.
+    @discardableResult
+    func checkReplicaStats(for targetID: UUID) -> (files: Int, changed: Int, baselines: Int) {
+        guard let target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
+            return (0, 0, 0)
+        }
+        let mine = replicaStates.filter { $0.targetID == targetID && $0.state == .present }
+        guard !mine.isEmpty else { return (0, 0, 0) }
+
+        // Where each export part sits on this target, so the thousands of
+        // replicas it backs cost one stat between them.
+        var archivePartPaths: [String: String] = [:]
+        for part in archivePlan.parts {
+            if let copy = part.copies[targetID] { archivePartPaths[part.displayName] = copy.path }
+        }
+
+        let subjects = ReplicaStatGate.subjects(
+            replicas: mine,
+            assetsByID: assetsByID,
+            target: target,
+            mountURL: mountURL,
+            archivePartPaths: archivePartPaths
+        )
+
+        var updated: [TargetReplicaState] = []
+        var changedAssetIDs: Set<UUID> = []
+        var firstReason: String?
+        var baselines = 0
+
+        for subject in subjects {
+            let observed = ReplicaStatGate.observe(subject.url)
+            for replica in subject.replicas {
+                let expectedSize = subject.isOwnFile ? assetsByID[replica.assetID]?.fileSize : nil
+                switch ReplicaStatGate.finding(
+                    for: replica, expectedSize: expectedSize, observed: observed
+                ) {
+                case .unchanged, .absent:
+                    continue
+                case .changed(let reason):
+                    // Deliberately *not* re-baselined here. The read that
+                    // settles this is what may write a new baseline; recording
+                    // one now would mean a quit before the queue drained left
+                    // the file looking untouched forever.
+                    changedAssetIDs.insert(replica.assetID)
+                    if firstReason == nil { firstReason = reason }
+                    continue
+                case .baselineRecorded:
+                    baselines += 1
+                }
+                guard let observed else { continue }
+                var replica = replica
+                replica.observedSize = observed.size
+                replica.observedModifiedAt = observed.modifiedAt
+                updated.append(replica)
+            }
+        }
+
+        guard !updated.isEmpty || !changedAssetIDs.isEmpty else {
+            return (subjects.count, 0, 0)
+        }
+        do {
+            try catalog.transaction {
+                for replica in updated { try catalog.upsertReplicaState(replica) }
+            }
+        } catch {
+            lastError = "Could not record what \(target.name) holds: \(error.localizedDescription)"
+            return (subjects.count, changedAssetIDs.count, baselines)
+        }
+
+        if changedAssetIDs.isEmpty {
+            // A first pass over a target that predates this check writes
+            // baselines and finds nothing, which is the truthful outcome and
+            // worth saying once so the next connect's findings mean something.
+            if baselines > 0 {
+                audit(
+                    .drive,
+                    "\(target.name): recorded the size and date of \(baselines) file(s) across \(subjects.count) file(s) on disk. Nothing was compared — there was nothing yet to compare against.",
+                    targetID: targetID
+                )
+            }
+            loadAll()
+            return (subjects.count, 0, baselines)
+        }
+
+        audit(
+            .drive,
+            "\(target.name): \(changedAssetIDs.count) file(s) changed since the app last looked (e.g. \(firstReason ?? "size or date moved")). Reading them back to find out whether the content is still right.",
+            targetID: targetID
+        )
+        loadAll()
+        queueVerificationSweep(targetID, budget: .unlimited, restrictedTo: changedAssetIDs)
+        return (subjects.count, changedAssetIDs.count, baselines)
+    }
+
     func agreement(for targetID: UUID) -> [(other: ReplicationTarget, agrees: Bool, divergentCount: Int)] {
         guard let mine = targetTrees[targetID] else { return [] }
         return targets.filter { $0.id != targetID }.compactMap { other in
@@ -3052,10 +3186,10 @@ final class AppStore: ObservableObject {
     /// report this, so it is asked once and stored as topology — a statement
     /// about the user's setup, verifiable by them in seconds, and never a
     /// claim about any individual photo. Nil means unanswered.
-    @Published var iCloudPhotosEnabled: Bool? = UserDefaults.standard.object(forKey: "iCloudPhotosEnabled") as? Bool {
+    @Published var iCloudPhotosEnabled: Bool? {
         didSet {
             if let iCloudPhotosEnabled {
-                UserDefaults.standard.set(iCloudPhotosEnabled, forKey: "iCloudPhotosEnabled")
+                defaults.set(iCloudPhotosEnabled, forKey: "iCloudPhotosEnabled")
             }
         }
     }
@@ -3065,8 +3199,8 @@ final class AppStore: ObservableObject {
     /// Copying indexed Photos-library originals into the archive so they gain
     /// the same protection as everything else. On by default: a photo the app
     /// can see but not protect is the problem this app exists to solve.
-    @Published var importFromApplePhotos: Bool = UserDefaults.standard.object(forKey: "importFromApplePhotos") as? Bool ?? true {
-        didSet { UserDefaults.standard.set(importFromApplePhotos, forKey: "importFromApplePhotos") }
+    @Published var importFromApplePhotos: Bool = true {
+        didSet { defaults.set(importFromApplePhotos, forKey: "importFromApplePhotos") }
     }
     private var lastApplePhotosImport: Date?
     @Published private(set) var applePhotosLibraryCount = 0
@@ -3116,7 +3250,14 @@ final class AppStore: ObservableObject {
     /// so re-indexing updates them instead of duplicating them.
     func indexApplePhotos() {
         guard applePhotosState == .connected, !isIndexingApplePhotos else { return }
-        let items = ApplePhotosVerifier.indexLibrary()
+        mergeLibraryIndex(ApplePhotosVerifier.indexLibrary())
+    }
+
+    /// The catalog side of indexing, kept apart from PhotoKit so the
+    /// link-or-add decision can be exercised against a library that does not
+    /// exist on this machine.
+    func mergeLibraryIndex(_ items: [ApplePhotosVerifier.LibraryItem]) {
+        guard !isIndexingApplePhotos else { return }
         applePhotosLibraryCount = items.count
         guard !items.isEmpty else {
             lastApplePhotosCheckSummary = CloudVerificationError.libraryUnavailable(.appleCloud).localizedDescription
@@ -3170,7 +3311,7 @@ final class AppStore: ObservableObject {
                         // Not a content hash: the bytes were never read. Scoped
                         // by the provider id so it can never collide with a
                         // real hash and never groups as a duplicate.
-                        contentHash: "apple-library:\(item.localIdentifier)",
+                        contentHash: Asset.providerIndexHashPrefix + item.localIdentifier,
                         residency: residency,
                         residencySource: .importDefault,
                         presence: residency == .appleCloud
@@ -3200,17 +3341,27 @@ final class AppStore: ObservableObject {
         loadAll()
     }
 
+    /// What reclamation would release if it existed, computed from evidence the
+    /// app already holds. Nothing acts on this: it removes nothing, and it is
+    /// here so the preconditions are visible rather than only written down.
+    var reclamationPlan: ReclamationPlanner.Plan {
+        let agreeing = Set(targets.map(\.id).filter { targetID in
+            agreement(for: targetID).allSatisfy(\.agrees)
+        })
+        return ReclamationPlanner.plan(
+            assets: assets,
+            replicasByAssetID: replicasByAssetID,
+            registeredTargetIDs: Set(targets.map(\.id)),
+            agreeingTargetIDs: agreeing,
+            policy: redundancyPolicy
+        )
+    }
+
     /// Assets indexed from the Photos library whose bytes the app does not yet
     /// hold. These are visible to the app and protected by nothing.
     var applePhotosAwaitingImport: [Asset] {
-        assets.filter {
-            $0.providerLocalID != nil
-                && $0.stagingRelativePath == nil
-                && $0.contentHash.hasPrefix(Self.providerHashPrefix)
-        }
+        assets.filter { $0.providerLocalID != nil && $0.isIndexedOnly }
     }
-
-    static let providerHashPrefix = "apple-library:"
 
     /// Starts draining the backlog if it is not already running.
     ///
@@ -3227,6 +3378,40 @@ final class AppStore: ObservableObject {
         importOriginalsFromApplePhotos()
     }
 
+    /// How originals leave the Photos library. A property rather than a call
+    /// straight into PhotoKit, so what this import decides about each item —
+    /// merge, stage, or pair — can be tested against a library that does not
+    /// exist on the machine running the tests.
+    var exportOriginalFromPhotos: (String, URL) async throws -> ApplePhotosVerifier.ExportedOriginal =
+        { try await ApplePhotosVerifier.exportOriginal(localIdentifier: $0, to: $1) }
+
+    /// A file pulled out of the library and put into staging.
+    private struct StagedOriginal {
+        var assetID: UUID
+        var filename: String
+        var relativePath: String
+        var hash: String
+        var size: Int64
+    }
+
+    /// What the archive should do about one indexed library item, once its
+    /// bytes have been read.
+    private struct PhotosImportOutcome {
+        var indexed: Asset
+        /// The staged still — nil when the bytes turned out to be a file the
+        /// archive already held.
+        var still: StagedOriginal?
+        /// Set instead of `still`: the asset the indexed row folds into.
+        var mergedInto: UUID?
+        /// The movie half of a Live Photo, when it is content the archive does
+        /// not already hold.
+        var motion: StagedOriginal?
+        /// An asset already in the catalog that turns out to *be* this item's
+        /// motion half. Not new content — a link Photos can confirm and the
+        /// content-identifier pairer would otherwise have to guess at.
+        var existingMotionID: UUID?
+    }
+
     /// Copies a batch of indexed originals into staging and queues them for
     /// replication, so photos the Photos library holds become photos the
     /// archive protects.
@@ -3236,6 +3421,11 @@ final class AppStore: ObservableObject {
     /// along — the indexed row is folded into the existing asset rather than
     /// stored twice, and that asset gains verified Apple presence, because
     /// hashing just proved it. Only genuinely new content is staged.
+    ///
+    /// A Live Photo arrives as two files and is stored as two assets, linked.
+    /// Taking only the still would have handed the archive a flattened
+    /// photograph and left the motion behind in a library the whole point is
+    /// to stop depending on.
     func importOriginalsFromApplePhotos(limit: Int = 25) {
         guard !isImportingFromApplePhotos else { return }
         let batch = Array(applePhotosAwaitingImport.prefix(limit))
@@ -3244,81 +3434,152 @@ final class AppStore: ObservableObject {
 
         let staging = self.staging
         let scratch = staging.rootURL.appendingPathComponent("apple-export", isDirectory: true)
-        let existingHashes = Dictionary(assets.filter { !$0.contentHash.hasPrefix(Self.providerHashPrefix) }
+        let existingHashes = Dictionary(assets.filter { !$0.isIndexedOnly }
             .map { ($0.contentHash, $0.id) }, uniquingKeysWith: { first, _ in first })
+        let export = exportOriginalFromPhotos
 
         Task { [weak self] in
-            var staged: [(asset: Asset, path: String, hash: String, size: Int64)] = []
-            var merges: [(indexed: UUID, existing: UUID)] = []
+            func stage(_ url: URL, as assetID: UUID, hash: String) throws -> StagedOriginal {
+                let size = ((try? FileManager.default.attributesOfItem(atPath: url.path))?[.size] as? Int64) ?? 0
+                let relativePath = try staging.stage(
+                    fileAt: url, assetID: assetID, fileExtension: url.pathExtension.lowercased()
+                )
+                return StagedOriginal(
+                    assetID: assetID,
+                    filename: url.lastPathComponent,
+                    relativePath: relativePath,
+                    hash: hash,
+                    size: size
+                )
+            }
+
+            var outcomes: [PhotosImportOutcome] = []
             var failures = 0
 
             for asset in batch {
                 guard let providerLocalID = asset.providerLocalID else { continue }
                 do {
-                    let exported = try await ApplePhotosVerifier.exportOriginal(
-                        localIdentifier: providerLocalID, to: scratch
-                    )
-                    defer { try? FileManager.default.removeItem(at: exported) }
-                    let hash = try HashingService.sha256(of: exported)
-                    let size = Int64((try? FileManager.default.attributesOfItem(atPath: exported.path)[.size] as? Int64) ?? 0) ?? 0
-
-                    if let existing = existingHashes[hash] {
-                        merges.append((asset.id, existing))
-                        continue
+                    let exported = try await export(providerLocalID, scratch)
+                    defer {
+                        for url in exported.all { try? FileManager.default.removeItem(at: url) }
                     }
-                    let relativePath = try staging.stage(
-                        fileAt: exported,
-                        assetID: asset.id,
-                        fileExtension: exported.pathExtension.lowercased()
-                    )
-                    staged.append((asset, relativePath, hash, size))
+
+                    var outcome = PhotosImportOutcome(indexed: asset)
+                    let stillHash = try HashingService.sha256(of: exported.still)
+                    if let existing = existingHashes[stillHash] {
+                        outcome.mergedInto = existing
+                    } else {
+                        outcome.still = try stage(exported.still, as: asset.id, hash: stillHash)
+                    }
+
+                    if let motionURL = exported.motion {
+                        let motionHash = try HashingService.sha256(of: motionURL)
+                        if let existing = existingHashes[motionHash] {
+                            outcome.existingMotionID = existing
+                        } else {
+                            outcome.motion = try stage(motionURL, as: UUID(), hash: motionHash)
+                        }
+                    }
+                    outcomes.append(outcome)
                 } catch {
                     failures += 1
                 }
             }
             await MainActor.run {
-                self?.recordApplePhotosImport(staged: staged, merges: merges, failures: failures)
+                self?.recordApplePhotosImport(outcomes: outcomes, failures: failures)
             }
         }
     }
 
-    private func recordApplePhotosImport(
-        staged: [(asset: Asset, path: String, hash: String, size: Int64)],
-        merges: [(indexed: UUID, existing: UUID)],
-        failures: Int
-    ) {
+    private func recordApplePhotosImport(outcomes: [PhotosImportOutcome], failures: Int) {
+        var stagedCount = 0
+        var mergedCount = 0
+        var pairedCount = 0
+        let now = Date()
         do {
             try catalog.transaction {
-                for item in staged {
-                    var updated = item.asset
-                    updated.contentHash = item.hash
-                    updated.fileSize = item.size
-                    updated.stagingRelativePath = item.path
-                    updated.presence.local = true
-                    updated.updatedDate = Date()
-                    try catalog.upsertAsset(updated)
-                    // Now that the archive holds the bytes, every target owes
-                    // it a copy — the same path any other Local asset takes.
-                    for target in targets {
-                        try enqueueTask(assetID: updated.id, targetID: target.id, action: .copy)
-                        try catalog.upsertReplicaState(TargetReplicaState(
-                            assetID: updated.id, targetID: target.id,
-                            state: .pending, relativePath: nil, lastVerifiedAt: nil
+                for outcome in outcomes {
+                    // The asset the still ends up as, whether it was staged
+                    // fresh or folded into one already held. The motion half
+                    // hangs off it either way.
+                    var stillAsset: Asset?
+
+                    if let still = outcome.still {
+                        var updated = outcome.indexed
+                        updated.contentHash = still.hash
+                        updated.fileSize = still.size
+                        updated.stagingRelativePath = still.relativePath
+                        updated.presence.local = true
+                        updated.updatedDate = now
+                        try catalog.upsertAsset(updated)
+                        try queueReplicationOfNewlyHeld(updated.id)
+                        stillAsset = updated
+                        stagedCount += 1
+                    } else if let existingID = outcome.mergedInto {
+                        // Byte-identical to something already held: one
+                        // photograph, one row. The survivor gains proven Apple
+                        // presence.
+                        if var existing = assetsByID[existingID] {
+                            existing.presence.appleCloud = iCloudPhotosEnabled == true
+                            existing.cloudPresenceEvidence = iCloudPhotosEnabled == true ? .verified : .none
+                            existing.cloudPresenceCheckedAt = now
+                            existing.providerLocalID = outcome.indexed.providerLocalID
+                            existing.updatedDate = now
+                            try catalog.upsertAsset(existing)
+                            stillAsset = existing
+                        }
+                        try catalog.deleteAsset(id: outcome.indexed.id)
+                        mergedCount += 1
+                    }
+
+                    guard let stillID = stillAsset?.id else { continue }
+                    // One still holds one motion half; a re-run must not add a
+                    // second.
+                    guard livePhotoMotionByStillID[stillID] == nil else { continue }
+
+                    if let motion = outcome.motion {
+                        try catalog.upsertAsset(Asset(
+                            id: motion.assetID,
+                            kind: .video,
+                            originalFilename: motion.filename,
+                            importOrigin: .appleExport,
+                            captureDate: outcome.indexed.captureDate,
+                            importDate: now,
+                            updatedDate: now,
+                            fileSize: motion.size,
+                            pixelWidth: nil,
+                            pixelHeight: nil,
+                            contentHash: motion.hash,
+                            residency: outcome.indexed.residency,
+                            residencySource: .importDefault,
+                            presence: DomainPresence(local: true, appleCloud: false, googleCloud: false),
+                            stagingRelativePath: motion.relativePath,
+                            importBatchID: nil,
+                            exifSummary: [:],
+                            livePhotoStillID: stillID
                         ))
+                        try queueReplicationOfNewlyHeld(motion.assetID)
+                        pairedCount += 1
+                    } else if let existingMotionID = outcome.existingMotionID,
+                              var existingMotion = assetsByID[existingMotionID],
+                              existingMotion.livePhotoStillID == nil,
+                              existingMotionID != stillID {
+                        // The archive already held the movie, unlinked. Photos
+                        // says which still it belongs to, which is stronger
+                        // than the identifier match the pairer would make.
+                        existingMotion.livePhotoStillID = stillID
+                        existingMotion.updatedDate = now
+                        try catalog.upsertAsset(existingMotion)
+                        pairedCount += 1
+                    } else {
+                        continue
                     }
-                }
-                for merge in merges {
-                    // Byte-identical to something already held: one photograph,
-                    // one row. The survivor gains proven Apple presence.
-                    if var existing = assetsByID[merge.existing] {
-                        existing.presence.appleCloud = iCloudPhotosEnabled == true
-                        existing.cloudPresenceEvidence = iCloudPhotosEnabled == true ? .verified : .none
-                        existing.cloudPresenceCheckedAt = Date()
-                        existing.providerLocalID = assetsByID[merge.indexed]?.providerLocalID
-                        existing.updatedDate = Date()
-                        try catalog.upsertAsset(existing)
+
+                    if var still = stillAsset, still.kind != .livePhoto {
+                        still.kind = .livePhoto
+                        still.updatedDate = now
+                        try catalog.upsertAsset(still)
                     }
-                    try catalog.deleteAsset(id: merge.indexed)
                 }
             }
         } catch {
@@ -3327,13 +3588,14 @@ final class AppStore: ObservableObject {
             return
         }
         var parts: [String] = []
-        if !staged.isEmpty { parts.append("\(staged.count) copied in and queued for replication") }
-        if !merges.isEmpty { parts.append("\(merges.count) already held byte-for-byte, merged") }
+        if stagedCount > 0 { parts.append("\(stagedCount) copied in and queued for replication") }
+        if mergedCount > 0 { parts.append("\(mergedCount) already held byte-for-byte, merged") }
+        if pairedCount > 0 { parts.append("\(pairedCount) Live Photo motion half(s) kept with their still") }
         if failures > 0 { parts.append("\(failures) original(s) could not be exported") }
         if !parts.isEmpty {
             audit(.importEvent, "Photos library: " + parts.joined(separator: "; ") + ".")
         }
-        let remaining = max(applePhotosAwaitingImport.count - staged.count - merges.count, 0)
+        let remaining = max(applePhotosAwaitingImport.count - stagedCount - mergedCount, 0)
         applePhotosImportSummary = remaining > 0
             ? "\(remaining.formatted()) still to bring in"
             : "all indexed photos are in the archive"
@@ -3342,6 +3604,18 @@ final class AppStore: ObservableObject {
         // Straight on to the next batch while there is a backlog: the job is
         // finite and the user is waiting for it, not for a schedule.
         if remaining > 0 { importFromApplePhotosIfDue() }
+    }
+
+    /// Every target owes a copy of content the archive has just taken on — the
+    /// same path any other Local asset takes.
+    private func queueReplicationOfNewlyHeld(_ assetID: UUID) throws {
+        for target in targets {
+            try enqueueTask(assetID: assetID, targetID: target.id, action: .copy)
+            try catalog.upsertReplicaState(TargetReplicaState(
+                assetID: assetID, targetID: target.id,
+                state: .pending, relativePath: nil, lastVerifiedAt: nil
+            ))
+        }
     }
 
     /// Checks a small batch of Local assets against Apple Photos, oldest

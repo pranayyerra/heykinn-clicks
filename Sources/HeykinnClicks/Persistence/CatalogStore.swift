@@ -71,6 +71,8 @@ final class CatalogStore {
             state TEXT NOT NULL,
             relative_path TEXT,
             last_verified_at REAL,
+            observed_size INTEGER,
+            observed_modified_at REAL,
             PRIMARY KEY (asset_id, drive_id)
         );
 
@@ -172,6 +174,11 @@ final class CatalogStore {
         // the same photograph across domains when the bytes differ.
         try? database.exec("ALTER TABLE assets ADD COLUMN provider_local_id TEXT;")
         try? database.exec("ALTER TABLE assets ADD COLUMN counterpart_asset_id TEXT;")
+        // What each replica's file looked like when the app last knew it was
+        // right, so a connect can aim its reads at the files that changed
+        // underneath it rather than re-reading the target.
+        try? database.exec("ALTER TABLE replica_states ADD COLUMN observed_size INTEGER;")
+        try? database.exec("ALTER TABLE replica_states ADD COLUMN observed_modified_at REAL;")
     }
 
     /// Writes a consistent, compacted copy of the whole catalog to `path`.

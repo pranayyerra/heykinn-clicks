@@ -56,7 +56,9 @@ Shipped and tested; the pointers are where to look.
 - **Catalog authority and durability** — atomic chunk commits, resumable
   imports, startup reconciliation, verified per-target snapshots:
   `Persistence/`, `Services/CatalogBackupService.swift`,
-  `AppStore.reconcileAfterRestart`.
+  `AppStore.reconcileAfterRestart`. The store takes an `AppEnvironment`, so a
+  test builds a whole one over a temporary archive rather than the user's:
+  `App/AppEnvironment.swift`.
 - **Targets** — host-device or external-volume, marker-file identity (never
   path), capped at `desiredCopies`, forgettable without deleting anything, one
   device = one copy: `Domain/Target.swift`.
@@ -65,10 +67,12 @@ Shipped and tested; the pointers are where to look.
   reachable together: `Domain/ArchiveReplication.swift`,
   `Services/ExportPartRelay.swift`.
 - **Verification** — binary protection verdict with check-standing as
-  evidence; Merkle-tree agreement between targets; anchor checks with in-place
-  path repair; background rot patrol; sampled quick checksum with its limits
-  stated in type, UI, and tests: `Domain/Protection.swift`,
-  `Domain/MerkleTree.swift`, `Services/ReplicaPathRepair.swift`.
+  evidence; the aimed-reads triad complete (Merkle-tree agreement between
+  targets, anchor checks with in-place path repair, and the size/mtime gate on
+  connect, which is the only thing that sees a file edited under an intact
+  path); background rot patrol; sampled quick checksum with its limits stated
+  in type, UI, and tests: `Domain/Protection.swift`, `Domain/MerkleTree.swift`,
+  `Services/ReplicaPathRepair.swift`, `Services/ReplicaStatGate.swift`.
 - **Ingest** — Google Takeout in full: split parts, cross-part dedupe, Live
   Photo pairing across parts, capture-date precedence with provenance,
   structural year detection, edited-variant linking: `Services/Takeout*`,
@@ -84,10 +88,21 @@ Shipped and tested; the pointers are where to look.
   row as a *counterpart link* when filename, capture second and dimensions
   agree, and only byte-identical originals write `verified` presence. Refuses
   to answer against an empty library, so an absent library can never read as
-  "not present". **Whether the library is AppleCloud depends on iCloud Photos,
-  which PhotoKit cannot report** — the app asks once at connect time and
-  treats the answer as topology, never as evidence about a photo:
-  `Services/ApplePhotosConnector.swift`.
+  "not present". A Live Photo is exported as both halves and stored as a still
+  plus a linked motion asset, never flattened. **Whether the library is
+  AppleCloud depends on iCloud Photos, which PhotoKit cannot report** — the app
+  asks once at connect time and treats the answer as topology, never as
+  evidence about a photo: `Services/ApplePhotosConnector.swift`.
+
+  Searched, and there is no supported signal to replace that question with.
+  `PHCloudIdentifier` looks like one and is not: Apple's own WWDC21 session
+  says cloud identifiers work on an account signed out of iCloud Photos, or
+  one that never was. `PHImageResultIsInCloudKey` means "these bytes are not
+  on this device", which is true of an optimised library whether or not it
+  syncs. `PHAssetSourceType.cloudShared` is iCloud Shared Albums, a different
+  feature. No `PHPhotosError` case names the state, and nothing on the library
+  container reports it. Inferring it anyway would write false residency — the
+  exact failure the evidence model exists to prevent.
 - **UI** — Overview with the one-answer protection card; Storage & Health with
   the archive map (the archive at the centre, a node per place, empty slots
   drawn); ⌘, Settings. Acting by default, escapes in menus, photos leading
@@ -126,10 +141,7 @@ additive migrations) · Apple frameworks only — zero third-party dependencies.
 
 ### Next — no connector required
 
-1. **Size/mtime gate.** Stat every replica when its target connects; re-hash
-   immediately anything whose size or modification date moved. Completes the
-   aimed-reads triad (anchor checks and the rot patrol are live).
-2. **Duplicate resolution.** Keep/discard on hash groups: the survivor keeps
+1. **Duplicate resolution.** Keep/discard on hash groups: the survivor keeps
    the claim, discards release catalog claims only, and archive-backed bytes
    are never deleted.
 
@@ -155,8 +167,11 @@ and reclamation from Google stays a manual act the app can only guide.
    the safety mechanism: Local residency; `desiredCopies` copies on targets
    (not staging); every copy read back and matched at least once; target trees
    in agreement; the provider confirming the same content immediately before
-   release. Until all of that exists, reclamation computes and displays what
-   it would release, and removes nothing.
+   release. **The read-only half of this has shipped**: the app computes and
+   displays what it would release, and what is holding the rest up, and removes
+   nothing — every precondition but the last, which is a check made at the
+   moment of release and cannot honestly be asserted in advance
+   (`Services/ReclamationPlanner.swift`). What remains is the release itself.
 6. **Google, within its limits.** A guided fresh-Takeout diff — "what does
    Google still hold that this archive already protects?" — with a manual
    deletion checklist the app tracks but never performs.
@@ -185,8 +200,10 @@ Earned against a real 248 GB archive; the stories are in git history.
 11. Fix the import path and reconciliation, never one catalog by hand.
 12. Fewer buttons: act automatically, keep the escapes in a menu.
 13. The protection verdict is binary; a stale check is evidence, not a state.
-14. Compare trees and stat anchors for free, aim the reads; only the patrol
-    finds rot.
+14. Compare trees and stat anchors and files for free, aim the reads; only the
+    patrol finds rot.
+    A replica is often not its own file — one stat can cover ten thousand of
+    them — which is what made stat-ing everything on connect affordable.
 15. A moved folder is repointed, never re-copied.
 16. Targets are configuration, capped by the policy; forgetting frees a slot
     and deletes nothing.

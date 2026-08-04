@@ -113,14 +113,30 @@ final class ApplePhotosVerifier: CloudDomainVerifier {
         return items
     }
 
-    /// Writes an indexed photo's original out of the library to `directory`,
-    /// returning the file.
+    /// What one library item is, as files on disk.
+    ///
+    /// A Live Photo is two files. Photos stores it as one asset carrying a
+    /// still resource and a paired-video resource; the catalog stores it as two
+    /// assets linked by `livePhotoStillID`, because the movie is real content
+    /// that has to live somewhere and be checked like anything else. Exporting
+    /// only the still would hand the archive a flattened photograph and quietly
+    /// drop the motion — which, once the library is gone, is gone.
+    struct ExportedOriginal {
+        /// The photograph itself: the `.photo` resource, or `.video` for a movie.
+        var still: URL
+        /// The movie half of a Live Photo, when the item has one.
+        var motion: URL?
+
+        var all: [URL] { [still] + (motion.map { [$0] } ?? []) }
+    }
+
+    /// Writes an indexed item's originals out of the library to `directory`.
     ///
     /// This is what turns "the app can see this photo" into "the app can
     /// protect it". Network access is allowed because an original that lives
     /// only in iCloud has to come down before it can be copied to a drive —
     /// a preview is not the photograph.
-    static func exportOriginal(localIdentifier: String, to directory: URL) async throws -> URL {
+    static func exportOriginal(localIdentifier: String, to directory: URL) async throws -> ExportedOriginal {
         guard connectionState == .connected else {
             throw CloudVerificationError.notConnected(.appleCloud)
         }
@@ -129,12 +145,45 @@ final class ApplePhotosVerifier: CloudDomainVerifier {
         }
         let resources = PHAssetResource.assetResources(for: phAsset)
         let wanted: PHAssetResourceType = phAsset.mediaType == .video ? .video : .photo
-        guard let resource = resources.first(where: { $0.type == wanted }) ?? resources.first else {
+        guard let still = resources.first(where: { $0.type == wanted }) ?? resources.first else {
             throw ExportError.noOriginal
         }
 
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let destination = directory.appendingPathComponent(resource.originalFilename)
+        let stillURL = try await write(still, into: directory, avoiding: [])
+
+        // `.pairedVideo` is the movie as shot. `.fullSizePairedVideo` is a
+        // render of an edited Live Photo, so it is only the original when
+        // there is no unedited half to take.
+        let motionResource = resources.first { $0.type == .pairedVideo }
+            ?? resources.first { $0.type == .fullSizePairedVideo }
+        guard let motionResource else { return ExportedOriginal(still: stillURL, motion: nil) }
+
+        do {
+            let motionURL = try await write(motionResource, into: directory, avoiding: [stillURL])
+            return ExportedOriginal(still: stillURL, motion: motionURL)
+        } catch {
+            // The still is real content already on disk; failing the whole
+            // item because its motion half would not come down would leave the
+            // photograph unprotected too. The pair is reported as unpaired,
+            // never as complete.
+            return ExportedOriginal(still: stillURL, motion: nil)
+        }
+    }
+
+    /// Writes one resource out, under its own filename unless that name is
+    /// already taken by another half of the same item.
+    private static func write(
+        _ resource: PHAssetResource, into directory: URL, avoiding taken: [URL]
+    ) async throws -> URL {
+        var destination = directory.appendingPathComponent(resource.originalFilename)
+        if taken.contains(where: { $0.lastPathComponent == destination.lastPathComponent }) {
+            let name = destination.deletingPathExtension().lastPathComponent
+            let ext = destination.pathExtension
+            destination = directory.appendingPathComponent(
+                ext.isEmpty ? "\(name)-motion" : "\(name)-motion.\(ext)"
+            )
+        }
         if FileManager.default.fileExists(atPath: destination.path) {
             try FileManager.default.removeItem(at: destination)
         }

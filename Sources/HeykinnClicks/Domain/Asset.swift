@@ -100,6 +100,20 @@ struct Asset: Identifiable, Hashable {
     /// True for the movie half, which the Library folds into its still.
     var isLivePhotoMotion: Bool { livePhotoStillID != nil }
 
+    /// Scopes the placeholder written into `contentHash` for a row that exists
+    /// only because a provider listed it. Deliberately not hash-shaped, so it
+    /// can never collide with a real digest or group as a duplicate.
+    static let providerIndexHashPrefix = "apple-library:"
+
+    /// The archive can *see* this photograph but does not *hold* it: it came
+    /// from a provider's index, and nothing has ever read its bytes.
+    ///
+    /// This is the distinction that decides what still needs bringing in, and
+    /// it is drawn on the content hash rather than on the absence of a staged
+    /// copy — a Takeout asset living only on a drive has no staging path either,
+    /// and the archive holds that one.
+    var isIndexedOnly: Bool { contentHash.hasPrefix(Asset.providerIndexHashPrefix) }
+
     var fileExtension: String {
         (originalFilename as NSString).pathExtension.lowercased()
     }
