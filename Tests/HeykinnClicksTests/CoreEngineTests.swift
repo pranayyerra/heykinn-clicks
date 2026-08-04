@@ -34,15 +34,15 @@ final class CoreEngineTests: XCTestCase {
         )
     }
 
-    private func makeDrive(id: UUID = UUID(), name: String = "Drive") -> ManagedDrive {
-        ManagedDrive(
+    private func makeDrive(id: UUID = UUID(), name: String = "Drive") -> ReplicationTarget {
+        ReplicationTarget(
             id: id,
             name: name,
             volumeUUID: nil,
             markerToken: "token",
             registeredAt: Date(),
             lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
     }
 
@@ -108,8 +108,8 @@ final class CoreEngineTests: XCTestCase {
         let driveA = UUID()
         let driveB = UUID()
 
-        func replica(_ drive: UUID, _ state: ReplicaFileState, verified: Date? = Date()) -> DriveReplicaState {
-            DriveReplicaState(assetID: asset.id, driveID: drive, state: state, relativePath: nil, lastVerifiedAt: verified)
+        func replica(_ drive: UUID, _ state: ReplicaFileState, verified: Date? = Date()) -> TargetReplicaState {
+            TargetReplicaState(assetID: asset.id, targetID: drive, state: state, relativePath: nil, lastVerifiedAt: verified)
         }
 
         XCTAssertEqual(
@@ -147,7 +147,7 @@ final class CoreEngineTests: XCTestCase {
 
     func testMultiDomainCoexistenceFlaggedWithoutMigration() {
         let asset = makeAsset(presence: DomainPresence(local: true, appleCloud: true, googleCloud: false))
-        let violations = ViolationScanner.scan(assets: [asset], replicaStates: [], migrationJobs: [], drivesByID: [:])
+        let violations = ViolationScanner.scan(assets: [asset], replicaStates: [], migrationJobs: [], targetsByID: [:])
         XCTAssertTrue(violations.contains { $0.kind == .multiDomainCoexistence && $0.assetID == asset.id })
     }
 
@@ -157,13 +157,13 @@ final class CoreEngineTests: XCTestCase {
             id: UUID(), assetIDs: [asset.id], fromDomain: .local, toDomain: .appleCloud,
             state: .verifyingTarget, createdAt: Date(), updatedAt: Date(), note: nil
         )
-        let violations = ViolationScanner.scan(assets: [asset], replicaStates: [], migrationJobs: [job], drivesByID: [:])
+        let violations = ViolationScanner.scan(assets: [asset], replicaStates: [], migrationJobs: [job], targetsByID: [:])
         XCTAssertFalse(violations.contains { $0.kind == .multiDomainCoexistence })
     }
 
     func testResidencyPresenceMismatchFlagged() {
         let asset = makeAsset(residency: .googleCloud, presence: .localOnly)
-        let violations = ViolationScanner.scan(assets: [asset], replicaStates: [], migrationJobs: [], drivesByID: [:])
+        let violations = ViolationScanner.scan(assets: [asset], replicaStates: [], migrationJobs: [], targetsByID: [:])
         XCTAssertTrue(violations.contains { $0.kind == .residencyPresenceMismatch })
         // The Local + GoogleCloud shape is also multi-domain? No: presence is local-only,
         // residency google — only the mismatch fires.
@@ -173,9 +173,9 @@ final class CoreEngineTests: XCTestCase {
     func testOrphanReplicaFlagged() {
         let drive = makeDrive()
         let asset = makeAsset(residency: .appleCloud, presence: DomainPresence(local: false, appleCloud: true, googleCloud: false))
-        let replica = DriveReplicaState(assetID: asset.id, driveID: drive.id, state: .present, relativePath: nil, lastVerifiedAt: Date())
+        let replica = TargetReplicaState(assetID: asset.id, targetID: drive.id, state: .present, relativePath: nil, lastVerifiedAt: Date())
         let violations = ViolationScanner.scan(
-            assets: [asset], replicaStates: [replica], migrationJobs: [], drivesByID: [drive.id: drive]
+            assets: [asset], replicaStates: [replica], migrationJobs: [], targetsByID: [drive.id: drive]
         )
         XCTAssertTrue(violations.contains { $0.kind == .orphanReplica })
     }
@@ -185,7 +185,7 @@ final class CoreEngineTests: XCTestCase {
     func testMigrationLifecycleClearsSourceAndFlipsResidency() throws {
         let asset = makeAsset()
         let drive = makeDrive()
-        let replica = DriveReplicaState(assetID: asset.id, driveID: drive.id, state: .present, relativePath: nil, lastVerifiedAt: Date())
+        let replica = TargetReplicaState(assetID: asset.id, targetID: drive.id, state: .present, relativePath: nil, lastVerifiedAt: Date())
 
         var job = try MigrationService.createJob(assetIDs: [asset.id], from: .local, to: .appleCloud, note: nil)
         XCTAssertEqual(job.state, .pending)
@@ -204,7 +204,7 @@ final class CoreEngineTests: XCTestCase {
         XCTAssertEqual(job.state, .clearingSource)
 
         let cleanupEffect = try MigrationService.completeCleanup(
-            job, assets: [overlapping], managedDrives: [drive], replicaStates: [replica]
+            job, assets: [overlapping], targets: [drive], replicaStates: [replica]
         )
         XCTAssertEqual(cleanupEffect.job.state, .completed)
         let final = cleanupEffect.updatedAssets[0]
@@ -243,7 +243,7 @@ final class CoreEngineTests: XCTestCase {
 
         func task(_ action: ReplicationAction) -> ReplicationTask {
             ReplicationTask(
-                id: UUID(), assetID: assetID, driveID: drive.id, action: action,
+                id: UUID(), assetID: assetID, targetID: drive.id, action: action,
                 state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
             )
         }
@@ -304,7 +304,7 @@ final class CoreEngineTests: XCTestCase {
         try Data("stale old copy".utf8).write(to: destination)
 
         let task = ReplicationTask(
-            id: UUID(), assetID: assetID, driveID: drive.id, action: .copy,
+            id: UUID(), assetID: assetID, targetID: drive.id, action: .copy,
             state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
         )
         let result = ReplicationService.perform(
@@ -323,7 +323,7 @@ final class CoreEngineTests: XCTestCase {
         let drive = makeDrive()
         let asset = makeAsset(stagingPath: nil)
         let task = ReplicationTask(
-            id: UUID(), assetID: asset.id, driveID: drive.id, action: .copy,
+            id: UUID(), assetID: asset.id, targetID: drive.id, action: .copy,
             state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
         )
         let outcome = ReplicationService.processBacklog(

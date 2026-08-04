@@ -92,8 +92,8 @@ enum MigrationService {
     static func completeCleanup(
         _ job: MigrationJob,
         assets: [Asset],
-        managedDrives: [ManagedDrive],
-        replicaStates: [DriveReplicaState]
+        targets: [ReplicationTarget],
+        replicaStates: [TargetReplicaState]
     ) throws -> TransitionEffect {
         guard job.state == .clearingSource else {
             throw MigrationError.invalidTransition(from: job.state, attempted: "complete cleanup")
@@ -108,15 +108,15 @@ enum MigrationService {
             asset.updatedDate = Date()
 
             if job.fromDomain == .local {
-                for drive in managedDrives {
+                for drive in targets {
                     let hasReplica = replicaStates.contains {
-                        $0.assetID == asset.id && $0.driveID == drive.id && ($0.state == .present || $0.state == .stale || $0.state == .drift)
+                        $0.assetID == asset.id && $0.targetID == drive.id && ($0.state == .present || $0.state == .stale || $0.state == .drift)
                     }
                     if hasReplica {
                         removeTasks.append(ReplicationTask(
                             id: UUID(),
                             assetID: asset.id,
-                            driveID: drive.id,
+                            targetID: drive.id,
                             action: .remove,
                             state: .queued,
                             queuedAt: Date(),

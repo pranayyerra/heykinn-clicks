@@ -39,22 +39,25 @@ enum ResidencyAssignmentSource: String, Codable, Hashable {
 /// How the app learned that an asset is present in a cloud domain.
 ///
 /// Local presence is always self-evident: the app hashes the bytes itself.
-/// Cloud presence cannot be checked without a connected account, so the
-/// catalog records the difference rather than presenting a guess as a fact.
-/// A Takeout export proves content *was* in Google at export time — never
-/// that it is still there.
+/// Cloud presence cannot be checked without a connected account, so until one
+/// exists there is nothing to record.
+///
+/// There are deliberately only two levels. The app never asks the user to
+/// assert presence — nobody reviews 24,000 photos to confirm each is still in
+/// Google, and an answer collected that way is a guess wearing the user's
+/// authority. Nor is presence inferred from an export, which proves content was
+/// in Google *at export time* and nothing about now. A middle grade would only
+/// ever be read as the stronger one, and reading it that way is what deletes
+/// somebody's only copy.
 enum CloudPresenceEvidence: String, Codable, CaseIterable, Hashable {
-    /// No cloud presence recorded.
+    /// No claim: the default, and the only value until an account is connected.
     case none
-    /// The user told the app; never independently checked.
-    case userAsserted
     /// Confirmed against the provider with a connected account.
     case verified
 
     var displayName: String {
         switch self {
         case .none: return "—"
-        case .userAsserted: return "Stated by you, unverified"
         case .verified: return "Verified with provider"
         }
     }

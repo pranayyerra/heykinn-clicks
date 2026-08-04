@@ -5,9 +5,9 @@ import Foundation
 enum ViolationScanner {
     static func scan(
         assets: [Asset],
-        replicaStates: [DriveReplicaState],
+        replicaStates: [TargetReplicaState],
         migrationJobs: [MigrationJob],
-        drivesByID: [UUID: ManagedDrive]
+        targetsByID: [UUID: ReplicationTarget]
     ) -> [Violation] {
         var violations: [Violation] = []
 
@@ -23,7 +23,7 @@ enum ViolationScanner {
                 violations.append(Violation(
                     kind: .multiDomainCoexistence,
                     assetID: asset.id,
-                    driveID: nil,
+                    targetID: nil,
                     migrationJobID: nil,
                     detail: "\(asset.originalFilename) is present in \(domains) with no active migration."
                 ))
@@ -33,7 +33,7 @@ enum ViolationScanner {
                 violations.append(Violation(
                     kind: .residencyPresenceMismatch,
                     assetID: asset.id,
-                    driveID: nil,
+                    targetID: nil,
                     migrationJobID: nil,
                     detail: "\(asset.originalFilename) has residency \(asset.residency.displayName) but no known copy there."
                 ))
@@ -43,15 +43,15 @@ enum ViolationScanner {
         let assetsByID = Dictionary(uniqueKeysWithValues: assets.map { ($0.id, $0) })
         for replica in replicaStates {
             guard let asset = assetsByID[replica.assetID] else { continue }
-            let driveName = drivesByID[replica.driveID]?.name ?? "unknown drive"
+            let targetName = targetsByID[replica.targetID]?.name ?? "unknown drive"
 
             if replica.state == .drift {
                 violations.append(Violation(
                     kind: .replicaDrift,
                     assetID: replica.assetID,
-                    driveID: replica.driveID,
+                    targetID: replica.targetID,
                     migrationJobID: nil,
-                    detail: "\(asset.originalFilename) on \(driveName) is no longer byte-for-byte what was imported — the file on the drive may be damaged. Re-copy it from the other drive's good copy."
+                    detail: "\(asset.originalFilename) on \(targetName) is no longer byte-for-byte what was imported — the file on the drive may be damaged. Re-copy it from the other drive's good copy."
                 ))
             }
 
@@ -61,9 +61,9 @@ enum ViolationScanner {
                 violations.append(Violation(
                     kind: .orphanReplica,
                     assetID: replica.assetID,
-                    driveID: replica.driveID,
+                    targetID: replica.targetID,
                     migrationJobID: nil,
-                    detail: "\(driveName) still holds a replica of \(asset.originalFilename), which is \(asset.residency.displayName)-resident."
+                    detail: "\(targetName) still holds a replica of \(asset.originalFilename), which is \(asset.residency.displayName)-resident."
                 ))
             }
         }
@@ -74,7 +74,7 @@ enum ViolationScanner {
                 violations.append(Violation(
                     kind: .migrationCleanupPending,
                     assetID: lingering.count == 1 ? lingering[0] : nil,
-                    driveID: nil,
+                    targetID: nil,
                     migrationJobID: job.id,
                     detail: "Migration to \(job.toDomain.displayName): \(lingering.count) asset(s) still present in \(job.fromDomain.displayName)."
                 ))

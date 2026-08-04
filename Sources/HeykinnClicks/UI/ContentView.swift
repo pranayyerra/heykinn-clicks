@@ -5,7 +5,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     case library
     case duplicates
     case takeout
-    case drives
+    case targets
     case migrations
     case violations
     case policies
@@ -18,11 +18,11 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .overview: return "Overview"
         case .library: return "Library"
         case .duplicates: return "Duplicates"
-        case .drives: return "Drives & Health"
+        case .targets: return "Storage & Health"
         case .violations: return "Violations"
         case .policies: return "Policies"
         case .migrations: return "Migrations"
-        case .takeout: return "Google Takeout"
+        case .takeout: return "Sources"
         case .activity: return "Activity"
         }
     }
@@ -32,11 +32,11 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .overview: return "square.grid.2x2"
         case .library: return "photo.on.rectangle"
         case .duplicates: return "square.on.square"
-        case .drives: return "externaldrive.connected.to.line.below"
+        case .targets: return "externaldrive.connected.to.line.below"
         case .violations: return "exclamationmark.triangle"
         case .policies: return "list.bullet.rectangle"
         case .migrations: return "arrow.left.arrow.right"
-        case .takeout: return "shippingbox"
+        case .takeout: return "tray.and.arrow.down"
         case .activity: return "clock"
         }
     }
@@ -53,13 +53,14 @@ private struct SidebarGroup: Identifiable {
     static let all: [SidebarGroup] = [
         SidebarGroup(title: nil, sections: [.overview]),
         SidebarGroup(title: "Photos", sections: [.library, .duplicates, .takeout]),
-        SidebarGroup(title: "Storage", sections: [.drives, .migrations]),
+        SidebarGroup(title: "Storage", sections: [.targets, .migrations]),
         SidebarGroup(title: "Housekeeping", sections: [.violations, .policies, .activity])
     ]
 }
 
 struct ContentView: View {
     @EnvironmentObject private var store: AppStore
+    @Environment(\.openSettings) private var openSettings
     @State private var selection: SidebarSection? = .overview
 
     var body: some View {
@@ -84,16 +85,37 @@ struct ContentView: View {
                 }
             }
             .navigationSplitViewColumnWidth(min: 190, ideal: 210)
+            // Settings stays a ⌘, window — this is just a door to it where the
+            // pointer already lives, pinned under the sidebar rather than
+            // scrolling with it.
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                VStack(spacing: 0) {
+                    Divider()
+                    Button {
+                        openSettings()
+                    } label: {
+                        Label("Settings", systemImage: "gearshape")
+                            .font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.horizontal, 12)
+                            .padding(.vertical, 8)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Preferences (⌘,)")
+                }
+                .background(.bar)
+            }
         } detail: {
             switch selection ?? .overview {
             case .overview: OverviewView(selection: $selection)
             case .library: LibraryView()
             case .duplicates: DuplicatesView()
-            case .drives: DrivesView()
+            case .targets: DrivesView()
             case .violations: ViolationsView()
             case .policies: PoliciesView()
             case .migrations: MigrationsView()
-            case .takeout: TakeoutView()
+            case .takeout: SourcesView()
             case .activity: ActivityView()
             }
         }

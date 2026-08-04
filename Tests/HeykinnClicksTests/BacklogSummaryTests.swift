@@ -39,9 +39,9 @@ final class BacklogSummaryTests: XCTestCase {
     /// repeated bounded sweeps eventually cover everything.
     func testStalestReplicasSortFirst() {
         let now = Date()
-        func replica(_ verified: Date?) -> DriveReplicaState {
-            DriveReplicaState(
-                assetID: UUID(), driveID: UUID(), state: .present,
+        func replica(_ verified: Date?) -> TargetReplicaState {
+            TargetReplicaState(
+                assetID: UUID(), targetID: UUID(), state: .present,
                 relativePath: "volume:x", lastVerifiedAt: verified
             )
         }

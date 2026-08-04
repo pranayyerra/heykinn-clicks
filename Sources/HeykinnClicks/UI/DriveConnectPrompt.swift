@@ -7,7 +7,7 @@ struct DriveConnectPrompt: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
 
-    private var canRegister: Bool { store.drives.count < 2 }
+    private var canRegister: Bool { store.targets.count < 2 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -20,7 +20,7 @@ struct DriveConnectPrompt: View {
             VStack(alignment: .leading, spacing: 10) {
                 if canRegister {
                     Button {
-                        store.registerDrive(volume: volume, name: volume.name)
+                        store.registerVolumeTarget(volume: volume, name: volume.name)
                         store.connectPrompt = nil
                         dismiss()
                     } label: {
@@ -28,7 +28,7 @@ struct DriveConnectPrompt: View {
                             .frame(maxWidth: .infinity, alignment: .leading)
                     }
                     .buttonStyle(.borderedProminent)
-                    Text("Registers it as one of the two Local-domain replica drives: a marker file anchors its identity, and all Local assets queue for replication to it.")
+                    Text("Registers it as one of the two Local-domain replica targets: a marker file anchors its identity, and all Local assets queue for replication to it.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
@@ -38,7 +38,7 @@ struct DriveConnectPrompt: View {
                 }
 
                 Button {
-                    store.scanForTakeout(rootURL: volume.url, driveID: nil)
+                    store.scanForTakeout(rootURL: volume.url, targetID: nil)
                     store.connectPrompt = nil
                     dismiss()
                 } label: {

@@ -1,12 +1,19 @@
 import Foundation
 import AppKit
 
-/// Watches mounted volumes and matches them to managed drives by marker file
-/// (primary) or volume UUID (secondary). Mount path is never used as identity.
+/// Works out which replication targets are reachable right now.
+///
+/// The two kinds resolve differently, and neither resolves by path alone: a
+/// removable volume is searched for among what is mounted and identified by its
+/// marker file (volume UUID as fallback); a folder target is looked up at the
+/// path the user registered, and counts as reachable only if the marker sitting
+/// there still says it is the same target. A folder whose marker is missing or
+/// belongs to another target is *not* silently adopted — that is how an archive
+/// ends up written into a stranger's directory.
 @MainActor
-final class DriveMonitor: ObservableObject {
-    /// Managed drive ID → current mount URL, for drives connected right now.
-    @Published private(set) var connectedMounts: [UUID: URL] = [:]
+final class TargetMonitor: ObservableObject {
+    /// Target ID → the path it is reachable at right now.
+    @Published private(set) var reachablePaths: [UUID: URL] = [:]
     /// All candidate external volumes, for the registration UI.
     @Published private(set) var availableVolumes: [VolumeInfo] = []
 
@@ -44,56 +51,79 @@ final class DriveMonitor: ObservableObject {
         }
     }
 
-    /// Set by AppStore so mount events trigger a rescan with current drive registry.
+    /// Set by AppStore so mount events trigger a rescan with the current registry.
     var rescanRequested: (() -> Void)?
     /// Called just before a volume unmounts, so work touching it can stop.
     var volumeWillUnmount: ((URL?) -> Void)?
 
-    /// Seeds connected state directly; used by tests to simulate a drive that
-    /// was already connected before a rescan.
-    func setConnectedMountsForTesting(_ mounts: [UUID: URL]) {
-        connectedMounts = mounts
+    /// Seeds reachable state directly; used by tests to simulate a target that
+    /// was already reachable before a rescan.
+    func setReachablePathsForTesting(_ paths: [UUID: URL]) {
+        reachablePaths = paths
     }
 
-    func rescan(managedDrives: [ManagedDrive]) {
+    func rescan(targets: [ReplicationTarget]) {
         let volumes = Self.enumerateVolumes()
         availableVolumes = volumes
 
-        var mounts: [UUID: URL] = [:]
+        var reachable: [UUID: URL] = [:]
+
         for volume in volumes {
-            if let match = Self.match(volume: volume, against: managedDrives) {
-                mounts[match.id] = volume.url
+            if let match = Self.match(volume: volume, against: targets) {
+                reachable[match.id] = volume.url
             }
         }
+
+        for target in targets where target.kind == .hostDevice {
+            if let url = Self.resolveFolder(target) {
+                reachable[target.id] = url
+            }
+        }
+
         // A busy volume can transiently fail metadata reads (heavy I/O on
         // ExFAT/USB), which would otherwise read as an unplug and then a fresh
         // "connect" on the next tick — restarting connect-triggered work.
-        // Keep a previously connected drive whose mount point is still on disk.
-        for (driveID, previousMount) in connectedMounts where mounts[driveID] == nil {
+        // Keep a previously reachable target whose path is still on disk.
+        for (targetID, previousPath) in reachablePaths where reachable[targetID] == nil {
             var isDirectory: ObjCBool = false
-            if FileManager.default.fileExists(atPath: previousMount.path, isDirectory: &isDirectory),
+            if FileManager.default.fileExists(atPath: previousPath.path, isDirectory: &isDirectory),
                isDirectory.boolValue {
-                mounts[driveID] = previousMount
+                reachable[targetID] = previousPath
             }
         }
-        connectedMounts = mounts
+        reachablePaths = reachable
     }
 
-    static func match(volume: VolumeInfo, against drives: [ManagedDrive]) -> ManagedDrive? {
+    /// A host-device target is reachable when its registered folder is a
+    /// directory and the marker there still identifies this target.
+    nonisolated static func resolveFolder(_ target: ReplicationTarget) -> URL? {
+        guard target.kind == .hostDevice, let path = target.configuredPath else { return nil }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return nil }
+        let url = URL(fileURLWithPath: path, isDirectory: true)
+        guard let marker = readMarker(at: url),
+              marker.targetID == target.id,
+              marker.markerToken == target.markerToken else { return nil }
+        return url
+    }
+
+    nonisolated static func match(volume: VolumeInfo, against targets: [ReplicationTarget]) -> ReplicationTarget? {
+        let removable = targets.filter { $0.kind == .externalVolume }
         // Marker file is authoritative: it survives renames and re-mounts.
         if let marker = volume.marker,
-           let drive = drives.first(where: { $0.id == marker.driveID && $0.markerToken == marker.markerToken }) {
-            return drive
+           let target = removable.first(where: { $0.id == marker.targetID && $0.markerToken == marker.markerToken }) {
+            return target
         }
         // Fallback: volume UUID (e.g. marker file deleted by accident).
         if let volumeUUID = volume.volumeUUID,
-           let drive = drives.first(where: { $0.volumeUUID == volumeUUID }) {
-            return drive
+           let target = removable.first(where: { $0.volumeUUID == volumeUUID }) {
+            return target
         }
         return nil
     }
 
-    static func enumerateVolumes() -> [VolumeInfo] {
+    nonisolated static func enumerateVolumes() -> [VolumeInfo] {
         let keys: [URLResourceKey] = [
             .volumeNameKey, .volumeUUIDStringKey, .volumeIsRemovableKey,
             .volumeIsInternalKey, .volumeIsBrowsableKey,
@@ -104,8 +134,9 @@ final class DriveMonitor: ObservableObject {
         ) ?? []
 
         return urls.compactMap { url -> VolumeInfo? in
-            // Skip the boot volume; managed replicas live on external volumes.
-            // (Internal non-boot volumes are still listed so a test partition works.)
+            // The boot volume is not offered as a *volume* to register: a target
+            // on the host's own disk is registered as a folder, so the archive
+            // lands in a directory the user chose rather than at the root.
             if url.path == "/" { return nil }
             // A failed resourceValues read must not make the volume disappear:
             // fall back to path-derived values so identity matching still runs.
@@ -122,14 +153,14 @@ final class DriveMonitor: ObservableObject {
         }
     }
 
-    static func readMarker(at volumeURL: URL) -> DriveMarker? {
-        let markerURL = volumeURL.appendingPathComponent(ManagedDrive.markerFileName)
+    nonisolated static func readMarker(at rootURL: URL) -> TargetMarker? {
+        let markerURL = rootURL.appendingPathComponent(ReplicationTarget.markerFileName)
         guard let data = try? Data(contentsOf: markerURL) else { return nil }
-        return try? JSONDecoder().decode(DriveMarker.self, from: data)
+        return try? JSONDecoder().decode(TargetMarker.self, from: data)
     }
 
-    static func writeMarker(_ marker: DriveMarker, to volumeURL: URL) throws {
-        let markerURL = volumeURL.appendingPathComponent(ManagedDrive.markerFileName)
+    nonisolated static func writeMarker(_ marker: TargetMarker, to rootURL: URL) throws {
+        let markerURL = rootURL.appendingPathComponent(ReplicationTarget.markerFileName)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         try encoder.encode(marker).write(to: markerURL, options: .atomic)

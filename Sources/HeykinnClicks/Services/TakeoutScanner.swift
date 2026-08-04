@@ -17,13 +17,13 @@ enum TakeoutScanner {
 
     /// Directories never descended into: our own managed structures.
     private static let excludedDirectoryNames: Set<String> = [
-        ManagedDrive.defaultReplicaRoot, "Staging", "TakeoutWork", ".Trashes", ".Spotlight-V100",
+        ReplicationTarget.defaultReplicaRoot, "Staging", "TakeoutWork", ".Trashes", ".Spotlight-V100",
     ]
 
     /// `knownFolderSizes` lets a re-scan reuse sizes recorded at discovery
     /// instead of re-walking every file: a Takeout folder can hold tens of
     /// thousands of files, and re-measuring them on every scan dominated scan
-    /// time on external drives.
+    /// time on external targets.
     static func scan(rootURL: URL, knownFolderSizes: [String: Int64] = [:]) -> [DiscoveredArchive] {
         var discovered: [DiscoveredArchive] = []
         var discoveredPaths = Set<String>()

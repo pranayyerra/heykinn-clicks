@@ -39,24 +39,24 @@ final class DriveIdentityIntegrationTests: XCTestCase {
         var mountURL = try attach(imageURL)
 
         // Register: write the marker that anchors identity.
-        let driveID = UUID()
+        let targetID = UUID()
         let token = UUID().uuidString
-        let marker = DriveMarker(driveID: driveID, markerToken: token, appName: "heykinn-clicks")
-        try await MainActor.run { try DriveMonitor.writeMarker(marker, to: mountURL) }
+        let marker = TargetMarker(targetID: targetID, markerToken: token, appName: "heykinn-clicks")
+        try await MainActor.run { try TargetMonitor.writeMarker(marker, to: mountURL) }
 
-        let drive = ManagedDrive(
-            id: driveID,
+        let drive = ReplicationTarget(
+            id: targetID,
             name: "Test Drive",
             volumeUUID: nil,
             markerToken: token,
             registeredAt: Date(),
             lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
 
         // The volume must be enumerated and matched by marker, not path.
         var matched = try await matchedDrive(mountURL: mountURL, against: [drive])
-        XCTAssertEqual(matched?.id, driveID, "Freshly registered volume should match by marker")
+        XCTAssertEqual(matched?.id, targetID, "Freshly registered volume should match by marker")
 
         // A drive with the wrong token must NOT match — identity is the token,
         // not the volume's existence.
@@ -70,18 +70,18 @@ final class DriveIdentityIntegrationTests: XCTestCase {
         try detachVolume(at: mountURL)
         mountURL = try attach(imageURL)
         matched = try await matchedDrive(mountURL: mountURL, against: [drive])
-        XCTAssertEqual(matched?.id, driveID, "Identity must survive an unplug/replug cycle")
+        XCTAssertEqual(matched?.id, targetID, "Identity must survive an unplug/replug cycle")
     }
 
     // MARK: - Helpers
 
-    private func matchedDrive(mountURL: URL, against drives: [ManagedDrive]) async throws -> ManagedDrive? {
+    private func matchedDrive(mountURL: URL, against targets: [ReplicationTarget]) async throws -> ReplicationTarget? {
         try await MainActor.run {
-            let volumes = DriveMonitor.enumerateVolumes()
+            let volumes = TargetMonitor.enumerateVolumes()
             guard let volume = volumes.first(where: { $0.url.path == mountURL.path }) else {
                 throw XCTSkip("Mounted test volume \(mountURL.path) not visible in volume enumeration")
             }
-            return DriveMonitor.match(volume: volume, against: drives)
+            return TargetMonitor.match(volume: volume, against: targets)
         }
     }
 

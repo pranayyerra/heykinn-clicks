@@ -61,7 +61,7 @@ struct MigrationsView: View {
 
     private func cleanupMessage(_ job: MigrationJob) -> String {
         if job.fromDomain == .local {
-            return "This removes the source copies from the managed drives (queued as explicit remove tasks) and marks local presence cleared for \(job.assetIDs.count) asset(s). This is the destructive final step of the migration."
+            return "This removes the source copies from the managed targets (queued as explicit remove tasks) and marks local presence cleared for \(job.assetIDs.count) asset(s). This is the destructive final step of the migration."
         }
         return "Confirm that you have removed these \(job.assetIDs.count) asset(s) from \(job.fromDomain.displayName). The catalog will record the source as cleared."
     }
@@ -125,7 +125,7 @@ struct MigrationsView: View {
         switch job.toDomain {
         case .appleCloud: return "Upload the assets to Apple Photos/iCloud, then confirm."
         case .googleCloud: return "Upload the assets to Google Photos/Drive, then confirm."
-        case .local: return "Import the assets into staging (they will replicate to the drives), then confirm."
+        case .local: return "Import the assets into staging (they will replicate to the targets), then confirm."
         }
     }
 

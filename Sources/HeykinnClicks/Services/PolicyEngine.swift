@@ -1,11 +1,19 @@
 import Foundation
 
-/// Decides residency for newly imported assets from the rule table.
+/// Decides residency for assets from the rule table.
 enum PolicyEngine {
-    struct Decision {
+    struct Decision: Equatable {
+        /// The residency the asset gets *now*. Always satisfiable: an import
+        /// proves local presence and nothing else, so this is `.local` even
+        /// when the winning rule names a cloud.
         var residency: ResidencyDomain
         var source: ResidencyAssignmentSource
         var matchedRule: PolicyRule?
+        /// Set when the winning rule targets a cloud domain. A rule cannot put
+        /// content in a cloud — only a migration can — so a cloud target is an
+        /// *intent*: the caller opens a pending Local → cloud migration job
+        /// rather than writing a residency the presence model would refute.
+        var pendingCloudTarget: ResidencyDomain?
     }
 
     static func assignResidency(
@@ -18,11 +26,19 @@ enum PolicyEngine {
             .filter(\.isEnabled)
             .sorted { $0.priority > $1.priority }
             .first { $0.matches(kind: kind, origin: origin, fileSize: fileSize) }
-        if let matched {
-            return Decision(residency: matched.targetResidency, source: .policy, matchedRule: matched)
+        guard let matched else {
+            // No rule matched: local-first default.
+            return Decision(residency: .local, source: .importDefault, matchedRule: nil)
         }
-        // No rule matched: local-first default.
-        return Decision(residency: .local, source: .importDefault, matchedRule: nil)
+        if matched.targetResidency == .local {
+            return Decision(residency: .local, source: .policy, matchedRule: matched)
+        }
+        return Decision(
+            residency: .local,
+            source: .policy,
+            matchedRule: matched,
+            pendingCloudTarget: matched.targetResidency
+        )
     }
 
     /// Origin classification from filename conventions; grows into real

@@ -10,11 +10,15 @@ struct ImportResult {
     /// source file lives on a managed drive (e.g. inside a Takeout folder)
     /// count that file as the drive's replica instead of copying a duplicate
     /// onto the same disk. Keyed by asset ID.
-    var archiveBackedReplicas: [UUID: DriveReplicaState] = [:]
+    var archiveBackedReplicas: [UUID: TargetReplicaState] = [:]
+    /// Assets whose winning rule targets a cloud domain. A rule cannot put
+    /// content in a cloud — the caller opens a pending migration job per
+    /// domain instead of writing an unsatisfiable residency.
+    var cloudPlacements: [ResidencyDomain: [UUID]] = [:]
 }
 
 /// Import pipeline: scan → hash → dedupe check → classify → stage → catalog.
-/// Runs with zero drives connected; Local-resident files land in staging and
+/// Runs with zero targets connected; Local-resident files land in staging and
 /// replication tasks are queued per registered drive for later.
 enum ImportService {
     static func mediaFileURLs(under rootURLs: [URL]) -> [URL] {
@@ -55,8 +59,9 @@ enum ImportService {
         existingAssets: [Asset],
         policyRules: [PolicyRule],
         staging: StagingStore,
-        replicaContext: (driveID: UUID, mountPath: String)? = nil
+        replicaContext: (targetID: UUID, mountPath: String)? = nil
     ) async -> ImportResult {
+        var cloudPlacements: [ResidencyDomain: [UUID]] = [:]
         var batch = ImportBatch(
             id: UUID(),
             sourcePath: sourceDescription,
@@ -69,7 +74,7 @@ enum ImportService {
         var imported: [Asset] = []
         var duplicates: [String] = []
         var failures: [(String, String)] = []
-        var archiveBacked: [UUID: DriveReplicaState] = [:]
+        var archiveBacked: [UUID: TargetReplicaState] = [:]
         var knownHashes = Set(existingAssets.map(\.contentHash))
 
         let scanned = TakeoutImporter.scanFilesInParallel(fileURLs)
@@ -125,9 +130,9 @@ enum ImportService {
                 // onto the Mac for no benefit.
                 var stagingPath: String?
                 if let context = replicaContext, fileURL.path.hasPrefix(context.mountPath + "/") {
-                    archiveBacked[assetID] = DriveReplicaState(
+                    archiveBacked[assetID] = TargetReplicaState(
                         assetID: assetID,
-                        driveID: context.driveID,
+                        targetID: context.targetID,
                         state: .present,
                         relativePath: ReplicationService.volumeBackedPrefix
                             + String(fileURL.path.dropFirst(context.mountPath.count + 1)),
@@ -161,6 +166,9 @@ enum ImportService {
                     captureDateSource: metadata.captureDateSource
                 )
                 imported.append(asset)
+                if let target = decision.pendingCloudTarget {
+                    cloudPlacements[target, default: []].append(assetID)
+                }
                 knownHashes.insert(hash)
             } catch {
                 failures.append((filename, error.localizedDescription))
@@ -176,7 +184,8 @@ enum ImportService {
             importedAssets: imported,
             duplicateFilenames: duplicates,
             failures: failures.map { (filename: $0.0, error: $0.1) },
-            archiveBackedReplicas: archiveBacked
+            archiveBackedReplicas: archiveBacked,
+            cloudPlacements: cloudPlacements
         )
     }
 }

@@ -11,7 +11,7 @@ import Foundation
 enum TakeoutReconciler {
 
     struct Result {
-        var claimedReplicas: [DriveReplicaState]
+        var claimedReplicas: [TargetReplicaState]
         var scannedFileCount: Int
     }
 
@@ -20,11 +20,11 @@ enum TakeoutReconciler {
     static func reconcileFolder(
         folderURL: URL,
         mountURL: URL,
-        driveID: UUID,
+        targetID: UUID,
         assetIDsByHash: [String: UUID],
         assetsNeedingReplica: Set<UUID>
     ) -> Result {
-        var claimed: [DriveReplicaState] = []
+        var claimed: [TargetReplicaState] = []
         var scanned = 0
         for fileURL in ImportService.mediaFileURLs(under: [folderURL]) {
             scanned += 1
@@ -35,9 +35,9 @@ enum TakeoutReconciler {
                   fileURL.path.hasPrefix(mountURL.path + "/")
             else { continue }
             let volumeRelative = String(fileURL.path.dropFirst(mountURL.path.count + 1))
-            claimed.append(DriveReplicaState(
+            claimed.append(TargetReplicaState(
                 assetID: assetID,
-                driveID: driveID,
+                targetID: targetID,
                 state: .present,
                 relativePath: ReplicationService.volumeBackedPrefix + volumeRelative,
                 lastVerifiedAt: Date()
@@ -52,11 +52,11 @@ enum TakeoutReconciler {
     static func reconcileZip(
         zipURL: URL,
         mountURL: URL,
-        driveID: UUID,
+        targetID: UUID,
         assetIDsByHash: [String: UUID],
         assetsNeedingReplica: Set<UUID>
     ) -> Result {
-        var claimed: [DriveReplicaState] = []
+        var claimed: [TargetReplicaState] = []
         guard zipURL.path.hasPrefix(mountURL.path + "/") else {
             return Result(claimedReplicas: [], scannedFileCount: 0)
         }
@@ -68,9 +68,9 @@ enum TakeoutReconciler {
                   assetsNeedingReplica.contains(assetID),
                   !claimed.contains(where: { $0.assetID == assetID })
             else { continue }
-            claimed.append(DriveReplicaState(
+            claimed.append(TargetReplicaState(
                 assetID: assetID,
-                driveID: driveID,
+                targetID: targetID,
                 state: .present,
                 relativePath: ReplicationService.zipMemberPrefix + zipRelative + "!" + entry,
                 lastVerifiedAt: Date()
@@ -87,7 +87,7 @@ enum TakeoutReconciler {
     static func knownEntryMapping(
         donorZip: TakeoutArchive,
         folderTwins: [TakeoutArchive],
-        replicaStates: [DriveReplicaState]
+        replicaStates: [TargetReplicaState]
     ) -> [String: UUID] {
         var mapping: [String: UUID] = [:]
         let zipMarker = donorZip.displayName + "!"
@@ -119,10 +119,10 @@ enum TakeoutReconciler {
     static func fastReconcileZip(
         zipHash: String,
         zipRelativePath: String,
-        driveID: UUID,
+        targetID: UUID,
         candidateDonors: [TakeoutArchive],
         folderTwins: [TakeoutArchive],
-        replicaStates: [DriveReplicaState],
+        replicaStates: [TargetReplicaState],
         assetsNeedingReplica: Set<UUID>
     ) -> Result? {
         let donors = candidateDonors.filter { $0.kind == .zip && $0.contentHash == zipHash }
@@ -133,11 +133,11 @@ enum TakeoutReconciler {
                 replicaStates: replicaStates
             )
             guard !mapping.isEmpty else { continue }
-            var claimed: [DriveReplicaState] = []
+            var claimed: [TargetReplicaState] = []
             for (entry, assetID) in mapping where assetsNeedingReplica.contains(assetID) {
-                claimed.append(DriveReplicaState(
+                claimed.append(TargetReplicaState(
                     assetID: assetID,
-                    driveID: driveID,
+                    targetID: targetID,
                     state: .present,
                     relativePath: ReplicationService.zipMemberPrefix + zipRelativePath + "!" + entry,
                     lastVerifiedAt: Date()

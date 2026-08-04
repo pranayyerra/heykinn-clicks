@@ -52,11 +52,6 @@ struct DuplicatesView: View {
                             .buttonStyle(.plain)
                             Spacer()
                             ResidencyBadge(domain: asset.residency)
-                            // Review workflow placeholder: keep/discard decisions
-                            // arrive with the v1.5 duplicate-review pass.
-                            Button("Keep") {}
-                                .disabled(true)
-                                .help("Duplicate resolution workflow lands in a later phase.")
                         }
                     }
                 }

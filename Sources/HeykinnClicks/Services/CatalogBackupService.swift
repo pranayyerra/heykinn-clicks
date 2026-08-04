@@ -5,17 +5,17 @@ struct CatalogSnapshot: Identifiable, Hashable {
     var url: URL
     var createdAt: Date
     var sizeBytes: Int64
-    var driveID: UUID?
+    var targetID: UUID?
 
     var id: String { url.path }
     var displayName: String { url.lastPathComponent }
 }
 
 /// Writes verified point-in-time copies of the catalog onto the managed
-/// drives.
+/// targets.
 ///
 /// The catalog is the one thing in the system that cannot be re-derived
-/// cheaply: the media survives on the drives, but residency, replica state,
+/// cheaply: the media survives on the targets, but residency, replica state,
 /// duplicate grouping, and import history exist only in SQLite. Snapshots ride
 /// along with the archive they describe, so losing the Mac does not lose the
 /// metadata.
@@ -29,12 +29,41 @@ enum CatalogBackupService {
 
     enum BackupError: Error, LocalizedError {
         case verificationFailed(String)
+        case accessBlocked(volumeName: String, underlying: String)
 
         var errorDescription: String? {
             switch self {
             case .verificationFailed(let detail):
                 return "Catalog snapshot failed verification: \(detail)"
+            case .accessBlocked(let volumeName, let underlying):
+                return """
+                Could not write to \(volumeName): the volume is mounted and has room, but this app \
+                cannot write to it. macOS gates access to external volumes — grant it under System \
+                Settings → Privacy & Security → Files and Folders, then try again. (\(underlying))
+                """
             }
+        }
+    }
+
+    /// Distinguishes "macOS is blocking this app from the volume" from a
+    /// genuine storage failure.
+    ///
+    /// SQLite reports a blocked destination as `unable to open database`, which
+    /// reads like corruption and sends you looking at the wrong thing. The
+    /// difference is observable: try to create a file next to where the
+    /// snapshot would go. If that fails too on a volume that is mounted and
+    /// writable by other processes, the app is being denied, not the disk.
+    private static func classify(_ error: Error, writingInto directory: URL, mountURL: URL) -> Error {
+        let probe = directory.appendingPathComponent(".heykinn-write-probe")
+        do {
+            try Data().write(to: probe, options: .atomic)
+            try? FileManager.default.removeItem(at: probe)
+            return error
+        } catch {
+            return BackupError.accessBlocked(
+                volumeName: mountURL.lastPathComponent,
+                underlying: error.localizedDescription
+            )
         }
     }
 
@@ -56,7 +85,7 @@ enum CatalogBackupService {
     static func writeSnapshot(
         from catalog: CatalogStore,
         toMount mountURL: URL,
-        driveID: UUID?,
+        targetID: UUID?,
         expectedAssetCount: Int,
         now: Date = Date()
     ) throws -> CatalogSnapshot {
@@ -74,13 +103,17 @@ enum CatalogBackupService {
 
         // VACUUM INTO takes a consistent snapshot even while the catalog is in
         // use, and compacts it in the process.
-        try catalog.vacuumInto(path: temporaryURL.path)
+        do {
+            try catalog.vacuumInto(path: temporaryURL.path)
+        } catch {
+            throw classify(error, writingInto: directory, mountURL: mountURL)
+        }
         try verify(snapshotAt: temporaryURL, expectedAssetCount: expectedAssetCount)
         try FileManager.default.moveItem(at: temporaryURL, to: finalURL)
 
         let size = Int64((try? finalURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
         pruneOldSnapshots(in: directory)
-        return CatalogSnapshot(url: finalURL, createdAt: now, sizeBytes: size, driveID: driveID)
+        return CatalogSnapshot(url: finalURL, createdAt: now, sizeBytes: size, targetID: targetID)
     }
 
     /// Opens the snapshot as a database and confirms it is intact and complete.
@@ -100,7 +133,7 @@ enum CatalogBackupService {
         }
     }
 
-    static func listSnapshots(onMount mountURL: URL, driveID: UUID?) -> [CatalogSnapshot] {
+    static func listSnapshots(onMount mountURL: URL, targetID: UUID?) -> [CatalogSnapshot] {
         let directory = backupDirectory(onMount: mountURL)
         guard let entries = try? FileManager.default.contentsOfDirectory(
             at: directory,
@@ -114,7 +147,7 @@ enum CatalogBackupService {
                     url: url,
                     createdAt: values?.contentModificationDate ?? .distantPast,
                     sizeBytes: Int64(values?.fileSize ?? 0),
-                    driveID: driveID
+                    targetID: targetID
                 )
             }
             .sorted { $0.createdAt > $1.createdAt }

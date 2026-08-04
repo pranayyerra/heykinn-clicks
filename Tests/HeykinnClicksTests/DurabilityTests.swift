@@ -37,8 +37,8 @@ final class DurabilityTests: XCTestCase {
         XCTAssertThrowsError(
             try catalog.transaction {
                 try catalog.upsertAsset(asset)
-                try catalog.upsertReplicaState(DriveReplicaState(
-                    assetID: asset.id, driveID: UUID(), state: .present,
+                try catalog.upsertReplicaState(TargetReplicaState(
+                    assetID: asset.id, targetID: UUID(), state: .present,
                     relativePath: "volume:x.jpg", lastVerifiedAt: Date()
                 ))
                 throw Boom()
@@ -51,11 +51,11 @@ final class DurabilityTests: XCTestCase {
     func testTransactionCommitsAssetAndReplicaTogether() throws {
         let catalog = try makeCatalog()
         let asset = makeAsset()
-        let driveID = UUID()
+        let targetID = UUID()
         try catalog.transaction {
             try catalog.upsertAsset(asset)
-            try catalog.upsertReplicaState(DriveReplicaState(
-                assetID: asset.id, driveID: driveID, state: .present,
+            try catalog.upsertReplicaState(TargetReplicaState(
+                assetID: asset.id, targetID: targetID, state: .present,
                 relativePath: "volume:x.jpg", lastVerifiedAt: Date()
             ))
         }
@@ -72,7 +72,7 @@ final class DurabilityTests: XCTestCase {
             let catalog = try CatalogStore(databasePath: path)
             try catalog.upsertTakeoutArchive(TakeoutArchive(
                 id: archiveID, path: "/x/takeout-S-001", kind: .folder, sizeBytes: 10,
-                driveID: nil, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
+                targetID: nil, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
                 importedAssetCount: 40, skippedDuplicateCount: 5, note: nil,
                 exportSetID: "S", partNumber: 1,
                 importedThroughIndex: 450, importedFileTotal: 2000

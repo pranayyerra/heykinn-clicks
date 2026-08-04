@@ -28,5 +28,5 @@ struct AuditEvent: Identifiable, Hashable {
     var category: AuditCategory
     var message: String
     var assetID: UUID?
-    var driveID: UUID?
+    var targetID: UUID?
 }

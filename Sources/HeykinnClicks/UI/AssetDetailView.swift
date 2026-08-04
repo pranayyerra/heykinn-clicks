@@ -20,7 +20,7 @@ struct AssetDetailView: View {
                                 .bold()
                             HStack(spacing: 8) {
                                 ResidencyBadge(domain: asset.residency)
-                                ProtectionBadge(state: store.protectionStates[asset.id] ?? .notApplicable)
+                                ProtectionBadge(state: store.protectionStates[asset.id] ?? .notApplicable, policy: store.redundancyPolicy)
                             }
                             Text("Residency set by \(asset.residencySource.displayName.lowercased())")
                                 .font(.caption)
@@ -146,7 +146,7 @@ struct AssetDetailView: View {
                                 LabeledRow(label: "Size", value: Formatters.bytes.string(fromByteCount: motion.fileSize))
                                 HStack(spacing: 8) {
                                     ResidencyBadge(domain: motion.residency)
-                                    ProtectionBadge(state: store.protectionStates[motion.id] ?? .notApplicable)
+                                    ProtectionBadge(state: store.protectionStates[motion.id] ?? .notApplicable, policy: store.redundancyPolicy)
                                 }
                                 NavigationLink(value: motion.id) {
                                     Text("Show the motion file")
@@ -246,8 +246,8 @@ struct AssetDetailView: View {
         store.replicaStates
             .filter { $0.assetID == asset.id }
             .compactMap { replica in
-                guard let drive = store.drivesByID[replica.driveID] else { return nil }
-                let connected = store.connectedMounts[drive.id] != nil ? "connected" : "offline"
+                guard let drive = store.targetsByID[replica.targetID] else { return nil }
+                let connected = store.reachablePaths[drive.id] != nil ? "connected" : "offline"
                 let checked = replica.lastVerifiedAt.map { "checked \(Formatters.relative($0))" } ?? "never checked"
                 return (replica.id, "\(drive.name) (\(connected)): \(replica.state.displayName), \(checked)")
             }

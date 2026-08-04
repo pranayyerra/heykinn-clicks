@@ -14,25 +14,25 @@ final class DriveLifecycleTests: XCTestCase {
         return url
     }
 
-    private func makeDrive(id: UUID = UUID()) -> ManagedDrive {
-        ManagedDrive(
+    private func makeDrive(id: UUID = UUID()) -> ReplicationTarget {
+        ReplicationTarget(
             id: id, name: "Test", volumeUUID: "VOL", markerToken: "tok",
             registeredAt: Date(), lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
     }
 
     /// A vanished volume must be reported as gone so loops can stop, while a
     /// merely-busy one stays connected (covered in DriveResilienceTests).
     func testUnmountedVolumeIsReportedDisconnected() throws {
-        let monitor = DriveMonitor()
+        let monitor = TargetMonitor()
         let drive = makeDrive()
         let mount = try makeTempDirectory()
-        monitor.setConnectedMountsForTesting([drive.id: mount])
+        monitor.setReachablePathsForTesting([drive.id: mount])
 
         try FileManager.default.removeItem(at: mount)
-        monitor.rescan(managedDrives: [drive])
-        XCTAssertNil(monitor.connectedMounts[drive.id])
+        monitor.rescan(targets: [drive])
+        XCTAssertNil(monitor.reachablePaths[drive.id])
     }
 
     /// An interrupted part must leave a checkpoint that resumes rather than
@@ -44,7 +44,7 @@ final class DriveLifecycleTests: XCTestCase {
             let catalog = try CatalogStore(databasePath: path)
             try catalog.upsertTakeoutArchive(TakeoutArchive(
                 id: archiveID, path: "/Volumes/D/takeout-S-001", kind: .folder, sizeBytes: 1,
-                driveID: nil, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
+                targetID: nil, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
                 importedAssetCount: 700, skippedDuplicateCount: 12, note: nil,
                 exportSetID: "S", partNumber: 1,
                 importedThroughIndex: 800, importedFileTotal: 5_000
@@ -68,9 +68,9 @@ final class DriveLifecycleTests: XCTestCase {
         let catalog = try CatalogStore(
             databasePath: try makeTempDirectory().appendingPathComponent("c.sqlite").path
         )
-        let driveID = UUID()
+        let targetID = UUID()
         let task = ReplicationTask(
-            id: UUID(), assetID: UUID(), driveID: driveID, action: .copy,
+            id: UUID(), assetID: UUID(), targetID: targetID, action: .copy,
             state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
         )
         try catalog.upsertReplicationTask(task)
@@ -109,7 +109,7 @@ final class DriveLifecycleTests: XCTestCase {
 
         let result = ReplicationService.perform(
             ReplicationTask(
-                id: UUID(), assetID: assetID, driveID: drive.id, action: .copy,
+                id: UUID(), assetID: assetID, targetID: drive.id, action: .copy,
                 state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
             ),
             drive: drive, mountURL: mount, asset: asset,

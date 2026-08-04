@@ -163,6 +163,15 @@ final class CatalogStore {
         try? database.exec("ALTER TABLE assets ADD COLUMN edited_from_asset_id TEXT;")
         try? database.exec("ALTER TABLE drives ADD COLUMN last_mount_path TEXT;")
         try? database.exec("ALTER TABLE takeout_archives ADD COLUMN quick_checksum TEXT;")
+        // Targets: a registered place that holds a copy, which may be an
+        // external volume or a folder on any disk the user pointed at.
+        try? database.exec("ALTER TABLE drives ADD COLUMN kind TEXT;")
+        try? database.exec("ALTER TABLE drives ADD COLUMN configured_path TEXT;")
+        // Assets indexed from a provider library carry that library's own id,
+        // so re-indexing updates rather than duplicates. A counterpart links
+        // the same photograph across domains when the bytes differ.
+        try? database.exec("ALTER TABLE assets ADD COLUMN provider_local_id TEXT;")
+        try? database.exec("ALTER TABLE assets ADD COLUMN counterpart_asset_id TEXT;")
     }
 
     /// Writes a consistent, compacted copy of the whole catalog to `path`.
@@ -195,8 +204,8 @@ final class CatalogStore {
         INSERT INTO assets (id, kind, original_filename, import_origin, capture_date,
             import_date, updated_date, file_size, pixel_width, pixel_height, content_hash,
             residency, residency_source, presence_local, presence_apple, presence_google,
-            staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at, capture_date_source, edited_from_asset_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at, capture_date_source, edited_from_asset_id, provider_local_id, counterpart_asset_id)
+        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             kind = excluded.kind,
             original_filename = excluded.original_filename,
@@ -221,7 +230,9 @@ final class CatalogStore {
             live_photo_still_id = excluded.live_photo_still_id,
             live_photo_checked_at = excluded.live_photo_checked_at,
             capture_date_source = excluded.capture_date_source,
-            edited_from_asset_id = excluded.edited_from_asset_id;
+            edited_from_asset_id = excluded.edited_from_asset_id,
+            provider_local_id = excluded.provider_local_id,
+            counterpart_asset_id = excluded.counterpart_asset_id;
         """, [
             .text(asset.id.uuidString),
             .text(asset.kind.rawValue),
@@ -248,6 +259,8 @@ final class CatalogStore {
             .date(asset.livePhotoCheckedAt),
             .text(asset.captureDateSource.rawValue),
             .uuid(asset.editedFromAssetID),
+            .optionalText(asset.providerLocalID),
+            .uuid(asset.counterpartAssetID),
         ])
     }
 
@@ -256,7 +269,7 @@ final class CatalogStore {
         SELECT id, kind, original_filename, import_origin, capture_date, import_date,
                updated_date, file_size, pixel_width, pixel_height, content_hash,
                residency, residency_source, presence_local, presence_apple, presence_google,
-               staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at, capture_date_source, edited_from_asset_id
+               staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at, capture_date_source, edited_from_asset_id, provider_local_id, counterpart_asset_id
         FROM assets ORDER BY COALESCE(capture_date, import_date) DESC;
         """) { row in
             Asset(
@@ -283,6 +296,8 @@ final class CatalogStore {
                 exifSummary: Self.decodeJSON([String: String].self, from: row.optionalText(18)) ?? [:],
                 cloudPresenceEvidence: row.optionalText(19).flatMap(CloudPresenceEvidence.init(rawValue:)) ?? .none,
                 cloudPresenceCheckedAt: row.optionalDate(20),
+                providerLocalID: row.optionalText(25),
+                counterpartAssetID: row.optionalUUID(26),
                 livePhotoStillID: row.optionalUUID(21),
                 captureDateSource: row.optionalText(23).flatMap(CaptureDateSource.init(rawValue:)) ?? .unknown,
                 editedFromAssetID: row.optionalUUID(24),

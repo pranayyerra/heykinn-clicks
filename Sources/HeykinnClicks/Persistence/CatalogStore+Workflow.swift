@@ -147,7 +147,7 @@ extension CatalogStore {
             .text(event.category.rawValue),
             .text(event.message),
             .uuid(event.assetID),
-            .uuid(event.driveID),
+            .uuid(event.targetID),
         ])
     }
 
@@ -162,7 +162,7 @@ extension CatalogStore {
                 category: AuditCategory(rawValue: row.text(2)) ?? .system,
                 message: row.text(3),
                 assetID: row.optionalUUID(4),
-                driveID: row.optionalUUID(5)
+                targetID: row.optionalUUID(5)
             )
         }
     }

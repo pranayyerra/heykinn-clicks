@@ -6,14 +6,14 @@ enum PartRedundancy: String, Codable, Hashable {
     case absent
     /// Exactly one managed drive holds it.
     case singleCopy
-    /// Enough drives hold it, matched by name and byte size only. Enough to
+    /// Enough targets hold it, matched by name and byte size only. Enough to
     /// plan against; not yet proof the bytes agree.
     case redundantUnverified
-    /// Enough drives hold it and their quick checksums agree — the same
+    /// Enough targets hold it and their quick checksums agree — the same
     /// length and the same bytes at every sampled window. Near-certain, but
     /// not a guarantee about the parts not sampled.
     case redundantSpotChecked
-    /// Enough drives hold it and their whole-file hashes agree.
+    /// Enough targets hold it and their whole-file hashes agree.
     case redundantVerified
 
     var displayName: String {
@@ -36,7 +36,7 @@ enum PartRedundancy: String, Codable, Hashable {
 ///
 /// This is the unit the archive is actually made of. The export arrives as a
 /// handful of large zips; replicating it means having those zips on as many
-/// drives as the redundancy policy asks for, not copying every photo inside
+/// targets as the redundancy policy asks for, not copying every photo inside
 /// them individually. Modelling it per-asset turns a handful of file copies
 /// into tens of thousands of operations, and hides the fact that a drive
 /// already holding the export is already compliant.
@@ -49,7 +49,7 @@ struct ExportPart: Identifiable, Hashable {
     var id: String { "\(setID)-\(partNumber)" }
     var displayName: String { "takeout-\(setID)-\(String(format: "%03d", partNumber))" }
 
-    var driveIDs: Set<UUID> { Set(copies.keys) }
+    var targetIDs: Set<UUID> { Set(copies.keys) }
     var sizeBytes: Int64 { copies.values.first?.sizeBytes ?? 0 }
 
     /// True when every copy that has been fingerprinted agrees, and at least
@@ -77,49 +77,49 @@ struct ExportPart: Identifiable, Hashable {
     }
 
     func redundancy(
-        acrossManagedDrives managedDriveIDs: Set<UUID>,
+        acrossTargets managedTargetIDs: Set<UUID>,
         policy: LocalRedundancyPolicy = .default
     ) -> PartRedundancy {
-        let holders = driveIDs.intersection(managedDriveIDs)
+        let holders = targetIDs.intersection(managedTargetIDs)
         if holders.isEmpty { return .absent }
         guard policy.isSatisfied(byCopies: holders.count) else { return .singleCopy }
         if hashesAgree { return .redundantVerified }
         if quickChecksumsAgree { return .redundantSpotChecked }
         if sizesAgree { return .redundantUnverified }
-        // Enough drives hold a part with this number, but their sizes disagree,
+        // Enough targets hold a part with this number, but their sizes disagree,
         // so they are not the same bytes. Report the weaker truth rather than
         // claiming a redundancy that may not hold.
         return .singleCopy
     }
 
     /// Drives that should receive this part for the policy to be satisfied.
-    func drivesNeedingACopy(managedDriveIDs: Set<UUID>) -> Set<UUID> {
-        managedDriveIDs.subtracting(driveIDs)
+    func targetsNeedingACopy(managedTargetIDs: Set<UUID>) -> Set<UUID> {
+        managedTargetIDs.subtracting(targetIDs)
     }
 }
 
 /// What must happen for an export to satisfy the local redundancy policy.
 struct ArchiveReplicationPlan {
     var parts: [ExportPart]
-    var managedDriveIDs: Set<UUID>
+    var managedTargetIDs: Set<UUID>
     var policy: LocalRedundancyPolicy = .default
 
     var partsMeetingPolicy: [ExportPart] {
         parts.filter {
-            $0.redundancy(acrossManagedDrives: managedDriveIDs, policy: policy).meetsPolicy
+            $0.redundancy(acrossTargets: managedTargetIDs, policy: policy).meetsPolicy
         }
     }
 
     var partsNeedingWork: [ExportPart] {
         parts.filter {
-            !$0.redundancy(acrossManagedDrives: managedDriveIDs, policy: policy).meetsPolicy
+            !$0.redundancy(acrossTargets: managedTargetIDs, policy: policy).meetsPolicy
         }
     }
 
     /// Bytes still to move for the whole export to meet the policy.
     var bytesOutstanding: Int64 {
         partsNeedingWork.reduce(0) { total, part in
-            total + part.sizeBytes * Int64(max(part.drivesNeedingACopy(managedDriveIDs: managedDriveIDs).count, 0))
+            total + part.sizeBytes * Int64(max(part.targetsNeedingACopy(managedTargetIDs: managedTargetIDs).count, 0))
         }
     }
 
@@ -133,34 +133,34 @@ enum ArchiveReplicationPlanner {
     /// a copy of their part too — the bytes are present either way.
     static func plan(
         archives: [TakeoutArchive],
-        managedDriveIDs: Set<UUID>,
+        managedTargetIDs: Set<UUID>,
         policy: LocalRedundancyPolicy = .default
     ) -> ArchiveReplicationPlan {
         var byPart: [String: ExportPart] = [:]
         for archive in archives {
             guard let setID = archive.exportSetID,
                   let partNumber = archive.partNumber,
-                  let driveID = archive.driveID
+                  let targetID = archive.targetID
             else { continue }
             let key = "\(setID)-\(partNumber)"
             var part = byPart[key] ?? ExportPart(setID: setID, partNumber: partNumber, copies: [:])
             // Prefer the zip as the canonical copy: it is the pristine original
-            // and what gets transferred between drives.
-            if let existing = part.copies[driveID], existing.kind == .zip, archive.kind != .zip {
+            // and what gets transferred between targets.
+            if let existing = part.copies[targetID], existing.kind == .zip, archive.kind != .zip {
                 continue
             }
-            part.copies[driveID] = archive
+            part.copies[targetID] = archive
             byPart[key] = part
         }
         return ArchiveReplicationPlan(
             parts: byPart.values.sorted { ($0.setID, $0.partNumber) < ($1.setID, $1.partNumber) },
-            managedDriveIDs: managedDriveIDs,
+            managedTargetIDs: managedTargetIDs,
             policy: policy
         )
     }
 }
 
-/// An export part parked on the Mac while it travels between drives.
+/// An export part parked on the Mac while it travels between targets.
 ///
 /// Named after the part it holds, so the directory listing *is* the state:
 /// a catalog restored from backup, a crash mid-copy, or someone emptying the
@@ -178,10 +178,10 @@ struct HeldExportPart: Identifiable, Hashable {
     var displayName: String { "takeout-\(setID)-\(String(format: "%03d", partNumber))" }
 }
 
-/// One move that gets an export part closer to living on enough drives.
+/// One move that gets an export part closer to living on enough targets.
 struct ExportPartTransfer: Identifiable, Hashable {
     enum Route: Hashable {
-        /// Both drives are connected — copy straight across, no detour.
+        /// Both targets are connected — copy straight across, no detour.
         case driveToDrive(from: UUID, to: UUID)
         /// Only the drive that has the part is connected. Park it on the Mac
         /// so the transfer can finish later, when the other drive appears.
@@ -208,11 +208,11 @@ struct ExportPartTransfer: Identifiable, Hashable {
     var displayName: String { "takeout-\(setID)-\(String(format: "%03d", partNumber))" }
 }
 
-/// What can be moved right now, given which drives are actually plugged in.
+/// What can be moved right now, given which targets are actually plugged in.
 struct ExportPartTransferPlan {
     var transfers: [ExportPartTransfer] = []
     /// Parts in the holding area that no longer need to be there — already on
-    /// enough drives. The corridor should stay empty.
+    /// enough targets. The corridor should stay empty.
     var discardable: [HeldExportPart] = []
     /// Parts short of copies that nothing can be done about at the moment,
     /// because no drive holding one is connected.
@@ -232,7 +232,7 @@ enum ExportPartTransferPlanner {
     static let holdingAreaReserveBytes: Int64 = 20 * 1024 * 1024 * 1024
 
     /// Works out the moves that would satisfy the redundancy policy for the
-    /// export, using only the drives connected right now.
+    /// export, using only the targets connected right now.
     ///
     /// The order matters: deliveries first, because they are the steps that
     /// complete a transfer already half-done and are the only way the holding
@@ -246,14 +246,14 @@ enum ExportPartTransferPlanner {
         availableHoldingBytes: Int64
     ) -> ExportPartTransferPlan {
         var result = ExportPartTransferPlan()
-        let managed = replication.managedDriveIDs
+        let managed = replication.managedTargetIDs
         let partsByID = Dictionary(uniqueKeysWithValues: replication.parts.map { ($0.id, $0) })
         var held = Dictionary(uniqueKeysWithValues: heldParts.map { ($0.id, $0) })
 
         // 1. Deliver what is already waiting.
         for (id, part) in held.sorted(by: { $0.key < $1.key }) {
             let catalogued = partsByID[id]
-            let needing = catalogued?.drivesNeedingACopy(managedDriveIDs: managed) ?? managed
+            let needing = catalogued?.targetsNeedingACopy(managedTargetIDs: managed) ?? managed
             guard let recipient = needing.sorted(by: { $0.uuidString < $1.uuidString }).first else {
                 // Every managed drive already has it; the corridor is done
                 // with this one.
@@ -276,7 +276,7 @@ enum ExportPartTransferPlanner {
             // Already in the corridor: it is handled above, or waiting for its
             // recipient. Either way, do not copy it a second time.
             if held[part.id] != nil { continue }
-            let recipients = part.drivesNeedingACopy(managedDriveIDs: managed)
+            let recipients = part.targetsNeedingACopy(managedTargetIDs: managed)
             guard !recipients.isEmpty else { continue }
             // Only a zip can be handed to another drive as-is. An extracted
             // folder is the same content, but copying a directory of tens of

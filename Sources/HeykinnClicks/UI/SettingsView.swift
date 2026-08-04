@@ -28,6 +28,12 @@ private struct AutomationSettings: View {
                     .foregroundStyle(.secondary)
             }
             Section {
+                Toggle("Bring Photos-library originals into the archive", isOn: $store.importFromApplePhotos)
+                Text("Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your targets like anything else; ones already held byte-for-byte are merged rather than stored twice. Connect and watch progress under Sources.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
                 Toggle("Handle Google exports found on a drive", isOn: $store.autoManageTakeout)
                 Text("Finds exports on a connected drive, unpacks and imports what is new, and recognises copies the drive already holds instead of copying them again.")
                     .font(.caption)
@@ -45,10 +51,16 @@ private struct SafetySettings: View {
         Form {
             Section("How many copies") {
                 Label(
-                    "Every Local photo is kept on \(store.redundancyPolicy.description). A photo counts as safe once that many drives hold it.",
+                    "Every Local photo is kept on \(store.redundancyPolicy.description). Change that under Policies, where it sits with the rules it belongs to.",
                     systemImage: "square.stack.3d.up"
                 )
                 .font(.callout)
+            }
+            Section("Background checking") {
+                Toggle("Read a few files in the background", isOn: $store.backgroundRotPatrol)
+                Text("Every half hour, on an idle target, the app re-reads the forty files it checked longest ago. Reading is the only thing that finds bit rot — comparing what the catalog recorded can never see a file decay on disk. It yields to imports and syncs, and skips a target that has work waiting.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             Section("Checking for damage") {
                 Text("Checking re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It reads every byte, so it runs in batches rather than all at once, from Drives & Health.")
@@ -56,7 +68,7 @@ private struct SafetySettings: View {
                     .foregroundStyle(.secondary)
             }
             Section("Catalog backup") {
-                Text("The media survives on the drives, but residency, replica state, duplicate grouping, and import history exist only in the catalog. Verified snapshots are written to each connected drive so losing the Mac does not lose the metadata.")
+                Text("The media survives on the targets, but residency, replica state, duplicate grouping, and import history exist only in the catalog. Verified snapshots are written to each connected drive so losing the Mac does not lose the metadata.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 HStack {
@@ -72,7 +84,7 @@ private struct SafetySettings: View {
                     }
                     Spacer()
                     Button("Back up now") { store.backupCatalog(force: true) }
-                        .disabled(store.connectedMounts.isEmpty)
+                        .disabled(store.reachablePaths.isEmpty)
                 }
                 .font(.callout)
             }

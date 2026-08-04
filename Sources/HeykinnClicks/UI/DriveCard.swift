@@ -4,20 +4,23 @@ import SwiftUI
 /// already holds, how full it is, and what it is doing right now. Shared by the
 /// Overview and the Drives screen so a drive looks the same wherever it appears.
 struct DriveCard: View {
-    let drive: ManagedDrive
-    /// The Overview shows drives to be understood; the Drives screen shows them
+    let drive: ReplicationTarget
+    /// The Overview shows targets to be understood; the Drives screen shows them
     /// to be operated. Same card, actions only where they belong.
     var showsActions: Bool = true
+    /// Supplied only where forgetting makes sense — the screen that manages
+    /// targets, not the Overview.
+    var onForget: (() -> Void)?
 
     @EnvironmentObject private var store: AppStore
     @State private var capacity: (total: Int64, available: Int64)?
 
-    private var mountURL: URL? { store.connectedMounts[drive.id] }
+    private var mountURL: URL? { store.reachablePaths[drive.id] }
     private var isConnected: Bool { mountURL != nil }
     private var breakdown: DriveContentBreakdown { store.driveBreakdowns[drive.id] ?? DriveContentBreakdown() }
     private var summary: BacklogSummary { store.backlogSummary(for: drive.id) }
     private var progress: SyncProgress? {
-        store.syncProgress?.driveID == drive.id ? store.syncProgress : nil
+        store.syncProgress?.targetID == drive.id ? store.syncProgress : nil
     }
 
     private var contentSegments: [SegmentedBar.Segment] {
@@ -35,6 +38,7 @@ struct DriveCard: View {
             if let capacity, isConnected {
                 capacityBar(capacity)
             }
+            agreementLine
             if let progress {
                 syncProgress(progress)
             }
@@ -76,13 +80,32 @@ struct DriveCard: View {
                         tint: .secondary
                     )
                 }
-                Text("Last sync \(Formatters.relative(store.lastCompletedSync(for: drive.id)))")
+                // Sync and snapshot are both "when was this target last
+                // brought up to date" — one line, not two panels.
+                Text(metaLine)
                     .font(.caption2)
                     .foregroundStyle(.tertiary)
                     .help(mountURL.map { "Mounted at \($0.path)" } ?? "")
             }
             Spacer()
         }
+    }
+
+    /// Last sync and last catalog snapshot, together. Snapshots live on the
+    /// target they describe, so this is where they belong — a separate panel
+    /// listing them per target said the same thing a second time, further from
+    /// the target it was about.
+    private var metaLine: String {
+        var parts = ["Last sync \(Formatters.relative(store.lastCompletedSync(for: drive.id)))"]
+        // Snapshots are listed off the target itself, so an unreachable target
+        // reports none — which is not the same as having none. Say nothing
+        // rather than claim a backup is missing when we simply cannot look.
+        if let newest = (store.catalogSnapshots[drive.id] ?? []).first {
+            parts.append("catalog backup \(Formatters.relative(newest.createdAt))")
+        } else if isConnected {
+            parts.append("no catalog backup yet")
+        }
+        return parts.joined(separator: " · ")
     }
 
     private func statusLine(_ text: String, symbol: String, tint: Color) -> some View {
@@ -98,14 +121,12 @@ struct DriveCard: View {
         VStack(alignment: .leading, spacing: 5) {
             SegmentedBar(segments: contentSegments, height: 10)
             HStack(spacing: 10) {
-                Text("\(breakdown.present.formatted()) of \(breakdown.expected.formatted()) photos")
+                // A full bar, "24,626 of 24,626" and a "Complete" badge were
+                // three ways of saying one thing. When the target holds
+                // everything, say so once.
+                Text(coverageSummary)
                     .font(.callout)
                     .monospacedDigit()
-                if breakdown.presentBytes > 0 {
-                    Text(Formatters.bytes.string(fromByteCount: breakdown.presentBytes))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
                 Spacer()
                 if breakdown.drift > 0 {
                     Label("\(breakdown.drift) damaged", systemImage: "exclamationmark.triangle.fill")
@@ -115,10 +136,50 @@ struct DriveCard: View {
                     Label("\(breakdown.pending.formatted()) waiting", systemImage: "tray.full")
                         .font(.caption)
                         .foregroundStyle(.orange)
-                } else if breakdown.expected > 0 {
-                    Label("Complete", systemImage: "checkmark.seal.fill")
-                        .font(.caption)
-                        .foregroundStyle(.green)
+                }
+            }
+        }
+    }
+
+    /// Photos lead; files follow quietly. A Live Photo is one photo but two
+    /// files, so labelling the file count "photos" overstates the library and
+    /// contradicts every other total on screen.
+    private var coverageSummary: String {
+        guard breakdown.expectedPhotos > 0 else { return "Nothing to hold yet" }
+        let size = breakdown.presentBytes > 0
+            ? " · \(Formatters.bytes.string(fromByteCount: breakdown.presentBytes))"
+            : ""
+        let files = " · \(breakdown.present.formatted()) files"
+        if breakdown.presentPhotos == breakdown.expectedPhotos {
+            return "All \(breakdown.presentPhotos.formatted()) photos\(size)\(files)"
+        }
+        return "\(breakdown.presentPhotos.formatted()) of \(breakdown.expectedPhotos.formatted()) photos\(size)\(files)"
+    }
+
+    /// Whether this target records the same content as the others. Free to
+    /// compute — it is a root comparison, not a read — and deliberately worded
+    /// as agreement rather than proof: matching roots mean the two catalogs
+    /// agree, not that the bytes on either are undamaged.
+    @ViewBuilder
+    private var agreementLine: some View {
+        let comparisons = store.agreement(for: drive.id)
+        if !comparisons.isEmpty {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(comparisons, id: \.other.id) { comparison in
+                    if comparison.agrees {
+                        Label("Holds the same as \(comparison.other.name)", systemImage: "equal.circle")
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .help("Their recorded contents match. Confirming the bytes themselves still needs a read.")
+                    } else {
+                        Label(
+                            "Differs from \(comparison.other.name) on \(comparison.divergentCount.formatted()) file(s)",
+                            systemImage: "arrow.triangle.branch"
+                        )
+                        .font(.caption2)
+                        .foregroundStyle(.orange)
+                        .help("Found by comparing trees, without reading either target. Only the differing files need re-reading.")
+                    }
                 }
             }
         }
@@ -162,10 +223,18 @@ struct DriveCard: View {
             Menu {
                 Button("Check a batch now") { store.queueVerificationSweep(drive.id) }
                     .disabled(store.isSyncing)
+                if store.agreement(for: drive.id).contains(where: { !$0.agrees }) {
+                    Button("Re-read only what differs") { store.queueDivergenceCheck(drive.id) }
+                        .disabled(store.isSyncing)
+                }
                 if summary.verifyCount > 0 {
                     Button("Clear \(summary.verifyCount) queued check(s)", role: .destructive) {
                         store.clearQueuedTasks(for: drive.id, action: .verify)
                     }
+                }
+                if let onForget {
+                    Divider()
+                    Button("Forget this target…", role: .destructive, action: onForget)
                 }
             } label: {
                 Label("Check for damage", systemImage: "checkmark.shield")

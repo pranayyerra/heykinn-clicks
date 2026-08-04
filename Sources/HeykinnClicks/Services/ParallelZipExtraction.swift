@@ -3,7 +3,7 @@ import Foundation
 /// Extracts a zip with multiple concurrent unzip workers, each owning a
 /// disjoint slice of the entry tree. Worker count adapts to the Mac's core
 /// count AND the destination disk: SSDs benefit from many parallel workers,
-/// while spinning/USB drives are kept at low concurrency because parallel
+/// while spinning/USB targets are kept at low concurrency because parallel
 /// writes there cause seek-thrashing that is slower than serial extraction.
 enum ParallelZipExtraction {
 

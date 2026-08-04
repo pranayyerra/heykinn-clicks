@@ -117,7 +117,7 @@ final class TakeoutTests: XCTestCase {
             TakeoutArchive(
                 id: UUID(),
                 path: "/x/takeout-S-\(String(format: "%03d", part))\(kind == .zip ? ".zip" : "")",
-                kind: kind, sizeBytes: 0, driveID: nil, discoveredAt: Date(),
+                kind: kind, sizeBytes: 0, targetID: nil, discoveredAt: Date(),
                 importedAt: imported ? Date() : nil, importBatchID: nil,
                 importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
                 exportSetID: "S", partNumber: part
@@ -208,7 +208,7 @@ final class TakeoutTests: XCTestCase {
         func part(_ number: Int) -> TakeoutArchive {
             TakeoutArchive(
                 id: UUID(), path: "/x/takeout-\(number).zip", kind: .zip, sizeBytes: 0,
-                driveID: nil, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
+                targetID: nil, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
                 importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
                 exportSetID: "S", partNumber: number
             )
@@ -236,13 +236,11 @@ final class TakeoutTests: XCTestCase {
 
         let first = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: partA, cleanupURL: nil),
-            archiveName: "part 1", existingAssets: [], staging: staging,
-            assumeStillInGoogle: true, batchID: batchID
+            archiveName: "part 1", existingAssets: [], staging: staging, batchID: batchID
         )
         let second = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: partB, cleanupURL: nil),
-            archiveName: "part 2", existingAssets: first.importedAssets, staging: staging,
-            assumeStillInGoogle: true, batchID: batchID
+            archiveName: "part 2", existingAssets: first.importedAssets, staging: staging, batchID: batchID
         )
 
         XCTAssertEqual(first.importedAssets.count, 2)
@@ -259,20 +257,19 @@ final class TakeoutTests: XCTestCase {
         let mount = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: mount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let driveID = UUID()
+        let targetID = UUID()
 
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: true,
-            replicaContext: (driveID: driveID, mountPath: mount.path)
+            replicaContext: (targetID: targetID, mountPath: mount.path)
         )
 
         XCTAssertEqual(result.importedAssets.count, 2)
         XCTAssertEqual(result.archiveBackedReplicas.count, 2, "Every imported file on the drive backs a replica")
         for asset in result.importedAssets {
             let replica = try XCTUnwrap(result.archiveBackedReplicas[asset.id])
-            XCTAssertEqual(replica.driveID, driveID)
+            XCTAssertEqual(replica.targetID, targetID)
             XCTAssertEqual(replica.state, .present)
             XCTAssertNotNil(replica.lastVerifiedAt, "Import hashed the file, so it is verified")
             let relative = try XCTUnwrap(replica.relativePath)
@@ -288,25 +285,24 @@ final class TakeoutTests: XCTestCase {
         let mount = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: mount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let driveID = UUID()
-        let drive = ManagedDrive(
-            id: driveID, name: "A", volumeUUID: nil, markerToken: "t",
+        let targetID = UUID()
+        let drive = ReplicationTarget(
+            id: targetID, name: "A", volumeUUID: nil, markerToken: "t",
             registeredAt: Date(), lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
 
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: false,
-            replicaContext: (driveID: driveID, mountPath: mount.path)
+            replicaContext: (targetID: targetID, mountPath: mount.path)
         )
         let asset = result.importedAssets[0]
         let replica = try XCTUnwrap(result.archiveBackedReplicas[asset.id])
 
         func verifyTask() -> ReplicationTask {
             ReplicationTask(
-                id: UUID(), assetID: asset.id, driveID: driveID, action: .verify,
+                id: UUID(), assetID: asset.id, targetID: targetID, action: .verify,
                 state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
             )
         }
@@ -333,24 +329,23 @@ final class TakeoutTests: XCTestCase {
         let mount = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: mount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let driveID = UUID()
-        let drive = ManagedDrive(
-            id: driveID, name: "A", volumeUUID: nil, markerToken: "t",
+        let targetID = UUID()
+        let drive = ReplicationTarget(
+            id: targetID, name: "A", volumeUUID: nil, markerToken: "t",
             registeredAt: Date(), lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: false,
-            replicaContext: (driveID: driveID, mountPath: mount.path)
+            replicaContext: (targetID: targetID, mountPath: mount.path)
         )
         let asset = result.importedAssets[0]
         let replica = try XCTUnwrap(result.archiveBackedReplicas[asset.id])
         let file = ReplicationService.resolveReplicaURL(asset: asset, drive: drive, mountURL: mount, existingReplica: replica)
 
         let task = ReplicationTask(
-            id: UUID(), assetID: asset.id, driveID: driveID, action: .remove,
+            id: UUID(), assetID: asset.id, targetID: targetID, action: .remove,
             state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
         )
         let outcome = ReplicationService.perform(
@@ -390,8 +385,7 @@ final class TakeoutTests: XCTestCase {
         let staging = StagingStore(rootURL: try makeTempDirectory())
         let importResult = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folderA, cleanupURL: nil),
-            archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: false
+            archiveName: "Takeout", existingAssets: [], staging: staging
         )
         XCTAssertEqual(importResult.importedAssets.count, 2)
 
@@ -406,7 +400,7 @@ final class TakeoutTests: XCTestCase {
         let result = TakeoutReconciler.reconcileZip(
             zipURL: zipURL,
             mountURL: driveBMount,
-            driveID: driveBID,
+            targetID: driveBID,
             assetIDsByHash: assetIDsByHash,
             assetsNeedingReplica: Set(importResult.importedAssets.map(\.id))
         )
@@ -423,16 +417,16 @@ final class TakeoutTests: XCTestCase {
         )
 
         // The claimed replica must pass a real verification round-trip.
-        let driveB = ManagedDrive(
+        let driveB = ReplicationTarget(
             id: driveBID, name: "B", volumeUUID: nil, markerToken: "t",
             registeredAt: Date(), lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
         let asset = importResult.importedAssets[0]
         let replica = try XCTUnwrap(result.claimedReplicas.first { $0.assetID == asset.id })
         let verify = ReplicationService.perform(
             ReplicationTask(
-                id: UUID(), assetID: asset.id, driveID: driveBID, action: .verify,
+                id: UUID(), assetID: asset.id, targetID: driveBID, action: .verify,
                 state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
             ),
             drive: driveB, mountURL: driveBMount, asset: asset,
@@ -447,16 +441,15 @@ final class TakeoutTests: XCTestCase {
         let staging = StagingStore(rootURL: try makeTempDirectory())
         let imported = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
-            archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: false
+            archiveName: "Takeout", existingAssets: [], staging: staging
         ).importedAssets
 
-        let driveID = UUID()
+        let targetID = UUID()
         let assetIDsByHash = Dictionary(uniqueKeysWithValues: imported.map { ($0.contentHash, $0.id) })
         // Only one of the two assets still needs a replica on this drive.
         let needing: Set<UUID> = [imported[0].id]
         let result = TakeoutReconciler.reconcileFolder(
-            folderURL: folder, mountURL: mount, driveID: driveID,
+            folderURL: folder, mountURL: mount, targetID: targetID,
             assetIDsByHash: assetIDsByHash, assetsNeedingReplica: needing
         )
         XCTAssertEqual(result.claimedReplicas.count, 1)
@@ -471,13 +464,12 @@ final class TakeoutTests: XCTestCase {
         let takeoutFolder = try makeFakeTakeoutTree(in: mount)
         let stagingRoot = try makeTempDirectory()
         let staging = StagingStore(rootURL: stagingRoot)
-        let driveID = UUID()
+        let targetID = UUID()
 
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: true,
-            replicaContext: (driveID: driveID, mountPath: mount.path)
+            replicaContext: (targetID: targetID, mountPath: mount.path)
         )
 
         XCTAssertEqual(result.importedAssets.count, 2)
@@ -498,7 +490,6 @@ final class TakeoutTests: XCTestCase {
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: workspaceRoot),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: false,
             replicaContext: nil
         )
         for asset in result.importedAssets {
@@ -517,8 +508,7 @@ final class TakeoutTests: XCTestCase {
         let imported = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: false,
-            replicaContext: (driveID: driveAID, mountPath: driveAMount.path)
+            replicaContext: (targetID: driveAID, mountPath: driveAMount.path)
         )
         let asset = imported.importedAssets[0]
         XCTAssertNil(asset.stagingRelativePath)
@@ -529,14 +519,14 @@ final class TakeoutTests: XCTestCase {
         )
 
         let driveBMount = try makeTempDirectory()
-        let driveB = ManagedDrive(
+        let driveB = ReplicationTarget(
             id: UUID(), name: "B", volumeUUID: nil, markerToken: "t",
             registeredAt: Date(), lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
         let result = ReplicationService.perform(
             ReplicationTask(
-                id: UUID(), assetID: asset.id, driveID: driveB.id, action: .copy,
+                id: UUID(), assetID: asset.id, targetID: driveB.id, action: .copy,
                 state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
             ),
             drive: driveB, mountURL: driveBMount, asset: asset, sourceURL: sourceOnA
@@ -576,7 +566,7 @@ final class TakeoutTests: XCTestCase {
         for file in files {
             let result = await TakeoutImporter.importMedia(
                 from: workspace, archiveName: "Takeout", existingAssets: accumulated,
-                staging: chunkedStaging, assumeStillInGoogle: false, fileURLs: [file]
+                staging: chunkedStaging, fileURLs: [file]
             )
             accumulated.append(contentsOf: result.importedAssets)
         }
@@ -584,7 +574,7 @@ final class TakeoutTests: XCTestCase {
         let wholeStaging = StagingStore(rootURL: try makeTempDirectory())
         let whole = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "Takeout", existingAssets: [],
-            staging: wholeStaging, assumeStillInGoogle: false
+            staging: wholeStaging
         )
 
         XCTAssertEqual(accumulated.count, whole.importedAssets.count)
@@ -597,7 +587,7 @@ final class TakeoutTests: XCTestCase {
         // A repeated chunk must dedupe against what earlier chunks imported.
         let repeated = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "Takeout", existingAssets: accumulated,
-            staging: chunkedStaging, assumeStillInGoogle: false, fileURLs: [files[0]]
+            staging: chunkedStaging, fileURLs: [files[0]]
         )
         XCTAssertEqual(repeated.importedAssets.count, 0)
         XCTAssertEqual(repeated.duplicateFilenames.count, 1)
@@ -610,19 +600,18 @@ final class TakeoutTests: XCTestCase {
         let mount = try makeTempDirectory()
         let folder = try makeFakeTakeoutTree(in: mount)
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let driveID = UUID()
+        let targetID = UUID()
 
         let imported = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: false,
-            replicaContext: (driveID: driveID, mountPath: mount.path)
+            replicaContext: (targetID: targetID, mountPath: mount.path)
         )
         let assetIDsByHash = Dictionary(uniqueKeysWithValues: imported.importedAssets.map { ($0.contentHash, $0.id) })
 
         // Every asset already has a present replica here, so nothing "needs" one.
         let result = TakeoutReconciler.reconcileFolder(
-            folderURL: folder, mountURL: mount, driveID: driveID,
+            folderURL: folder, mountURL: mount, targetID: targetID,
             assetIDsByHash: assetIDsByHash, assetsNeedingReplica: []
         )
         XCTAssertTrue(result.claimedReplicas.isEmpty)
@@ -712,11 +701,11 @@ final class TakeoutTests: XCTestCase {
 
         let a = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "T", existingAssets: [],
-            staging: StagingStore(rootURL: try makeTempDirectory()), assumeStillInGoogle: false
+            staging: StagingStore(rootURL: try makeTempDirectory())
         )
         let b = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "T", existingAssets: [],
-            staging: StagingStore(rootURL: try makeTempDirectory()), assumeStillInGoogle: false
+            staging: StagingStore(rootURL: try makeTempDirectory())
         )
         XCTAssertEqual(
             a.importedAssets.map(\.originalFilename), b.importedAssets.map(\.originalFilename),
@@ -738,8 +727,7 @@ final class TakeoutTests: XCTestCase {
 
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
-            archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: false
+            archiveName: "Takeout", existingAssets: [], staging: staging
         )
         for asset in result.importedAssets {
             XCTAssertFalse(asset.presence.googleCloud)
@@ -749,22 +737,26 @@ final class TakeoutTests: XCTestCase {
         }
     }
 
-    func testStatedCloudPresenceIsMarkedAsAssertionNotVerified() async throws {
+    /// Importing a Google export is the one moment it is most tempting to
+    /// record Google presence, and the one moment there is least evidence for
+    /// it: the export says where the content was when it was made.
+    func testImportingAGoogleExportNeverClaimsGooglePresence() async throws {
         let root = try makeTempDirectory()
         let folder = try makeFakeTakeoutTree(in: root)
         let staging = StagingStore(rootURL: try makeTempDirectory())
 
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
-            archiveName: "Takeout", existingAssets: [], staging: staging,
-            assumeStillInGoogle: true
+            archiveName: "Takeout", existingAssets: [], staging: staging
         )
+        XCTAssertFalse(result.importedAssets.isEmpty)
         for asset in result.importedAssets {
-            XCTAssertTrue(asset.presence.googleCloud)
-            XCTAssertEqual(
-                asset.cloudPresenceEvidence, .userAsserted,
-                "A user statement must never be recorded as verified"
+            XCTAssertFalse(
+                asset.presence.googleCloud,
+                "An export proves the content was in Google at export time, never that it is there now"
             )
+            XCTAssertTrue(asset.presence.local, "Local presence is what hashing actually proves")
+            XCTAssertEqual(asset.cloudPresenceEvidence, .none)
             XCTAssertFalse(asset.cloudPresenceEvidence.isTrustworthy)
         }
     }
@@ -797,24 +789,24 @@ final class TakeoutTests: XCTestCase {
         // extracted folder backs volume: replicas for two assets.
         let donorZip = TakeoutArchive(
             id: UUID(), path: "/Volumes/A/takeout-\(setID)-001.zip", kind: .zip, sizeBytes: 0,
-            driveID: UUID(), discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
+            targetID: UUID(), discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
             importedAssetCount: 2, skippedDuplicateCount: 0, note: nil,
             exportSetID: setID, partNumber: 1, contentHash: zipHash
         )
         let folderTwin = TakeoutArchive(
             id: UUID(), path: "/Volumes/A/takeout-\(setID)-001", kind: .folder, sizeBytes: 0,
-            driveID: donorZip.driveID, discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
+            targetID: donorZip.targetID, discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
             importedAssetCount: 2, skippedDuplicateCount: 0, note: nil,
             exportSetID: setID, partNumber: 1
         )
         let replicas = [
-            DriveReplicaState(
-                assetID: assetOne, driveID: donorZip.driveID!, state: .present,
+            TargetReplicaState(
+                assetID: assetOne, targetID: donorZip.targetID!, state: .present,
                 relativePath: "volume:takeout-\(setID)-001/Takeout/Google Photos/Photos from 2021/IMG_1.jpg",
                 lastVerifiedAt: Date()
             ),
-            DriveReplicaState(
-                assetID: assetTwo, driveID: donorZip.driveID!, state: .present,
+            TargetReplicaState(
+                assetID: assetTwo, targetID: donorZip.targetID!, state: .present,
                 relativePath: "volume:takeout-\(setID)-001/Takeout/Google Photos/Photos from 2021/IMG_2.jpg",
                 lastVerifiedAt: Date()
             ),
@@ -825,7 +817,7 @@ final class TakeoutTests: XCTestCase {
         let result = try XCTUnwrap(TakeoutReconciler.fastReconcileZip(
             zipHash: zipHash,
             zipRelativePath: "Owner/Backup_Google/takeout-\(setID)-001.zip",
-            driveID: driveBID,
+            targetID: driveBID,
             candidateDonors: [donorZip, folderTwin],
             folderTwins: [folderTwin],
             replicaStates: replicas,
@@ -835,7 +827,7 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(result.claimedReplicas.count, 1)
         let claimed = result.claimedReplicas[0]
         XCTAssertEqual(claimed.assetID, assetOne)
-        XCTAssertEqual(claimed.driveID, driveBID)
+        XCTAssertEqual(claimed.targetID, driveBID)
         XCTAssertEqual(
             claimed.relativePath,
             "zipmember:Owner/Backup_Google/takeout-\(setID)-001.zip!Takeout/Google Photos/Photos from 2021/IMG_1.jpg",
@@ -847,14 +839,14 @@ final class TakeoutTests: XCTestCase {
     func testFastReconcileRefusesMismatchedHash() async {
         let donor = TakeoutArchive(
             id: UUID(), path: "/Volumes/A/takeout-S-001.zip", kind: .zip, sizeBytes: 0,
-            driveID: nil, discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
+            targetID: nil, discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
             importedAssetCount: 1, skippedDuplicateCount: 0, note: nil,
             exportSetID: "S", partNumber: 1, contentHash: "hash-of-A"
         )
         let result = TakeoutReconciler.fastReconcileZip(
             zipHash: "different-hash",
             zipRelativePath: "takeout-S-001.zip",
-            driveID: UUID(),
+            targetID: UUID(),
             candidateDonors: [donor],
             folderTwins: [],
             replicaStates: [],
@@ -890,7 +882,7 @@ final class TakeoutTests: XCTestCase {
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folderURL, cleanupURL: nil),
             archiveName: folderURL.lastPathComponent, existingAssets: [],
-            staging: staging, assumeStillInGoogle: true
+            staging: staging
         )
         XCTAssertEqual(result.importedAssets.count, 2)
     }
@@ -929,8 +921,7 @@ final class TakeoutTests: XCTestCase {
             from: workspace,
             archiveName: "Takeout",
             existingAssets: [],
-            staging: staging,
-            assumeStillInGoogle: true
+            staging: staging
         )
 
         XCTAssertEqual(result.importedAssets.count, 2)
@@ -943,7 +934,10 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(withSidecar.importOrigin, .googleTakeout)
         XCTAssertEqual(withSidecar.residency, .local)
         XCTAssertTrue(withSidecar.presence.local)
-        XCTAssertTrue(withSidecar.presence.googleCloud, "Overlap must be recorded while originals remain in Google")
+        XCTAssertFalse(
+            withSidecar.presence.googleCloud,
+            "Sidecar metadata says what Google knew about this file, not that Google still holds it"
+        )
 
         XCTAssertEqual(withSidecar.captureDateSource, .sidecar)
 
@@ -972,8 +966,7 @@ final class TakeoutTests: XCTestCase {
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout",
             existingAssets: [],
-            staging: staging,
-            assumeStillInGoogle: false
+            staging: staging
         )
         for asset in result.importedAssets {
             XCTAssertFalse(asset.presence.googleCloud)
@@ -989,11 +982,11 @@ final class TakeoutTests: XCTestCase {
 
         let first = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "Takeout", existingAssets: [],
-            staging: staging, assumeStillInGoogle: true
+            staging: staging
         )
         let second = await TakeoutImporter.importMedia(
             from: workspace, archiveName: "Takeout", existingAssets: first.importedAssets,
-            staging: staging, assumeStillInGoogle: true
+            staging: staging
         )
         XCTAssertEqual(second.importedAssets.count, 0)
         XCTAssertEqual(second.duplicateFilenames.count, 2)
@@ -1010,7 +1003,7 @@ final class TakeoutTests: XCTestCase {
             path: zipURL.path,
             kind: .zip,
             sizeBytes: 0,
-            driveID: nil,
+            targetID: nil,
             discoveredAt: Date(),
             importedAt: nil,
             importBatchID: nil,
@@ -1026,7 +1019,7 @@ final class TakeoutTests: XCTestCase {
         let staging = StagingStore(rootURL: try makeTempDirectory())
         let result = await TakeoutImporter.importMedia(
             from: workspace, archiveName: archive.displayName, existingAssets: [],
-            staging: staging, assumeStillInGoogle: true
+            staging: staging
         )
         XCTAssertEqual(result.importedAssets.count, 2)
         let withSidecar = try XCTUnwrap(result.importedAssets.first { $0.originalFilename == "IMG_100.jpg" })

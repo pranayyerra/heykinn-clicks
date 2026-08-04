@@ -2,7 +2,7 @@ import Foundation
 
 struct ReplicaTaskResult {
     var task: ReplicationTask
-    var replica: DriveReplicaState?
+    var replica: TargetReplicaState?
     var message: String
     /// The work could not be done for a reason that will pass — typically the
     /// drive holding the only copy is unplugged. Such a task must stay queued
@@ -13,7 +13,7 @@ struct ReplicaTaskResult {
 struct SyncOutcome {
     var completedTasks: [ReplicationTask]
     var failedTasks: [ReplicationTask]
-    var updatedReplicas: [DriveReplicaState]
+    var updatedReplicas: [TargetReplicaState]
     var messages: [String]
 }
 
@@ -45,33 +45,33 @@ enum ReplicationService {
     /// decompressing every entry just to name it.
     static let archivePartPrefix = "archivepart:"
 
-    static func isVolumeBacked(_ replica: DriveReplicaState?) -> Bool {
+    static func isVolumeBacked(_ replica: TargetReplicaState?) -> Bool {
         replica?.relativePath?.hasPrefix(volumeBackedPrefix) == true
     }
 
-    static func isArchivePartBacked(_ replica: DriveReplicaState?) -> Bool {
+    static func isArchivePartBacked(_ replica: TargetReplicaState?) -> Bool {
         replica?.relativePath?.hasPrefix(archivePartPrefix) == true
     }
 
     /// The export part stem a replica is satisfied by, if any.
-    static func archivePartStem(_ replica: DriveReplicaState?) -> String? {
+    static func archivePartStem(_ replica: TargetReplicaState?) -> String? {
         guard let relative = replica?.relativePath, relative.hasPrefix(archivePartPrefix) else {
             return nil
         }
         return String(relative.dropFirst(archivePartPrefix.count))
     }
 
-    static func isZipMemberBacked(_ replica: DriveReplicaState?) -> Bool {
+    static func isZipMemberBacked(_ replica: TargetReplicaState?) -> Bool {
         replica?.relativePath?.hasPrefix(zipMemberPrefix) == true
     }
 
     /// Any replica whose bytes belong to the user's own archive files rather
     /// than the app-managed replica root. These are verified, never deleted.
-    static func isArchiveBacked(_ replica: DriveReplicaState?) -> Bool {
+    static func isArchiveBacked(_ replica: TargetReplicaState?) -> Bool {
         isVolumeBacked(replica) || isZipMemberBacked(replica) || isArchivePartBacked(replica)
     }
 
-    static func zipMemberComponents(_ replica: DriveReplicaState?) -> (zipRelativePath: String, entry: String)? {
+    static func zipMemberComponents(_ replica: TargetReplicaState?) -> (zipRelativePath: String, entry: String)? {
         guard let relative = replica?.relativePath, relative.hasPrefix(zipMemberPrefix) else { return nil }
         let payload = relative.dropFirst(zipMemberPrefix.count)
         guard let separator = payload.firstIndex(of: "!") else { return nil }
@@ -88,7 +88,7 @@ enum ReplicationService {
         return "\(bucket)/\(name)"
     }
 
-    static func replicaURL(for asset: Asset, drive: ManagedDrive, mountURL: URL) -> URL {
+    static func replicaURL(for asset: Asset, drive: ReplicationTarget, mountURL: URL) -> URL {
         mountURL
             .appendingPathComponent(drive.replicaRootComponent, isDirectory: true)
             .appendingPathComponent(replicaRelativePath(for: asset))
@@ -99,9 +99,9 @@ enum ReplicationService {
     /// otherwise.
     static func resolveReplicaURL(
         asset: Asset,
-        drive: ManagedDrive,
+        drive: ReplicationTarget,
         mountURL: URL,
-        existingReplica: DriveReplicaState?
+        existingReplica: TargetReplicaState?
     ) -> URL {
         if let relative = existingReplica?.relativePath, relative.hasPrefix(volumeBackedPrefix) {
             return mountURL.appendingPathComponent(String(relative.dropFirst(volumeBackedPrefix.count)))
@@ -115,15 +115,15 @@ enum ReplicationService {
     /// explicit migration cleanup — never speculatively.
     /// `sourceURL` is any readable copy of the asset — Mac staging, or a copy
     /// on another connected drive (including archive-backed Takeout files).
-    /// Assets that live only on drives are copied drive-to-drive without ever
+    /// Assets that live only on targets are copied drive-to-drive without ever
     /// being staged on the Mac.
     static func perform(
         _ task: ReplicationTask,
-        drive: ManagedDrive,
+        drive: ReplicationTarget,
         mountURL: URL,
         asset: Asset?,
         sourceURL: URL?,
-        existingReplica: DriveReplicaState? = nil
+        existingReplica: TargetReplicaState? = nil
     ) -> ReplicaTaskResult {
         var task = task
         guard let asset else {
@@ -132,7 +132,7 @@ enum ReplicationService {
             return ReplicaTaskResult(task: task, replica: nil, message: "Skipped task for unknown asset")
         }
         do {
-            let replica: DriveReplicaState
+            let replica: TargetReplicaState
             let message: String
             switch task.action {
             case .copy:
@@ -146,9 +146,9 @@ enum ReplicationService {
                 if isArchiveBacked(existingReplica) {
                     // The bytes live in the user's own archive (e.g. a Takeout
                     // folder). Release the catalog's claim, never delete.
-                    replica = DriveReplicaState(
+                    replica = TargetReplicaState(
                         assetID: asset.id,
-                        driveID: drive.id,
+                        targetID: drive.id,
                         state: .missing,
                         relativePath: nil,
                         lastVerifiedAt: Date()
@@ -187,24 +187,24 @@ enum ReplicationService {
 
     /// Batch convenience over `perform` — processes every queued task for the
     /// drive serially. Used by tests and headless flows; the app's interactive
-    /// sync loop drives `perform` directly for progress and cancellation.
+    /// sync loop targets `perform` directly for progress and cancellation.
     static func processBacklog(
         tasks: [ReplicationTask],
-        drive: ManagedDrive,
+        drive: ReplicationTarget,
         mountURL: URL,
         assetsByID: [UUID: Asset],
         staging: StagingStore,
-        replicaStates: [DriveReplicaState] = [],
+        replicaStates: [TargetReplicaState] = [],
         sourceURLProvider: ((Asset) -> URL?)? = nil
     ) -> SyncOutcome {
         var outcome = SyncOutcome(completedTasks: [], failedTasks: [], updatedReplicas: [], messages: [])
         let replicasByKey = Dictionary(uniqueKeysWithValues: replicaStates.map { ($0.id, $0) })
         let queued = tasks
-            .filter { $0.driveID == drive.id && $0.state == .queued }
+            .filter { $0.targetID == drive.id && $0.state == .queued }
             .sorted { $0.queuedAt < $1.queuedAt }
 
         for task in queued {
-            let existing = replicasByKey["\(task.assetID.uuidString)/\(task.driveID.uuidString)"]
+            let existing = replicasByKey["\(task.assetID.uuidString)/\(task.targetID.uuidString)"]
             let asset = assetsByID[task.assetID]
             let source = asset.flatMap { candidate -> URL? in
                 if let sourceURLProvider { return sourceURLProvider(candidate) }
@@ -227,10 +227,10 @@ enum ReplicationService {
 
     private static func performCopy(
         asset: Asset,
-        drive: ManagedDrive,
+        drive: ReplicationTarget,
         mountURL: URL,
         sourceURL: URL?
-    ) throws -> DriveReplicaState {
+    ) throws -> TargetReplicaState {
         guard let source = sourceURL, FileManager.default.fileExists(atPath: source.path) else {
             throw ReplicationError.noSourceCopy(asset.originalFilename)
         }
@@ -256,9 +256,9 @@ enum ReplicationService {
             try FileManager.default.removeItem(at: destination)
         }
         try FileManager.default.moveItem(at: temporary, to: destination)
-        return DriveReplicaState(
+        return TargetReplicaState(
             assetID: asset.id,
-            driveID: drive.id,
+            targetID: drive.id,
             state: .present,
             relativePath: replicaRelativePath(for: asset),
             lastVerifiedAt: Date()
@@ -267,18 +267,18 @@ enum ReplicationService {
 
     private static func performVerify(
         asset: Asset,
-        drive: ManagedDrive,
+        drive: ReplicationTarget,
         mountURL: URL,
-        existingReplica: DriveReplicaState?
-    ) throws -> DriveReplicaState {
+        existingReplica: TargetReplicaState?
+    ) throws -> TargetReplicaState {
         // A part-backed replica is satisfied by the drive still holding that
         // export part. Checking the part is the honest unit of work here:
         // decompressing every entry to confirm one photo would be absurd when
         // the part is what the policy actually counts.
         if let stem = archivePartStem(existingReplica) {
-            var replica = DriveReplicaState(
+            var replica = TargetReplicaState(
                 assetID: asset.id,
-                driveID: drive.id,
+                targetID: drive.id,
                 state: .missing,
                 relativePath: existingReplica?.relativePath,
                 lastVerifiedAt: Date()
@@ -300,9 +300,9 @@ enum ReplicationService {
 
         // Zip-member replicas verify by streaming the entry out of the zip.
         if let components = zipMemberComponents(existingReplica) {
-            var replica = DriveReplicaState(
+            var replica = TargetReplicaState(
                 assetID: asset.id,
-                driveID: drive.id,
+                targetID: drive.id,
                 state: .missing,
                 relativePath: existingReplica?.relativePath,
                 lastVerifiedAt: Date()
@@ -316,9 +316,9 @@ enum ReplicationService {
         }
 
         let replicaFile = resolveReplicaURL(asset: asset, drive: drive, mountURL: mountURL, existingReplica: existingReplica)
-        var replica = DriveReplicaState(
+        var replica = TargetReplicaState(
             assetID: asset.id,
-            driveID: drive.id,
+            targetID: drive.id,
             state: .missing,
             relativePath: isVolumeBacked(existingReplica)
                 ? existingReplica?.relativePath
@@ -335,16 +335,16 @@ enum ReplicationService {
 
     private static func performRemove(
         asset: Asset,
-        drive: ManagedDrive,
+        drive: ReplicationTarget,
         mountURL: URL
-    ) throws -> DriveReplicaState {
+    ) throws -> TargetReplicaState {
         let replicaFile = replicaURL(for: asset, drive: drive, mountURL: mountURL)
         if FileManager.default.fileExists(atPath: replicaFile.path) {
             try FileManager.default.removeItem(at: replicaFile)
         }
-        return DriveReplicaState(
+        return TargetReplicaState(
             assetID: asset.id,
-            driveID: drive.id,
+            targetID: drive.id,
             state: .missing,
             relativePath: nil,
             lastVerifiedAt: Date()

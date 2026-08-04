@@ -3,14 +3,14 @@ import SwiftUI
 
 /// Single observable source of truth for the UI, backed by the on-Mac catalog.
 /// The Mac is the control plane: everything here loads and works with zero
-/// drives attached.
+/// targets attached.
 @MainActor
 final class AppStore: ObservableObject {
 
     // Catalog-backed state
     @Published private(set) var assets: [Asset] = []
-    @Published private(set) var drives: [ManagedDrive] = []
-    @Published private(set) var replicaStates: [DriveReplicaState] = []
+    @Published private(set) var targets: [ReplicationTarget] = []
+    @Published private(set) var replicaStates: [TargetReplicaState] = []
     @Published private(set) var replicationTasks: [ReplicationTask] = []
     @Published private(set) var policyRules: [PolicyRule] = []
     @Published private(set) var migrationJobs: [MigrationJob] = []
@@ -25,6 +25,13 @@ final class AppStore: ObservableObject {
     /// What each drive holds, tallied once per catalog change rather than
     /// re-filtered by every view that draws a drive.
     @Published private(set) var driveBreakdowns: [UUID: DriveContentBreakdown] = [:]
+    /// A Merkle tree per target over what the catalog records it holding, so
+    /// "do these two targets agree?" costs one comparison instead of a sweep.
+    @Published private(set) var targetTrees: [UUID: MerkleTree] = [:]
+    /// The few directories a target's recorded paths hang from.
+    private var targetAnchors: [UUID: Set<String>] = [:]
+    /// When each target's anchors were last confirmed present.
+    private var lastAnchorCheck: [UUID: Date] = [:]
     /// Batches whose every asset is safe without its source archive.
     @Published private(set) var fullyReplicatedBatchIDs: Set<UUID> = []
 
@@ -42,12 +49,36 @@ final class AppStore: ObservableObject {
     @Published var autoManageTakeout: Bool = UserDefaults.standard.object(forKey: "autoManageTakeout") as? Bool ?? true {
         didSet { UserDefaults.standard.set(autoManageTakeout, forKey: "autoManageTakeout") }
     }
+    /// Reading a small ration of files in the background, which is the only way
+    /// rot is ever found. On by default: an archive nobody reads is one whose
+    /// damage is discovered when it is needed.
+    @Published var backgroundRotPatrol: Bool = UserDefaults.standard.object(forKey: "backgroundRotPatrol") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(backgroundRotPatrol, forKey: "backgroundRotPatrol") }
+    }
 
     var isSyncing: Bool { syncProgress != nil }
 
-    /// How many managed drives should hold each Local asset. Read wherever
-    /// redundancy is judged, so the number is stated once.
-    let redundancyPolicy: LocalRedundancyPolicy = .default
+    /// How many targets should hold each Local asset. Read wherever redundancy
+    /// is judged, so the number is stated once — and set by the user, because
+    /// it governs how safe their archive is and how many targets they may
+    /// register. A number the app enforces but never shows is worse than no
+    /// rule at all.
+    /// The most copies the policy may ask for: you cannot keep more copies
+    /// than you have places to put them. Registering a target raises this.
+    var maxSettableCopies: Int { max(targets.count, 1) }
+
+    @Published var redundancyPolicy: LocalRedundancyPolicy =
+        LocalRedundancyPolicy(
+            desiredCopies: UserDefaults.standard.object(forKey: "desiredCopies") as? Int ?? LocalRedundancyPolicy.default.desiredCopies
+        ) {
+        didSet {
+            UserDefaults.standard.set(redundancyPolicy.desiredCopies, forKey: "desiredCopies")
+            // Protection is judged against this number, so every verdict in
+            // the app changes the moment it does.
+            recomputeDerivedState()
+            audit(.policy, "Redundancy policy set to \(redundancyPolicy.description) per Local photo.")
+        }
+    }
 
     /// An unmanaged external volume just appeared; the UI asks whether to use
     /// it as managed local storage (and/or scan it for Takeout).
@@ -55,14 +86,14 @@ final class AppStore: ObservableObject {
 
     private var syncCancelRequested = false
     /// Drives waiting their turn while another drive syncs (syncs are serial).
-    private var pendingSyncDriveIDs: [UUID] = []
+    private var pendingSyncTargetIDs: [UUID] = []
     /// Volumes already prompted this session — one ask per appearance.
     private var promptedVolumeKeys: Set<String> = []
     /// Drives whose auto-Takeout pipeline is running or already finished this
     /// session. A transient volume-metadata hiccup can otherwise look like a
     /// reconnect and restart the whole (very expensive) pipeline.
-    private var takeoutPipelineActiveDriveIDs: Set<UUID> = []
-    private var takeoutPipelineCompletedDriveIDs: Set<UUID> = []
+    private var takeoutPipelineActiveTargetIDs: Set<UUID> = []
+    private var takeoutPipelineCompletedTargetIDs: Set<UUID> = []
     /// Files per import chunk. Each chunk is scanned in parallel and then
     /// committed, so this also sets how often the Library and progress bar
     /// refresh — small enough to feel live, large enough to amortise the
@@ -72,10 +103,10 @@ final class AppStore: ObservableObject {
         Set(UserDefaults.standard.stringArray(forKey: "ignoredVolumeKeys") ?? [])
 
     let staging: StagingStore
-    /// Where export parts wait while travelling between drives that are never
+    /// Where export parts wait while travelling between targets that are never
     /// plugged in at the same time.
     let relay: ExportPartRelay
-    let driveMonitor: DriveMonitor
+    let targetMonitor: TargetMonitor
     let thumbnails: ThumbnailCache
     private let catalog: CatalogStore
     /// Thumbnail work already running, keyed by asset. Fast scrolling asks for
@@ -90,6 +121,23 @@ final class AppStore: ObservableObject {
         if let hit = thumbnails.cachedInMemory(asset.id) { return hit }
         if let running = thumbnailTasks[asset.id] { return await running.value }
 
+        // Photos the app does not hold have no file to read: their pictures
+        // come from the provider, which serves thumbnails locally without
+        // downloading originals.
+        if let providerLocalID = asset.providerLocalID {
+            let assetID = asset.id
+            let cache = thumbnails
+            let task = Task<NSImage?, Never> {
+                guard let image = await ApplePhotosVerifier.thumbnail(forLocalIdentifier: providerLocalID) else { return nil }
+                cache.store(image, for: assetID)
+                return image
+            }
+            thumbnailTasks[asset.id] = task
+            let image = await task.value
+            thumbnailTasks[asset.id] = nil
+            return image
+        }
+
         let cache = thumbnails
         let sourceURL = localFileURL(for: asset)
         let assetID = asset.id
@@ -102,17 +150,17 @@ final class AppStore: ObservableObject {
         return image
     }
 
-    var connectedMounts: [UUID: URL] { driveMonitor.connectedMounts }
-    var availableVolumes: [VolumeInfo] { driveMonitor.availableVolumes }
+    var reachablePaths: [UUID: URL] { targetMonitor.reachablePaths }
+    var availableVolumes: [VolumeInfo] { targetMonitor.availableVolumes }
 
     /// Maintained alongside `assets`/`replicaStates` rather than rebuilt on
     /// access: these are read from view bodies, and rebuilding a
     /// tens-of-thousands-entry dictionary per read stalled rendering.
     @Published private(set) var assetsByID: [UUID: Asset] = [:]
-    @Published private(set) var replicasByAssetID: [UUID: [DriveReplicaState]] = [:]
+    @Published private(set) var replicasByAssetID: [UUID: [TargetReplicaState]] = [:]
 
-    var drivesByID: [UUID: ManagedDrive] {
-        Dictionary(uniqueKeysWithValues: drives.map { ($0.id, $0) })
+    var targetsByID: [UUID: ReplicationTarget] {
+        Dictionary(uniqueKeysWithValues: targets.map { ($0.id, $0) })
     }
 
     private func rebuildIndexes() {
@@ -138,8 +186,8 @@ final class AppStore: ObservableObject {
             return staging.url(forRelativePath: relative)
         }
         for replica in replicasByAssetID[asset.id] ?? [] where replica.state == .present {
-            guard let mountURL = connectedMounts[replica.driveID],
-                  let drive = drivesByID[replica.driveID],
+            guard let mountURL = reachablePaths[replica.targetID],
+                  let drive = targetsByID[replica.targetID],
                   !ReplicationService.isZipMemberBacked(replica)
             else { continue }
             let url = ReplicationService.resolveReplicaURL(
@@ -159,7 +207,7 @@ final class AppStore: ObservableObject {
 
         staging = StagingStore(rootURL: appDirectory.appendingPathComponent("Staging", isDirectory: true))
         relay = ExportPartRelay(rootURL: appDirectory.appendingPathComponent("ExportPartRelay", isDirectory: true))
-        driveMonitor = DriveMonitor()
+        targetMonitor = TargetMonitor()
         thumbnails = ThumbnailCache.defaultCache()
 
         do {
@@ -169,18 +217,15 @@ final class AppStore: ObservableObject {
         }
 
         loadAll()
-        if assets.isEmpty && drives.isEmpty && policyRules.isEmpty {
-            SampleData.seed(into: self)
-            loadAll()
-        }
 
-        driveMonitor.rescanRequested = { [weak self] in
-            self?.rescanDrives()
+        targetMonitor.rescanRequested = { [weak self] in
+            self?.rescanTargets()
         }
-        driveMonitor.volumeWillUnmount = { [weak self] url in
+        targetMonitor.volumeWillUnmount = { [weak self] url in
             self?.handleWillUnmount(volumeURL: url)
         }
-        rescanDrives()
+        rescanTargets()
+        refreshApplePhotosState()
         // Runs after the drive scan so drive-resident leftovers are visible.
         reconcileAfterRestart()
         refreshCatalogSnapshots()
@@ -193,7 +238,14 @@ final class AppStore: ObservableObject {
         // anything they miss (e.g. network volumes, missed events).
         Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.rescanDrives()
+                self?.rescanTargets()
+                // Content can move under a target that never unmounts, and
+                // connect-time checks never fire for one left plugged in.
+                self?.startDueSyncsIfIdle()
+                self?.checkAnchorsIfDue()
+                self?.runRotPatrolIfDue()
+                self?.checkApplePhotosPresenceIfDue()
+                self?.importFromApplePhotosIfDue()
             }
         }
     }
@@ -203,10 +255,10 @@ final class AppStore: ObservableObject {
     /// The export-part view of replication: what the archive is actually made
     /// of, and whether each part exists twice.
     @Published private(set) var archivePlan: ArchiveReplicationPlan =
-        ArchiveReplicationPlan(parts: [], managedDriveIDs: [])
+        ArchiveReplicationPlan(parts: [], managedTargetIDs: [])
 
-    /// What can be moved right now to get every part onto enough drives.
-    /// Recomputed whenever drives connect or the archive changes, so the UI
+    /// What can be moved right now to get every part onto enough targets.
+    /// Recomputed whenever targets connect or the archive changes, so the UI
     /// can say what is possible without starting anything.
     @Published private(set) var partTransferPlan = ExportPartTransferPlan()
     /// Parts currently parked on the Mac mid-journey.
@@ -217,12 +269,12 @@ final class AppStore: ObservableObject {
     /// mid-file rather than only between parts.
     private var activeTransferControl: TransferControl?
 
-    /// Recomputes the transfer plan from the drives connected at this moment.
+    /// Recomputes the transfer plan from the targets connected at this moment.
     func refreshPartTransferPlan() {
         heldExportParts = relay.heldParts()
         partTransferPlan = ExportPartTransferPlanner.plan(
             replication: archivePlan,
-            connectedDriveIDs: Set(connectedMounts.keys),
+            connectedDriveIDs: Set(reachablePaths.keys),
             heldParts: heldExportParts,
             availableHoldingBytes: relay.availableBytes
         )
@@ -233,8 +285,8 @@ final class AppStore: ObservableObject {
         activeTransferControl?.cancel()
     }
 
-    /// Moves export parts until every part lives on as many drives as the
-    /// policy asks for, using whatever drives are plugged in right now.
+    /// Moves export parts until every part lives on as many targets as the
+    /// policy asks for, using whatever targets are plugged in right now.
     ///
     /// The two-drive case is the whole point: a part that exists only on drive
     /// A can reach drive B directly when both are connected, and by way of the
@@ -344,8 +396,8 @@ final class AppStore: ObservableObject {
         let partID = "\(transfer.setID)-\(transfer.partNumber)"
         let part = archivePlan.parts.first { $0.id == partID }
 
-        func driveDestination(_ driveID: UUID) -> URL? {
-            guard let mount = connectedMounts[driveID] else { return nil }
+        func driveDestination(_ targetID: UUID) -> URL? {
+            guard let mount = reachablePaths[targetID] else { return nil }
             return ExportPartRelay.destinationDirectory(onMount: mount)
                 .appendingPathComponent("\(transfer.displayName).zip")
         }
@@ -358,12 +410,12 @@ final class AppStore: ObservableObject {
             return ResolvedTransfer(
                 sourceURL: source.url,
                 destinationURL: destination,
-                destinationLabel: drivesByID[to]?.name ?? "the other drive",
+                destinationLabel: targetsByID[to]?.name ?? "the other drive",
                 donorDriveID: from,
                 recipientDriveID: to,
                 sourceArchiveID: source.id,
                 heldPart: nil,
-                explanation: "Both drives are connected, so the part goes straight across."
+                explanation: "Both targets are connected, so the part goes straight across."
             )
 
         case .driveToHoldingArea(let from, let intendedFor):
@@ -377,7 +429,7 @@ final class AppStore: ObservableObject {
                 recipientDriveID: nil,
                 sourceArchiveID: source.id,
                 heldPart: nil,
-                explanation: "\(drivesByID[intendedFor]?.name ?? "The other drive") is not connected, so the part waits on the Mac and moves across when it is."
+                explanation: "\(targetsByID[intendedFor]?.name ?? "The other drive") is not connected, so the part waits on the Mac and moves across when it is."
             )
 
         case .holdingAreaToDrive(let to):
@@ -388,7 +440,7 @@ final class AppStore: ObservableObject {
             return ResolvedTransfer(
                 sourceURL: held.url,
                 destinationURL: destination,
-                destinationLabel: drivesByID[to]?.name ?? "the drive",
+                destinationLabel: targetsByID[to]?.name ?? "the drive",
                 donorDriveID: nil,
                 recipientDriveID: to,
                 sourceArchiveID: nil,
@@ -449,13 +501,13 @@ final class AppStore: ObservableObject {
                     path: outcome.destination.path,
                     kind: .zip,
                     sizeBytes: outcome.sizeBytes,
-                    driveID: recipient,
+                    targetID: recipient,
                     discoveredAt: Date(),
                     importedAt: nil,
                     importBatchID: nil,
                     importedAssetCount: 0,
                     skippedDuplicateCount: 0,
-                    note: "Copied from \(step.donorDriveID.flatMap { drivesByID[$0]?.name } ?? "the Mac's holding area") to satisfy the \(redundancyPolicy.description) policy.",
+                    note: "Copied from \(step.donorDriveID.flatMap { targetsByID[$0]?.name } ?? "the Mac's holding area") to satisfy the \(redundancyPolicy.description) policy.",
                     exportSetID: transfer.setID,
                     partNumber: transfer.partNumber,
                     quickChecksum: outcome.quickChecksum
@@ -472,7 +524,7 @@ final class AppStore: ObservableObject {
         audit(
             .replication,
             "\(transfer.displayName) copied to \(step.destinationLabel) (\(Formatters.bytes.string(fromByteCount: outcome.sizeBytes))). The copy's quick checksum matches its source; a byte-for-byte comparison has not been run.",
-            driveID: step.recipientDriveID
+            targetID: step.recipientDriveID
         )
     }
 
@@ -481,7 +533,7 @@ final class AppStore: ObservableObject {
     /// Deliberately per-part rather than one combined set: an asset is only
     /// present on a drive that holds *its own* part. Treating every covered
     /// asset as present on every drive holding *any* satisfied part would
-    /// claim redundancy that does not exist the moment the drives hold
+    /// claim redundancy that does not exist the moment the targets hold
     /// different subsets of the export.
     private func assetIDsByExportPart() -> [String: Set<UUID>] {
         // Identify a part by its stem — `takeout-<set>-<part>`. That appears
@@ -502,13 +554,13 @@ final class AppStore: ObservableObject {
     }
 
     /// Cancels per-asset copies for content whose export part is already on
-    /// two drives, and records the second copy. Twelve zips existing twice is
+    /// two targets, and records the second copy. Twelve zips existing twice is
     /// the policy being met; re-copying 24,000 files into a drive that already
     /// holds them is not work, it is waste.
     func applyArchiveLevelRedundancy() {
-        let managedIDs = Set(drives.map(\.id))
+        let managedIDs = Set(targets.map(\.id))
         archivePlan = ArchiveReplicationPlanner.plan(
-            archives: takeoutArchives, managedDriveIDs: managedIDs, policy: redundancyPolicy
+            archives: takeoutArchives, managedTargetIDs: managedIDs, policy: redundancyPolicy
         )
         guard !archivePlan.partsMeetingPolicy.isEmpty else { return }
 
@@ -527,16 +579,16 @@ final class AppStore: ObservableObject {
                     guard let assetIDs = assetsByPart[part.displayName], !assetIDs.isEmpty else { continue }
                     covered.formUnion(assetIDs)
                     let backing = ReplicationService.archivePartPrefix + part.displayName
-                    for driveID in part.driveIDs where managedIDs.contains(driveID) {
+                    for targetID in part.targetIDs where managedIDs.contains(targetID) {
                         for assetID in assetIDs {
-                            let existing = replicasByAssetID[assetID]?.first { $0.driveID == driveID }
+                            let existing = replicasByAssetID[assetID]?.first { $0.targetID == targetID }
                             // Never overwrite a replica already established by
                             // reading the bytes; this is the weaker claim.
                             if existing?.state == .present { continue }
                             if existing?.state == .pending { pendingCleared += 1 }
-                            try catalog.upsertReplicaState(DriveReplicaState(
+                            try catalog.upsertReplicaState(TargetReplicaState(
                                 assetID: assetID,
-                                driveID: driveID,
+                                targetID: targetID,
                                 state: .present,
                                 relativePath: backing,
                                 lastVerifiedAt: nil
@@ -555,7 +607,7 @@ final class AppStore: ObservableObject {
             guard !covered.isEmpty else { return }
             audit(
                 .replication,
-                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist on two drives, covering \(covered.count) asset(s). Recorded \(claimed) second cop(ies) against the parts holding them, replacing \(pendingCleared) pending entr(ies), and withdrew \(cancelled) file copies that are no longer needed."
+                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist on two targets, covering \(covered.count) asset(s). Recorded \(claimed) second cop(ies) against the parts holding them, replacing \(pendingCleared) pending entr(ies), and withdrew \(cancelled) file copies that are no longer needed."
             )
             loadAll()
         } catch {
@@ -573,9 +625,9 @@ final class AppStore: ObservableObject {
     /// when certainty is wanted.
     func spotCheckExportParts() {
         guard takeoutActivity == nil, !isImporting else { return }
-        let managedIDs = Set(drives.map(\.id))
+        let managedIDs = Set(targets.map(\.id))
         archivePlan = ArchiveReplicationPlanner.plan(
-            archives: takeoutArchives, managedDriveIDs: managedIDs, policy: redundancyPolicy
+            archives: takeoutArchives, managedTargetIDs: managedIDs, policy: redundancyPolicy
         )
         let candidates = archivePlan.partsMeetingPolicy.filter { part in
             part.copies.values.contains { $0.kind == .zip }
@@ -600,7 +652,7 @@ final class AppStore: ObservableObject {
                     note: "quick comparison"
                 )
                 var checksums: [UUID: String] = [:]
-                for (driveID, archiveConst) in part.copies where archiveConst.kind == .zip {
+                for (targetID, archiveConst) in part.copies where archiveConst.kind == .zip {
                     var archive = archiveConst
                     if archive.quickChecksum == nil {
                         guard let value = try? await Task.detached(priority: .utility, operation: {
@@ -612,20 +664,20 @@ final class AppStore: ObservableObject {
                             takeoutArchives[at] = archive
                         }
                     }
-                    checksums[driveID] = archive.quickChecksum
+                    checksums[targetID] = archive.quickChecksum
                 }
                 guard checksums.count >= redundancyPolicy.desiredCopies else { continue }
 
                 if Set(checksums.values).count == 1 {
-                    assetsConfirmed += markPartVerified(part, onDrives: Set(checksums.keys))
+                    assetsConfirmed += markPartVerified(part, onTargets: Set(checksums.keys))
                     agreed += 1
                 } else {
                     disagreed.append(part.displayName)
-                    markPartMismatched(part, onDrives: Set(checksums.keys))
+                    markPartMismatched(part, onTargets: Set(checksums.keys))
                 }
             }
 
-            var message = "Spot check: \(agreed) export part(s) matched across drives on length and sampled content, covering \(assetsConfirmed) asset(s). This is a fast check, not a full byte-for-byte comparison."
+            var message = "Spot check: \(agreed) export part(s) matched across targets on length and sampled content, covering \(assetsConfirmed) asset(s). This is a fast check, not a full byte-for-byte comparison."
             if !disagreed.isEmpty {
                 message += " \(disagreed.count) part(s) DIFFER and are flagged: \(disagreed.joined(separator: ", "))."
             }
@@ -638,15 +690,15 @@ final class AppStore: ObservableObject {
     /// Confirms redundancy by comparing whole-file checksums of the export
     /// parts, rather than reading every asset inside them.
     ///
-    /// If two drives hold byte-identical copies of a part, everything in that
+    /// If two targets hold byte-identical copies of a part, everything in that
     /// part is verifiably present on both — proved by a handful of file hashes
     /// instead of decompressing tens of thousands of entries. One sequential
     /// read per part replaces per-asset checking entirely.
     func verifyExportPartsByChecksum() {
         guard takeoutActivity == nil, !isImporting else { return }
-        let managedIDs = Set(drives.map(\.id))
+        let managedIDs = Set(targets.map(\.id))
         archivePlan = ArchiveReplicationPlanner.plan(
-            archives: takeoutArchives, managedDriveIDs: managedIDs, policy: redundancyPolicy
+            archives: takeoutArchives, managedTargetIDs: managedIDs, policy: redundancyPolicy
         )
         // Only parts whose copies are all reachable can be compared now.
         let candidates = archivePlan.partsMeetingPolicy.filter { part in
@@ -671,30 +723,30 @@ final class AppStore: ObservableObject {
                     note: "comparing copies by checksum"
                 )
                 var hashes: [UUID: String] = [:]
-                for (driveID, archive) in part.copies {
+                for (targetID, archive) in part.copies {
                     // Folders have no single-file checksum; this compares parts
                     // stored as archives.
                     guard archive.kind == .zip else { continue }
                     guard let hash = await fingerprintZipIfNeeded(archive) else { continue }
-                    hashes[driveID] = hash
+                    hashes[targetID] = hash
                 }
                 guard hashes.count >= redundancyPolicy.desiredCopies else { continue }
 
                 if Set(hashes.values).count == 1 {
-                    assetsConfirmed += markPartVerified(part, onDrives: Set(hashes.keys))
+                    assetsConfirmed += markPartVerified(part, onTargets: Set(hashes.keys))
                     verifiedParts += 1
                 } else {
                     // Same name and size, different bytes: one copy is damaged
                     // or is not the part it claims to be. Say so rather than
                     // treating it as protection.
                     mismatchedParts.append(part.displayName)
-                    markPartMismatched(part, onDrives: Set(hashes.keys))
+                    markPartMismatched(part, onTargets: Set(hashes.keys))
                 }
             }
 
-            var message = "Checksum check: \(verifiedParts) export part(s) confirmed identical across drives, covering \(assetsConfirmed) asset(s)."
+            var message = "Checksum check: \(verifiedParts) export part(s) confirmed identical across targets, covering \(assetsConfirmed) asset(s)."
             if !mismatchedParts.isEmpty {
-                message += " \(mismatchedParts.count) part(s) DIFFER between drives and are flagged: \(mismatchedParts.joined(separator: ", "))."
+                message += " \(mismatchedParts.count) part(s) DIFFER between targets and are flagged: \(mismatchedParts.joined(separator: ", "))."
             }
             audit(.replication, message)
             takeoutActivity = nil
@@ -704,13 +756,13 @@ final class AppStore: ObservableObject {
 
     /// Records that every replica backed by this part has been confirmed.
     @discardableResult
-    private func markPartVerified(_ part: ExportPart, onDrives driveIDs: Set<UUID>) -> Int {
+    private func markPartVerified(_ part: ExportPart, onTargets targetIDs: Set<UUID>) -> Int {
         let stem = part.displayName
         let now = Date()
         var confirmed = 0
         do {
             try catalog.transaction {
-                for replica in replicaStates where driveIDs.contains(replica.driveID)
+                for replica in replicaStates where targetIDs.contains(replica.targetID)
                     && replica.state == .present
                     && (replica.relativePath?.contains(stem) ?? false) {
                     var updated = replica
@@ -725,12 +777,12 @@ final class AppStore: ObservableObject {
         return confirmed
     }
 
-    /// Flags replicas whose part disagrees between drives, so the difference
+    /// Flags replicas whose part disagrees between targets, so the difference
     /// surfaces as a problem rather than silently passing as redundancy.
-    private func markPartMismatched(_ part: ExportPart, onDrives driveIDs: Set<UUID>) {
+    private func markPartMismatched(_ part: ExportPart, onTargets targetIDs: Set<UUID>) {
         let stem = part.displayName
         try? catalog.transaction {
-            for replica in replicaStates where driveIDs.contains(replica.driveID)
+            for replica in replicaStates where targetIDs.contains(replica.targetID)
                 && replica.state == .present
                 && (replica.relativePath?.contains(stem) ?? false) {
                 var updated = replica
@@ -988,17 +1040,17 @@ final class AppStore: ObservableObject {
     /// announced an unmount, or because the user asked to eject. Long-running
     /// loops check this at their next safe boundary and stop cleanly, leaving
     /// resumable state behind rather than a wall of I/O errors.
-    @Published private(set) var quiescingDriveIDs: Set<UUID> = []
+    @Published private(set) var quiescingTargetIDs: Set<UUID> = []
     /// Drives with file work in flight right now. While true, the volume has
     /// open handles and will refuse to eject.
-    @Published private(set) var busyDriveIDs: Set<UUID> = []
+    @Published private(set) var busyTargetIDs: Set<UUID> = []
 
-    func isQuiescing(_ driveID: UUID) -> Bool { quiescingDriveIDs.contains(driveID) }
-    func isBusy(_ driveID: UUID) -> Bool { busyDriveIDs.contains(driveID) }
+    func isQuiescing(_ targetID: UUID) -> Bool { quiescingTargetIDs.contains(targetID) }
+    func isBusy(_ targetID: UUID) -> Bool { busyTargetIDs.contains(targetID) }
 
-    private func markBusy(_ driveID: UUID?, _ busy: Bool) {
-        guard let driveID else { return }
-        if busy { busyDriveIDs.insert(driveID) } else { busyDriveIDs.remove(driveID) }
+    private func markBusy(_ targetID: UUID?, _ busy: Bool) {
+        guard let targetID else { return }
+        if busy { busyTargetIDs.insert(targetID) } else { busyTargetIDs.remove(targetID) }
     }
 
     /// Which managed drive, if any, owns this path.
@@ -1007,40 +1059,40 @@ final class AppStore: ObservableObject {
     /// while a drive was attached is still attributed to it once unplugged —
     /// otherwise an archive on an absent drive counts towards no drive at all,
     /// and its copy silently stops counting towards the redundancy policy.
-    func driveID(forPath path: String) -> UUID? {
-        if let connected = connectedMounts.first(where: { path.hasPrefix($0.value.path + "/") })?.key {
+    func targetID(forPath path: String) -> UUID? {
+        if let connected = reachablePaths.first(where: { path.hasPrefix($0.value.path + "/") })?.key {
             return connected
         }
-        return drives.first { drive in
-            guard let mount = drive.lastMountPath else { return false }
+        return targets.first { drive in
+            guard let mount = drive.lastKnownPath else { return false }
             return path.hasPrefix(mount + "/")
         }?.id
     }
 
     /// Asks every running operation to let go of the drive. Returns without
     /// waiting; callers poll `isBusy` to know when the volume is releasable.
-    func beginQuiesce(_ driveID: UUID, reason: String) {
-        guard !quiescingDriveIDs.contains(driveID) else { return }
-        quiescingDriveIDs.insert(driveID)
-        if syncProgress?.driveID == driveID { cancelSync() }
-        pendingSyncDriveIDs.removeAll { $0 == driveID }
-        let name = drivesByID[driveID]?.name ?? "drive"
-        audit(.drive, "Releasing \(name): \(reason). In-flight work will stop at its next safe point.", driveID: driveID)
+    func beginQuiesce(_ targetID: UUID, reason: String) {
+        guard !quiescingTargetIDs.contains(targetID) else { return }
+        quiescingTargetIDs.insert(targetID)
+        if syncProgress?.targetID == targetID { cancelSync() }
+        pendingSyncTargetIDs.removeAll { $0 == targetID }
+        let name = targetsByID[targetID]?.name ?? "drive"
+        audit(.drive, "Releasing \(name): \(reason). In-flight work will stop at its next safe point.", targetID: targetID)
     }
 
-    func endQuiesce(_ driveID: UUID) {
-        quiescingDriveIDs.remove(driveID)
+    func endQuiesce(_ targetID: UUID) {
+        quiescingTargetIDs.remove(targetID)
     }
 
     /// macOS is about to unmount a volume: stop using it immediately so the
     /// eject can succeed instead of failing with "disk in use".
     private func handleWillUnmount(volumeURL: URL?) {
         guard let volumeURL else {
-            for driveID in connectedMounts.keys { beginQuiesce(driveID, reason: "a volume is unmounting") }
+            for targetID in reachablePaths.keys { beginQuiesce(targetID, reason: "a volume is unmounting") }
             return
         }
-        guard let driveID = connectedMounts.first(where: { $0.value.path == volumeURL.path })?.key else { return }
-        beginQuiesce(driveID, reason: "macOS is unmounting the volume")
+        guard let targetID = reachablePaths.first(where: { $0.value.path == volumeURL.path })?.key else { return }
+        beginQuiesce(targetID, reason: "macOS is unmounting the volume")
     }
 
     // MARK: - Catalog backup
@@ -1059,33 +1111,33 @@ final class AppStore: ObservableObject {
     /// been backed up, or whose backups were deleted, is caught immediately
     /// instead of waiting out an interval that has nothing to do with it.
     func backupCatalog(force: Bool = false) {
-        guard !connectedMounts.isEmpty else { return }
+        guard !reachablePaths.isEmpty else { return }
         let expected = assets.count
         var wrote = false
 
-        for (driveID, mountURL) in connectedMounts {
-            let driveName = drivesByID[driveID]?.name ?? "drive"
+        for (targetID, mountURL) in reachablePaths {
+            let targetName = targetsByID[targetID]?.name ?? "drive"
             if !force {
-                let newest = CatalogBackupService.listSnapshots(onMount: mountURL, driveID: driveID).first
+                let newest = CatalogBackupService.listSnapshots(onMount: mountURL, targetID: targetID).first
                 if let newest, Date().timeIntervalSince(newest.createdAt) < Self.catalogBackupInterval {
                     continue
                 }
             }
             do {
                 let snapshot = try CatalogBackupService.writeSnapshot(
-                    from: catalog, toMount: mountURL, driveID: driveID, expectedAssetCount: expected
+                    from: catalog, toMount: mountURL, targetID: targetID, expectedAssetCount: expected
                 )
                 wrote = true
                 audit(
                     .system,
-                    "Catalog snapshot written to \(driveName): \(snapshot.displayName) (\(expected) assets, \(Formatters.bytes.string(fromByteCount: snapshot.sizeBytes))), verified.",
-                    driveID: driveID
+                    "Catalog snapshot written to \(targetName): \(snapshot.displayName) (\(expected) assets, \(Formatters.bytes.string(fromByteCount: snapshot.sizeBytes))), verified.",
+                    targetID: targetID
                 )
             } catch {
                 // Recorded, not just shown: a backup that silently stopped
                 // working is the failure mode that matters most here.
-                audit(.system, "Catalog backup to \(driveName) FAILED: \(error.localizedDescription)", driveID: driveID)
-                lastError = "Catalog backup to \(driveName) failed: \(error.localizedDescription)"
+                audit(.system, "Catalog backup to \(targetName) FAILED: \(error.localizedDescription)", targetID: targetID)
+                lastError = "Catalog backup to \(targetName) failed: \(error.localizedDescription)"
             }
         }
         if wrote { refreshCatalogSnapshots() }
@@ -1093,8 +1145,8 @@ final class AppStore: ObservableObject {
 
     func refreshCatalogSnapshots() {
         var found: [UUID: [CatalogSnapshot]] = [:]
-        for (driveID, mountURL) in connectedMounts {
-            found[driveID] = CatalogBackupService.listSnapshots(onMount: mountURL, driveID: driveID)
+        for (targetID, mountURL) in reachablePaths {
+            found[targetID] = CatalogBackupService.listSnapshots(onMount: mountURL, targetID: targetID)
         }
         catalogSnapshots = found
     }
@@ -1111,6 +1163,7 @@ final class AppStore: ObservableObject {
     /// Never deletes anything the catalog depends on.
     func reconcileAfterRestart() {
         var repairs: [String] = []
+        withdrawUnverifiedCloudClaims(into: &repairs)
         do {
             // 1. Replication tasks interrupted mid-flight would otherwise sit
             // in a state the sync loop never picks up again.
@@ -1141,11 +1194,11 @@ final class AppStore: ObservableObject {
             // or discovered by an older build — count towards no drive at all,
             // so their copy silently stops satisfying the redundancy policy.
             // Attribute any whose path sits on a drive we know the mount of.
-            let unattributed = takeoutArchives.filter { $0.driveID == nil }
+            let unattributed = takeoutArchives.filter { $0.targetID == nil }
             var attributed = 0
             for var archive in unattributed {
-                guard let resolved = driveID(forPath: archive.path) else { continue }
-                archive.driveID = resolved
+                guard let resolved = targetID(forPath: archive.path) else { continue }
+                archive.targetID = resolved
                 try catalog.upsertTakeoutArchive(archive)
                 attributed += 1
             }
@@ -1193,7 +1246,7 @@ final class AppStore: ObservableObject {
             if orphanedStaging > 0 { repairs.append("removed \(orphanedStaging) orphaned staged file(s)") }
 
             // 4. Abandoned zip-extraction workspaces on the Mac (each can be
-            // many GB) and half-written `.extracting` folders on drives.
+            // many GB) and half-written `.extracting` folders on targets.
             let workArea = staging.rootURL.deletingLastPathComponent()
                 .appendingPathComponent("TakeoutWork", isDirectory: true)
             if let leftovers = try? FileManager.default.contentsOfDirectory(at: workArea, includingPropertiesForKeys: nil),
@@ -1237,7 +1290,7 @@ final class AppStore: ObservableObject {
     func loadAll() {
         do {
             assets = try catalog.fetchAssets()
-            drives = try catalog.fetchDrives()
+            targets = try catalog.fetchTargets()
             replicaStates = try catalog.fetchReplicaStates()
             replicationTasks = try catalog.fetchReplicationTasks()
             policyRules = try catalog.fetchPolicyRules()
@@ -1245,6 +1298,14 @@ final class AppStore: ObservableObject {
             importBatches = try catalog.fetchImportBatches()
             auditEvents = try catalog.fetchAuditEvents()
             takeoutArchives = try catalog.fetchTakeoutArchives()
+            // A policy asking for more copies than there are targets can never
+            // be met, and reports a healthy archive as 0% safe. Bound it to
+            // what exists; registering a target raises the ceiling again.
+            if redundancyPolicy.desiredCopies > maxSettableCopies {
+                let clamped = maxSettableCopies
+                audit(.policy, "Redundancy policy lowered to \(clamped) copy(s): that is how many targets are registered.")
+                redundancyPolicy = LocalRedundancyPolicy(desiredCopies: clamped)
+            }
             recomputeDerivedState()
         } catch {
             lastError = "Catalog load failed: \(error.localizedDescription)"
@@ -1258,7 +1319,7 @@ final class AppStore: ObservableObject {
             assets: assets,
             replicaStates: replicaStates,
             migrationJobs: migrationJobs,
-            drivesByID: drivesByID
+            targetsByID: targetsByID
         )
         protectionStates = ProtectionEvaluator.protectionStates(
             for: assets,
@@ -1268,21 +1329,53 @@ final class AppStore: ObservableObject {
 
         var breakdowns: [UUID: DriveContentBreakdown] = [:]
         for replica in replicaStates {
-            var breakdown = breakdowns[replica.driveID] ?? DriveContentBreakdown()
+            var breakdown = breakdowns[replica.targetID] ?? DriveContentBreakdown()
+            let asset = assetsByID[replica.assetID]
+            // A Live Photo's motion half is its own file to copy and verify,
+            // but not its own photo to count.
+            let isPhoto = !(asset?.isLivePhotoMotion ?? false)
             switch replica.state {
             case .present:
                 breakdown.present += 1
-                breakdown.presentBytes += assetsByID[replica.assetID]?.fileSize ?? 0
+                breakdown.presentBytes += asset?.fileSize ?? 0
+                if isPhoto { breakdown.presentPhotos += 1 }
             case .pending, .copying, .stale:
                 breakdown.pending += 1
+                if isPhoto { breakdown.pendingPhotos += 1 }
             case .drift:
                 breakdown.drift += 1
+                if isPhoto { breakdown.driftPhotos += 1 }
             case .missing:
                 breakdown.missing += 1
             }
-            breakdowns[replica.driveID] = breakdown
+            breakdowns[replica.targetID] = breakdown
         }
         driveBreakdowns = breakdowns
+
+        // One tree per target, over what the catalog records each of them
+        // holding. Built here so comparing two targets later is a single root
+        // comparison rather than a scan.
+        var leavesByTarget: [UUID: [MerkleTree.Leaf]] = [:]
+        for replica in replicaStates where replica.state == .present {
+            guard let asset = assetsByID[replica.assetID] else { continue }
+            leavesByTarget[replica.targetID, default: []].append(
+                MerkleTree.Leaf(key: replica.assetID.uuidString, digest: asset.contentHash)
+            )
+        }
+        targetTrees = leavesByTarget.mapValues { MerkleTree(leaves: $0) }
+
+        // The handful of directories every recorded path hangs from. Kept so
+        // the periodic check can stat three paths instead of twenty-four
+        // thousand: that is what makes checking often affordable at all.
+        var anchors: [UUID: Set<String>] = [:]
+        for replica in replicaStates where replica.state == .present {
+            guard let path = replica.relativePath,
+                  path.hasPrefix(ReplicaPathRepair.volumePrefix) else { continue }
+            let relative = String(path.dropFirst(ReplicaPathRepair.volumePrefix.count))
+            guard let anchor = ReplicaPathRepair.anchorPrefix(of: relative) else { continue }
+            anchors[replica.targetID, default: []].insert(anchor)
+        }
+        targetAnchors = anchors
 
         var batchSafe: [UUID: Bool] = [:]
         for asset in assets {
@@ -1297,40 +1390,43 @@ final class AppStore: ObservableObject {
         // after an operation that happens to recompute it.
         archivePlan = ArchiveReplicationPlanner.plan(
             archives: takeoutArchives,
-            managedDriveIDs: Set(drives.map(\.id)),
+            managedTargetIDs: Set(targets.map(\.id)),
             policy: redundancyPolicy
         )
         refreshPartTransferPlan()
     }
 
-    func rescanDrives() {
-        let previouslyConnected = Set(driveMonitor.connectedMounts.keys)
-        driveMonitor.rescan(managedDrives: drives)
+    func rescanTargets() {
+        let previouslyConnected = Set(targetMonitor.reachablePaths.keys)
+        targetMonitor.rescan(targets: targets)
         let now = Date()
-        for (driveID, mountURL) in driveMonitor.connectedMounts {
-            if let index = drives.firstIndex(where: { $0.id == driveID }) {
-                drives[index].lastSeenAt = now
-                drives[index].lastMountPath = mountURL.path
-                try? catalog.upsertDrive(drives[index])
+        for (targetID, mountURL) in targetMonitor.reachablePaths {
+            if let index = targets.firstIndex(where: { $0.id == targetID }) {
+                targets[index].lastSeenAt = now
+                targets[index].lastKnownPath = mountURL.path
+                try? catalog.upsertTarget(targets[index])
             }
         }
         // Availability-aware reaction: a drive that just appeared with pending
         // backlog starts syncing on its own (serially, behind any running sync),
         // and gets a Takeout sweep so newly landed archives surface unprompted.
-        let newlyConnected = Set(driveMonitor.connectedMounts.keys).subtracting(previouslyConnected)
-        for driveID in newlyConnected {
-            let name = drivesByID[driveID]?.name ?? "drive"
-            endQuiesce(driveID)
-            busyDriveIDs.remove(driveID)
-            audit(.drive, "\(name) connected.", driveID: driveID)
+        let newlyConnected = Set(targetMonitor.reachablePaths.keys).subtracting(previouslyConnected)
+        for targetID in newlyConnected {
+            let name = targetsByID[targetID]?.name ?? "drive"
+            endQuiesce(targetID)
+            busyTargetIDs.remove(targetID)
+            audit(.drive, "\(name) connected.", targetID: targetID)
+            // Before anything reads or copies: confirm the paths still resolve.
+            // Content the user moved must be repointed, not copied again.
+            repairReplicaPaths(for: targetID)
             // Reconcile before syncing. A drive that already holds this
             // content — the same Takeout export, say — should claim it in
             // place; starting the backlog first would copy over the top of
             // files that are already there.
             Task {
-                await autoTakeoutPipeline(driveID: driveID)
-                if autoSyncOnConnect && backlogCount(for: driveID) > 0 {
-                    syncDrive(driveID)
+                await autoTakeoutPipeline(targetID: targetID)
+                if autoSyncOnConnect && backlogCount(for: targetID) > 0 {
+                    syncDrive(targetID)
                 }
             }
         }
@@ -1341,10 +1437,10 @@ final class AppStore: ObservableObject {
     /// Asks (once per appearance, never for ignored volumes) whether a newly
     /// mounted unmanaged external volume should become managed local storage.
     private func promptForUnmanagedVolumes() {
-        let unmanaged = driveMonitor.availableVolumes.filter { volume in
+        let unmanaged = targetMonitor.availableVolumes.filter { volume in
             volume.isRemovable
                 && volume.url.path.hasPrefix("/Volumes/")
-                && DriveMonitor.match(volume: volume, against: drives) == nil
+                && TargetMonitor.match(volume: volume, against: targets) == nil
         }
         for volume in unmanaged {
             let key = volume.volumeUUID ?? volume.url.path
@@ -1363,8 +1459,8 @@ final class AppStore: ObservableObject {
         connectPrompt = nil
     }
 
-    private func audit(_ category: AuditCategory, _ message: String, assetID: UUID? = nil, driveID: UUID? = nil) {
-        let event = AuditEvent(id: UUID(), at: Date(), category: category, message: message, assetID: assetID, driveID: driveID)
+    private func audit(_ category: AuditCategory, _ message: String, assetID: UUID? = nil, targetID: UUID? = nil) {
+        let event = AuditEvent(id: UUID(), at: Date(), category: category, message: message, assetID: assetID, targetID: targetID)
         do {
             try catalog.appendAuditEvent(event)
         } catch {
@@ -1391,9 +1487,9 @@ final class AppStore: ObservableObject {
             // A folder chosen from a managed drive counts as that drive's copy.
             let replicaContext = files.first
                 .flatMap { file in
-                    connectedMounts.first { file.path.hasPrefix($0.value.path + "/") }
+                    reachablePaths.first { file.path.hasPrefix($0.value.path + "/") }
                 }
-                .map { (driveID: $0.key, mountPath: $0.value.path) }
+                .map { (targetID: $0.key, mountPath: $0.value.path) }
             let result = await ImportService.importFiles(
                 files,
                 sourceDescription: sourceDescription,
@@ -1408,28 +1504,28 @@ final class AppStore: ObservableObject {
 
     /// Persists imported assets and queues their replication backlog.
     /// Local-resident assets owe a replica to every managed drive; sync
-    /// happens whenever the drives appear. A drive whose replica is already
+    /// happens whenever the targets appear. A drive whose replica is already
     /// satisfied by the import source itself (archive-backed, e.g. a Takeout
     /// folder on that drive) records the verified in-place replica instead of
     /// queuing a duplicate copy onto the same disk.
     @discardableResult
     private func persistImportedAssets(
         _ imported: [Asset],
-        archiveBacked: [UUID: DriveReplicaState] = [:]
-    ) throws -> [DriveReplicaState] {
-        var written: [DriveReplicaState] = []
+        archiveBacked: [UUID: TargetReplicaState] = [:]
+    ) throws -> [TargetReplicaState] {
+        var written: [TargetReplicaState] = []
         for asset in imported {
             try catalog.upsertAsset(asset)
             if asset.residency == .local {
-                for drive in drives {
-                    if let backed = archiveBacked[asset.id], backed.driveID == drive.id {
+                for drive in targets {
+                    if let backed = archiveBacked[asset.id], backed.targetID == drive.id {
                         try catalog.upsertReplicaState(backed)
                         written.append(backed)
                     } else {
-                        try enqueueTask(assetID: asset.id, driveID: drive.id, action: .copy)
-                        let pending = DriveReplicaState(
+                        try enqueueTask(assetID: asset.id, targetID: drive.id, action: .copy)
+                        let pending = TargetReplicaState(
                             assetID: asset.id,
-                            driveID: drive.id,
+                            targetID: drive.id,
                             state: .pending,
                             relativePath: nil,
                             lastVerifiedAt: nil
@@ -1449,7 +1545,7 @@ final class AppStore: ObservableObject {
     /// would be quadratic — this appends just what was added, so the Library
     /// fills in as files are hashed. Canonical ordering and full derived state
     /// are restored by the `loadAll()` at the end of the import.
-    private func publishImportedAssets(_ imported: [Asset], replicas: [DriveReplicaState]) {
+    private func publishImportedAssets(_ imported: [Asset], replicas: [TargetReplicaState]) {
         guard !imported.isEmpty else { return }
         assets.append(contentsOf: imported)
         replicaStates.append(contentsOf: replicas)
@@ -1469,6 +1565,7 @@ final class AppStore: ObservableObject {
             try catalog.upsertImportBatch(result.batch)
             try persistImportedAssets(result.importedAssets, archiveBacked: result.archiveBackedReplicas)
             audit(.importEvent, "Imported \(result.importedAssets.count) asset(s) from \(result.batch.sourcePath) (\(result.duplicateFilenames.count) exact duplicate(s) skipped, \(result.failures.count) failure(s)).")
+            openPolicyMigrations(result.cloudPlacements)
             if !result.importedAssets.isEmpty {
                 reopenLivePhotoChecks(forNewlyImported: result.importedAssets)
                 recoverCaptureDates()
@@ -1484,11 +1581,11 @@ final class AppStore: ObservableObject {
         loadAll()
     }
 
-    private func enqueueTask(assetID: UUID, driveID: UUID, action: ReplicationAction) throws {
+    private func enqueueTask(assetID: UUID, targetID: UUID, action: ReplicationAction) throws {
         let task = ReplicationTask(
             id: UUID(),
             assetID: assetID,
-            driveID: driveID,
+            targetID: targetID,
             action: action,
             state: .queued,
             queuedAt: Date(),
@@ -1503,11 +1600,11 @@ final class AppStore: ObservableObject {
     /// Scans a root (drive mount or chosen folder) for Takeout exports and
     /// records new finds in the catalog. The archives themselves are left
     /// untouched wherever they live.
-    func scanForTakeout(rootURL: URL, driveID: UUID?) {
-        Task { await performTakeoutScan(rootURL: rootURL, driveID: driveID) }
+    func scanForTakeout(rootURL: URL, targetID: UUID?) {
+        Task { await performTakeoutScan(rootURL: rootURL, targetID: targetID) }
     }
 
-    private func performTakeoutScan(rootURL: URL, driveID: UUID?) async {
+    private func performTakeoutScan(rootURL: URL, targetID: UUID?) async {
         guard takeoutActivity == nil else { return }
         takeoutActivity = TakeoutActivity(phase: .scanning, detail: rootURL.lastPathComponent)
         let knownByPath = Dictionary(uniqueKeysWithValues: takeoutArchives.map { ($0.path, $0) })
@@ -1530,7 +1627,7 @@ final class AppStore: ObservableObject {
                     // Scanning a folder rather than a drive passes no drive at
                     // all, and an archive with no drive is invisible to
                     // replication planning — its copy simply does not count.
-                    let attributedDriveID = self.driveID(forPath: discovered.path) ?? driveID
+                    let attributedDriveID = self.targetID(forPath: discovered.path) ?? targetID
 
                     if var existing = knownByPath[discovered.path] {
                         // Re-scan refreshes what detection can learn (size,
@@ -1539,12 +1636,12 @@ final class AppStore: ObservableObject {
                         let changed = existing.sizeBytes != discovered.sizeBytes
                             || existing.exportSetID != discovered.exportSetID
                             || existing.partNumber != discovered.partNumber
-                            || (existing.driveID == nil && attributedDriveID != nil)
+                            || (existing.targetID == nil && attributedDriveID != nil)
                         if changed {
                             existing.sizeBytes = discovered.sizeBytes
                             existing.exportSetID = discovered.exportSetID
                             existing.partNumber = discovered.partNumber
-                            existing.driveID = existing.driveID ?? attributedDriveID
+                            existing.targetID = existing.targetID ?? attributedDriveID
                             try catalog.upsertTakeoutArchive(existing)
                             refreshedCount += 1
                         }
@@ -1554,7 +1651,7 @@ final class AppStore: ObservableObject {
                             path: discovered.path,
                             kind: discovered.kind,
                             sizeBytes: discovered.sizeBytes,
-                            driveID: attributedDriveID,
+                            targetID: attributedDriveID,
                             discoveredAt: Date(),
                             importedAt: nil,
                             importBatchID: nil,
@@ -1567,7 +1664,7 @@ final class AppStore: ObservableObject {
                         newCount += 1
                     }
                 }
-            audit(.importEvent, "Takeout scan of \(rootURL.path): \(found.count) archive(s) found, \(newCount) new, \(refreshedCount) refreshed.", driveID: driveID)
+            audit(.importEvent, "Takeout scan of \(rootURL.path): \(found.count) archive(s) found, \(newCount) new, \(refreshedCount) refreshed.", targetID: targetID)
         } catch {
             lastError = "Recording Takeout scan results failed: \(error.localizedDescription)"
         }
@@ -1575,21 +1672,20 @@ final class AppStore: ObservableObject {
         loadAll()
     }
 
-    func importTakeoutArchive(_ archiveID: UUID, assumeStillInGoogle: Bool) {
-        importTakeoutArchives([archiveID], assumeStillInGoogle: assumeStillInGoogle)
+    func importTakeoutArchive(_ archiveID: UUID) {
+        importTakeoutArchives([archiveID])
     }
 
     /// Imports one or more discovered archives — typically the parts of one
     /// split-download export set — serially, as a single import batch with
-    /// cross-part duplicate detection. When `assumeStillInGoogle` is true, the
-    /// imported assets are marked present in Google Cloud too, and one
-    /// GoogleCloud → Local migration job (already at Verifying Target) covers
-    /// the whole set until the user confirms deletion from Google Photos.
-    func importTakeoutArchives(_ archiveIDs: [UUID], assumeStillInGoogle: Bool) {
-        Task { await performTakeoutImport(archiveIDs, assumeStillInGoogle: assumeStillInGoogle) }
+    /// cross-part duplicate detection. Imported assets record local presence
+    /// only: the export proves the content was in Google when it was made, and
+    /// the app has no account to ask about now.
+    func importTakeoutArchives(_ archiveIDs: [UUID]) {
+        Task { await performTakeoutImport(archiveIDs) }
     }
 
-    private func performTakeoutImport(_ archiveIDs: [UUID], assumeStillInGoogle: Bool) async {
+    private func performTakeoutImport(_ archiveIDs: [UUID]) async {
         guard !isImporting, takeoutActivity == nil else { return }
         let targets = takeoutArchives
             .filter { archiveIDs.contains($0.id) && !$0.isImported }
@@ -1619,7 +1715,6 @@ final class AppStore: ObservableObject {
         var failureTotal = 0
         var abortedAt: String?
         /// Covers the temporary Google+Local overlap; grown chunk by chunk.
-        var overlapJobID: UUID?
 
         // Write the batch row before any asset references it. Previously this
         // happened only after every part finished, so an interrupted import
@@ -1656,9 +1751,9 @@ final class AppStore: ObservableObject {
                 }.value
                 // An extracted folder on a connected managed drive doubles as
                 // that drive's replica — the disk already holds the bytes.
-                let replicaContext: (driveID: UUID, mountPath: String)? = archive.kind == .folder
-                    ? connectedMounts.first { archive.path.hasPrefix($0.value.path + "/") }
-                        .map { (driveID: $0.key, mountPath: $0.value.path) }
+                let replicaContext: (targetID: UUID, mountPath: String)? = archive.kind == .folder
+                    ? reachablePaths.first { archive.path.hasPrefix($0.value.path + "/") }
+                        .map { (targetID: $0.key, mountPath: $0.value.path) }
                     : nil
                 // Import the part in chunks so assets reach the catalog — and
                 // the Library — while the rest of the part is still hashing.
@@ -1686,7 +1781,7 @@ final class AppStore: ObservableObject {
                 // unplugged or being released, stop at this chunk boundary.
                 // The checkpoint written by the previous chunk makes the part
                 // resumable, so stopping costs nothing but the current chunk.
-                let sourceDriveID = driveID(forPath: archive.path)
+                let sourceDriveID = targetID(forPath: archive.path)
                 markBusy(sourceDriveID, true)
                 defer { markBusy(sourceDriveID, false) }
 
@@ -1694,20 +1789,21 @@ final class AppStore: ObservableObject {
                     Array(partFiles[$0..<min($0 + Self.importChunkSize, partFiles.count)])
                 }) {
                     if let sourceDriveID,
-                       connectedMounts[sourceDriveID] == nil || isQuiescing(sourceDriveID) {
-                        let why = connectedMounts[sourceDriveID] == nil ? "disconnected" : "being released"
+                       reachablePaths[sourceDriveID] == nil || isQuiescing(sourceDriveID) {
+                        let why = reachablePaths[sourceDriveID] == nil ? "disconnected" : "being released"
                         audit(.importEvent, "Import of \(archive.displayName) stopped at \(processedFiles) of \(partFiles.count) file(s): the drive is \(why). It will resume from here.")
                         abortedAt = archive.displayName
                         break
                     }
                     let hashSnapshot = knownHashes
+                    let rulesSnapshot = policyRules
                     let result = await Task.detached(priority: .utility) {
                         await TakeoutImporter.importMedia(
                             from: workspace,
                             archiveName: archive.displayName,
                             knownContentHashes: hashSnapshot,
                             staging: stagingStore,
-                            assumeStillInGoogle: assumeStillInGoogle,
+                            policyRules: rulesSnapshot,
                             batchID: batchID,
                             replicaContext: replicaContext,
                             fileURLs: chunk
@@ -1731,7 +1827,7 @@ final class AppStore: ObservableObject {
                     batch.duplicateCount = duplicateTotal + result.duplicateFilenames.count
                     batch.failedCount = failureTotal + result.failures.count
                     let batchSnapshot = batch
-                    let replicas = try catalog.transaction { () -> [DriveReplicaState] in
+                    let replicas = try catalog.transaction { () -> [TargetReplicaState] in
                         let written = try persistImportedAssets(
                             result.importedAssets,
                             archiveBacked: result.archiveBackedReplicas
@@ -1741,18 +1837,9 @@ final class AppStore: ObservableObject {
                         return written
                     }
                     archive = checkpoint
-                    // When the user has stated the content is still in Google,
-                    // the two-domain overlap must be covered by a migration job
-                    // from the moment the first asset lands — otherwise an
-                    // interrupted import strands assets in a state the
-                    // violation scanner (correctly) calls illegal.
-                    if assumeStillInGoogle, !result.importedAssets.isEmpty {
-                        extendTakeoutMigration(
-                            jobID: &overlapJobID,
-                            with: result.importedAssets,
-                            label: setLabel
-                        )
-                    }
+                    // Assets land Local-only — that is all hashing proves. A
+                    // rule naming a cloud opens a pending migration instead.
+                    openPolicyMigrations(result.cloudPlacements)
                     publishImportedAssets(result.importedAssets, replicas: replicas)
 
                     knownHashes.formUnion(result.importedAssets.map(\.contentHash))
@@ -1782,8 +1869,8 @@ final class AppStore: ObservableObject {
                 archive.skippedDuplicateCount = partDuplicates
                 try catalog.upsertTakeoutArchive(archive)
                 if partArchiveBackedCount > 0, let context = replicaContext {
-                    let driveName = drivesByID[context.driveID]?.name ?? "drive"
-                    audit(.replication, "\(partArchiveBackedCount) asset(s) from \(archive.displayName) use their Takeout files as the \(driveName) replica — no duplicate copy queued for that drive.", driveID: context.driveID)
+                    let targetName = targetsByID[context.targetID]?.name ?? "drive"
+                    audit(.replication, "\(partArchiveBackedCount) asset(s) from \(archive.displayName) use their Takeout files as the \(targetName) replica — no duplicate copy queued for that drive.", targetID: context.targetID)
                 }
                 audit(.importEvent, "\(archive.displayName): imported \(partImported) asset(s), \(partDuplicates) duplicate(s) skipped.")
             } catch {
@@ -1820,40 +1907,6 @@ final class AppStore: ObservableObject {
         backupCatalog(force: true)
     }
 
-    /// Creates the covering GoogleCloud → Local job on the first chunk and
-    /// extends it on every later chunk, so every asset carrying a stated
-    /// cloud overlap is covered the instant it enters the catalog.
-    private func extendTakeoutMigration(jobID: inout UUID?, with imported: [Asset], label: String) {
-        do {
-            if let existingID = jobID,
-               var job = migrationJobs.first(where: { $0.id == existingID })
-                   ?? (try? catalog.fetchMigrationJobs())?.first(where: { $0.id == existingID }) {
-                job.assetIDs.append(contentsOf: imported.map(\.id))
-                job.updatedAt = Date()
-                try catalog.upsertMigrationJob(job)
-                if let index = migrationJobs.firstIndex(where: { $0.id == job.id }) {
-                    migrationJobs[index] = job
-                } else {
-                    migrationJobs.insert(job, at: 0)
-                }
-                return
-            }
-            var job = try MigrationService.createJob(
-                assetIDs: imported.map(\.id),
-                from: .googleCloud,
-                to: .local,
-                note: "Takeout import (\(label)). You stated these are still in Google Photos — the app cannot check that itself. Wait until the local copies have replicated to both drives, then delete the originals from Google to finish."
-            )
-            job = try MigrationService.start(job)
-            let effect = try MigrationService.markTargetCopyComplete(job, assets: imported)
-            try catalog.upsertMigrationJob(effect.job)
-            migrationJobs.insert(effect.job, at: 0)
-            jobID = effect.job.id
-        } catch {
-            lastError = "Could not track the Google overlap: \(error.localizedDescription)"
-        }
-    }
-
     /// Extracts zip parts in place on their drive (folder named
     /// zip-name-minus-.zip, joining the same export set). The zips stay
     /// untouched as pristine originals.
@@ -1869,8 +1922,8 @@ final class AppStore: ObservableObject {
         guard !targets.isEmpty else { return }
 
         for (index, archive) in targets.enumerated() {
-            let archiveDriveID = driveID(forPath: archive.path)
-            if let archiveDriveID, isQuiescing(archiveDriveID) || connectedMounts[archiveDriveID] == nil {
+            let archiveDriveID = targetID(forPath: archive.path)
+            if let archiveDriveID, isQuiescing(archiveDriveID) || reachablePaths[archiveDriveID] == nil {
                 audit(.importEvent, "Skipped extracting \(archive.displayName): its drive is unavailable.")
                 break
             }
@@ -1897,7 +1950,7 @@ final class AppStore: ObservableObject {
                     path: folderURL.path,
                     kind: .folder,
                     sizeBytes: size,
-                    driveID: archive.driveID,
+                    targetID: archive.targetID,
                     discoveredAt: Date(),
                     importedAt: nil,
                     importBatchID: nil,
@@ -1907,12 +1960,12 @@ final class AppStore: ObservableObject {
                     exportSetID: components?.setID,
                     partNumber: components?.part
                 ))
-                audit(.importEvent, "Extracted \(archive.displayName) on its drive; imports will use the folder.", driveID: archive.driveID)
+                audit(.importEvent, "Extracted \(archive.displayName) on its drive; imports will use the folder.", targetID: archive.targetID)
             } catch {
                 // Keep going: a part that can't be extracted (e.g. space) can
                 // still be imported from its zip via the Mac workspace.
                 lastError = "Extraction failed at \(archive.displayName): \(error.localizedDescription)"
-                audit(.importEvent, "Extraction of \(archive.displayName) failed (\(error.localizedDescription)); its zip will be imported the slower way.", driveID: archive.driveID)
+                audit(.importEvent, "Extraction of \(archive.displayName) failed (\(error.localizedDescription)); its zip will be imported the slower way.", targetID: archive.targetID)
             }
         }
         takeoutActivity = nil
@@ -1920,7 +1973,7 @@ final class AppStore: ObservableObject {
     }
 
     /// True when every asset of the batch is safe without its source archive:
-    /// Local assets fully replicated to both drives (cloud-resident assets
+    /// Local assets fully replicated to both targets (cloud-resident assets
     /// don't depend on local copies).
     /// O(1): the set is derived once per catalog change rather than scanning
     /// every asset per call — this is read from view bodies, once per row.
@@ -1941,20 +1994,20 @@ final class AppStore: ObservableObject {
             return
         }
         guard isBatchFullyReplicated(archive.importBatchID) else {
-            lastError = "Not deleting \(archive.displayName): its imported assets are not yet fully replicated to both drives."
+            lastError = "Not deleting \(archive.displayName): its imported assets are not yet fully replicated to both targets."
             return
         }
         // A folder whose files serve as a drive's archive-backed replicas is
         // load-bearing storage, not a redundant copy — deleting it would
         // destroy that drive's only copy of those assets.
-        if let (driveID, mount) = connectedMounts.first(where: { archive.path.hasPrefix($0.value.path + "/") }) {
+        if let (targetID, mount) = reachablePaths.first(where: { archive.path.hasPrefix($0.value.path + "/") }) {
             let folderRelative = ReplicationService.volumeBackedPrefix
                 + String(archive.path.dropFirst(mount.path.count + 1))
             let backingCount = replicaStates.filter {
-                $0.driveID == driveID && $0.state == .present && ($0.relativePath?.hasPrefix(folderRelative) ?? false)
+                $0.targetID == targetID && $0.state == .present && ($0.relativePath?.hasPrefix(folderRelative) ?? false)
             }.count
             if backingCount > 0 {
-                lastError = "Not deleting \(archive.displayName): its files are the \(drivesByID[driveID]?.name ?? "drive") replica for \(backingCount) asset(s). It is storage, not a redundant copy."
+                lastError = "Not deleting \(archive.displayName): its files are the \(targetsByID[targetID]?.name ?? "drive") replica for \(backingCount) asset(s). It is storage, not a redundant copy."
                 return
             }
         }
@@ -1973,7 +2026,7 @@ final class AppStore: ObservableObject {
                 try catalog.upsertTakeoutArchive(twin)
             }
             try catalog.deleteTakeoutArchive(id: archive.id)
-            audit(.system, "Deleted extracted folder \(archive.displayName) after verified replication; zip original retained.", driveID: archive.driveID)
+            audit(.system, "Deleted extracted folder \(archive.displayName) after verified replication; zip original retained.", targetID: archive.targetID)
             loadAll()
         } catch {
             lastError = "Folder deletion failed: \(error.localizedDescription)"
@@ -1987,24 +2040,24 @@ final class AppStore: ObservableObject {
     /// 3. Extract zips for genuinely new parts (space permitting).
     /// 4. Import whatever the catalog has never seen, the drive's own Takeout
     ///    files serving as its replicas.
-    private func autoTakeoutPipeline(driveID: UUID) async {
-        guard let mount = connectedMounts[driveID] else { return }
-        guard !takeoutPipelineActiveDriveIDs.contains(driveID),
-              !takeoutPipelineCompletedDriveIDs.contains(driveID)
+    private func autoTakeoutPipeline(targetID: UUID) async {
+        guard let mount = reachablePaths[targetID] else { return }
+        guard !takeoutPipelineActiveTargetIDs.contains(targetID),
+              !takeoutPipelineCompletedTargetIDs.contains(targetID)
         else { return }
-        takeoutPipelineActiveDriveIDs.insert(driveID)
+        takeoutPipelineActiveTargetIDs.insert(targetID)
         defer {
-            takeoutPipelineActiveDriveIDs.remove(driveID)
-            takeoutPipelineCompletedDriveIDs.insert(driveID)
+            takeoutPipelineActiveTargetIDs.remove(targetID)
+            takeoutPipelineCompletedTargetIDs.insert(targetID)
         }
 
-        await performTakeoutScan(rootURL: mount, driveID: driveID)
+        await performTakeoutScan(rootURL: mount, targetID: targetID)
         guard autoManageTakeout else { return }
 
         func onDrive() -> [TakeoutArchive] {
             takeoutArchives.filter { $0.path.hasPrefix(mount.path + "/") }
         }
-        // Sets span drives: drive B's part 3 zip and drive A's imported part 3
+        // Sets span targets: drive B's part 3 zip and drive A's imported part 3
         // folder are the same content.
         func globalSets() -> [String: [TakeoutArchive]] {
             Dictionary(grouping: takeoutArchives.filter { $0.exportSetID != nil }) { $0.exportSetID! }
@@ -2024,7 +2077,7 @@ final class AppStore: ObservableObject {
         // zip twin) would claim nothing at great cost.
         func driveIsMissingReplicas() -> Bool {
             let present = Set(
-                replicaStates.filter { $0.driveID == driveID && $0.state == .present }.map(\.assetID)
+                replicaStates.filter { $0.targetID == targetID && $0.state == .present }.map(\.assetID)
             )
             return assets.contains { $0.residency == .local && !present.contains($0.id) }
         }
@@ -2034,7 +2087,7 @@ final class AppStore: ObservableObject {
                 twin.exportSetID == setID
                     && twin.partNumber == archive.partNumber
                     && twin.isImported
-                    && twin.driveID == driveID
+                    && twin.targetID == targetID
             }
         }
 
@@ -2048,7 +2101,7 @@ final class AppStore: ObservableObject {
             for archive in onDrive() where !archive.isImported
                 && partImportedSomewhere(archive)
                 && !partAlreadyBackedByThisDrive(archive) {
-                await performTakeoutReconciliation(archive, driveID: driveID, mountURL: mount)
+                await performTakeoutReconciliation(archive, targetID: targetID, mountURL: mount)
                 if !driveIsMissingReplicas() { break }
             }
         }
@@ -2068,7 +2121,7 @@ final class AppStore: ObservableObject {
         }
         if !extractable.isEmpty {
             await performTakeoutExtraction(extractable.map(\.id))
-            await performTakeoutScan(rootURL: mount, driveID: driveID)
+            await performTakeoutScan(rootURL: mount, targetID: targetID)
         }
 
         // 4. Import genuinely new content, folders preferred per part.
@@ -2081,7 +2134,7 @@ final class AppStore: ObservableObject {
             // Never assume cloud presence: the app has no Google or Apple
             // account connection and cannot check. Automatic imports record
             // Local presence only — which is the one thing hashing proves.
-            await performTakeoutImport(toImport.map(\.id), assumeStillInGoogle: false)
+            await performTakeoutImport(toImport.map(\.id))
         }
 
         // Takeout splits Live Photos into a still and a movie; reunite them so
@@ -2137,16 +2190,16 @@ final class AppStore: ObservableObject {
 
     /// Claims a drive's existing Takeout content as its replicas (hash-verified
     /// in place, read-only) and settles the now-redundant copy backlog.
-    private func performTakeoutReconciliation(_ archiveConst: TakeoutArchive, driveID: UUID, mountURL: URL) async {
+    private func performTakeoutReconciliation(_ archiveConst: TakeoutArchive, targetID: UUID, mountURL: URL) async {
         guard takeoutActivity == nil, !isImporting else { return }
         var archive = archiveConst
-        let driveName = drivesByID[driveID]?.name ?? "drive"
+        let targetName = targetsByID[targetID]?.name ?? "drive"
         takeoutActivity = TakeoutActivity(
-            phase: .reconciling, detail: archive.displayName, note: "on \(driveName)"
+            phase: .reconciling, detail: archive.displayName, note: "on \(targetName)"
         )
 
         let assetIDsByHash = Dictionary(assets.map { ($0.contentHash, $0.id) }, uniquingKeysWith: { first, _ in first })
-        let present = Set(replicaStates.filter { $0.driveID == driveID && $0.state == .present }.map(\.assetID))
+        let present = Set(replicaStates.filter { $0.targetID == targetID && $0.state == .present }.map(\.assetID))
         let needing = Set(assets.filter { $0.residency == .local && !present.contains($0.id) }.map(\.id))
 
         var usedFastPath = false
@@ -2154,7 +2207,7 @@ final class AppStore: ObservableObject {
         if archive.kind == .folder {
             result = await Task.detached(priority: .utility) {
                 TakeoutReconciler.reconcileFolder(
-                    folderURL: archive.url, mountURL: mountURL, driveID: driveID,
+                    folderURL: archive.url, mountURL: mountURL, targetID: targetID,
                     assetIDsByHash: assetIDsByHash, assetsNeedingReplica: needing
                 )
             }.value
@@ -2181,7 +2234,7 @@ final class AppStore: ObservableObject {
                let fast = TakeoutReconciler.fastReconcileZip(
                    zipHash: zipHash,
                    zipRelativePath: zipRelative,
-                   driveID: driveID,
+                   targetID: targetID,
                    candidateDonors: donors,
                    folderTwins: folderTwins,
                    replicaStates: replicaStates,
@@ -2191,11 +2244,11 @@ final class AppStore: ObservableObject {
                 usedFastPath = true
             } else {
                 takeoutActivity = TakeoutActivity(
-                    phase: .reconciling, detail: archive.displayName, note: "entry-by-entry on \(driveName)"
+                    phase: .reconciling, detail: archive.displayName, note: "entry-by-entry on \(targetName)"
                 )
                 result = await Task.detached(priority: .utility) {
                     TakeoutReconciler.reconcileZip(
-                        zipURL: archive.url, mountURL: mountURL, driveID: driveID,
+                        zipURL: archive.url, mountURL: mountURL, targetID: targetID,
                         assetIDsByHash: assetIDsByHash, assetsNeedingReplica: needing
                     )
                 }.value
@@ -2206,13 +2259,13 @@ final class AppStore: ObservableObject {
             for replica in result.claimedReplicas {
                 try catalog.upsertReplicaState(replica)
             }
-            try settleQueuedCopyTasks(assetIDs: Set(result.claimedReplicas.map(\.assetID)), driveID: driveID)
+            try settleQueuedCopyTasks(assetIDs: Set(result.claimedReplicas.map(\.assetID)), targetID: targetID)
             archive.importedAt = Date()
             archive.importedAssetCount = result.claimedReplicas.count
-            archive.note = "Reconciled: existing content on \(driveName) claimed as \(result.claimedReplicas.count) verified replica(s); nothing was copied."
+            archive.note = "Reconciled: existing content on \(targetName) claimed as \(result.claimedReplicas.count) verified replica(s); nothing was copied."
             try catalog.upsertTakeoutArchive(archive)
             let method = usedFastPath ? "checksum match with a known identical zip" : "in-place hashing"
-            audit(.replication, "\(archive.displayName) on \(driveName): \(result.claimedReplicas.count) of \(result.scannedFileCount) file(s) claimed as in-place replicas via \(method); queued copies cancelled.", driveID: driveID)
+            audit(.replication, "\(archive.displayName) on \(targetName): \(result.claimedReplicas.count) of \(result.scannedFileCount) file(s) claimed as in-place replicas via \(method); queued copies cancelled.", targetID: targetID)
         } catch {
             lastError = "Reconciliation persistence failed: \(error.localizedDescription)"
         }
@@ -2222,9 +2275,9 @@ final class AppStore: ObservableObject {
 
     /// Marks queued copy tasks for these assets on this drive as completed —
     /// their replica is satisfied in place, so nothing needs copying.
-    private func settleQueuedCopyTasks(assetIDs: Set<UUID>, driveID: UUID) throws {
+    private func settleQueuedCopyTasks(assetIDs: Set<UUID>, targetID: UUID) throws {
         let settled = replicationTasks.filter {
-            $0.driveID == driveID && $0.action == .copy && $0.state == .queued && assetIDs.contains($0.assetID)
+            $0.targetID == targetID && $0.action == .copy && $0.state == .queued && assetIDs.contains($0.assetID)
         }
         for var task in settled {
             task.state = .completed
@@ -2238,24 +2291,41 @@ final class AppStore: ObservableObject {
     /// every import; nothing ever checked it. This clears the claim (and any
     /// migration job that only existed to cover it), leaving Local presence —
     /// the one thing hashing proves.
-    func clearUnverifiedCloudPresence(domain: ResidencyDomain) {
-        guard domain != .local else { return }
-        let affected = assets.filter {
-            $0.presence.contains(domain) && $0.cloudPresenceEvidence != .verified
+    /// Drops cloud-presence claims recorded by earlier versions, which asked
+    /// the user to assert presence the app could not check.
+    ///
+    /// Migrating them away rather than leaving them behind a manual purge is
+    /// the point: a claim with nothing behind it is not data worth keeping, and
+    /// parking it behind an extra click leaves the same unfounded claim in the
+    /// catalog for anything that reads it. Runs on every install, not just the
+    /// one whose catalog was patched by hand.
+    /// Deletes the cloud-resident placeholders seeded by earlier builds.
+    ///
+    /// Deleting assets is not something reconciliation does lightly, and this
+    /// is the one case where it is right: these rows describe no file on any
+    /// target, name a cloud the app has no way to ask about, and were written
+    /// by a seeder that no longer exists. They cannot be reconciled into
+    /// anything true, so leaving them means three permanent violations about
+    /// content that was never real.
+    private func withdrawUnverifiedCloudClaims(into repairs: inout [String]) {
+        for domain in ResidencyDomain.allCases where domain != .local {
+            let withdrawn = clearUnverifiedCloudPresence(domain: domain)
+            guard withdrawn > 0 else { continue }
+            repairs.append("withdrew \(withdrawn) unverified \(domain.displayName) presence claim(s) recorded by an earlier version")
         }
-        guard !affected.isEmpty else { return }
+    }
+
+    /// Returns how many claims were actually withdrawn — which is not every
+    /// unverified claim: one with no local copy behind it is left alone.
+    @discardableResult
+    func clearUnverifiedCloudPresence(domain: ResidencyDomain) -> Int {
+        guard domain != .local else { return 0 }
+        let affected = assets.filter { CloudClaimWithdrawal.isWithdrawable($0, domain: domain) }
+        guard !affected.isEmpty else { return 0 }
         do {
-            for var asset in affected {
-                asset.presence.set(domain, false)
-                asset.cloudPresenceEvidence = .none
-                asset.cloudPresenceCheckedAt = nil
-                if asset.residency == domain {
-                    // Residency must follow the content that actually exists.
-                    asset.residency = .local
-                    asset.residencySource = .manual
-                }
-                asset.updatedDate = Date()
-                try catalog.upsertAsset(asset)
+            for asset in affected {
+                guard let updated = CloudClaimWithdrawal.withdraw(domain, from: asset) else { continue }
+                try catalog.upsertAsset(updated)
             }
             let affectedIDs = Set(affected.map(\.id))
             for job in migrationJobs where job.state.isActive
@@ -2265,16 +2335,18 @@ final class AppStore: ObservableObject {
                     MigrationService.fail(job, reason: "\(domain.displayName) presence was never verified and has been withdrawn")
                 )
             }
-            audit(.violation, "Withdrew unverified \(domain.displayName) presence from \(affected.count) asset(s); the app has no \(domain.displayName) connection and never confirmed it.")
+            audit(.violation, "Withdrew unverified \(domain.displayName) presence from \(affected.count) asset(s) the app holds locally; it has no \(domain.displayName) connection and never confirmed the claim.")
             loadAll()
+            return affected.count
         } catch {
             lastError = "Could not clear unverified cloud presence: \(error.localizedDescription)"
+            return 0
         }
     }
 
     /// Assets carrying a cloud claim the app never verified.
     func unverifiedCloudPresenceCount(domain: ResidencyDomain) -> Int {
-        assets.filter { $0.presence.contains(domain) && $0.cloudPresenceEvidence != .verified }.count
+        assets.filter { CloudClaimWithdrawal.isUnverifiedClaim($0, domain: domain) }.count
     }
 
     func forgetTakeoutArchive(_ archiveID: UUID) {
@@ -2286,53 +2358,376 @@ final class AppStore: ObservableObject {
         }
     }
 
-    // MARK: - Drives
+    // MARK: - Targets
 
-    func registerDrive(volume: VolumeInfo, name: String) {
-        let driveID = UUID()
-        let token = UUID().uuidString
-        let marker = DriveMarker(driveID: driveID, markerToken: token, appName: "heykinn-clicks")
+    /// Registers a mounted external volume as a target.
+    func registerVolumeTarget(volume: VolumeInfo, name: String) {
+        if let storage = TargetStorage.of(volume.url),
+           let clash = existingTarget(sharing: storage) {
+            lastError = "\(clash.name) is already on this storage. Two copies on one device do not survive that device failing, so they count as one."
+            return
+        }
+        register(
+            name: name.isEmpty ? volume.name : name,
+            kind: .externalVolume,
+            rootURL: volume.url,
+            volumeUUID: volume.volumeUUID,
+            configuredPath: nil
+        )
+    }
+
+    /// Registers this machine as a target, holding its copy in the folder the
+    /// user picked. The folder says where; the device is what is being
+    /// registered — so a folder that turns out to live on an external drive is
+    /// refused, because that drive is a target in its own right and would
+    /// otherwise end up registered twice under two identities.
+    func registerHostDeviceTarget(at url: URL, name: String) {
+        let path = url.standardizedFileURL.path
+
+        guard let storage = TargetStorage.of(url) else {
+            lastError = "Could not work out which disk that folder is on, so it cannot be registered as a target."
+            return
+        }
+        guard storage.isHostDevice else {
+            lastError = "That folder is on \(storage.volumeURL.lastPathComponent), not on this machine's own disk. Register that drive as an external target instead — otherwise it would be registered twice under two identities."
+            return
+        }
+        // Staging is transit: content sitting only there is replicated nowhere,
+        // so a target inside it would have the app counting its own waiting
+        // room as a copy.
+        let stagingPath = staging.rootURL.standardizedFileURL.path
+        if path == stagingPath || path.hasPrefix(stagingPath + "/") || stagingPath.hasPrefix(path + "/") {
+            lastError = "That folder overlaps the app's staging area, which holds content no target has yet. Pick a folder outside it."
+            return
+        }
+        if TargetMonitor.readMarker(at: url) != nil {
+            lastError = "That folder already holds a target marker. Registering it again would give one place two identities."
+            return
+        }
+        // Redundancy means surviving a device failing, so two targets on one
+        // device are one copy — and the policy would count them as two.
+        if let clash = existingTarget(sharing: storage) {
+            lastError = "\(clash.name) is already on this storage. Two copies on one device do not survive that device failing, so they count as one."
+            return
+        }
+        // Registering seeds a copy task for every Local asset, so this is not a
+        // bookkeeping change: it is a decision to write the whole archive onto
+        // this disk. Say the size, and refuse rather than fill the boot volume.
+        let needed = localArchiveBytes
+        let available = TakeoutExtractor.availableCapacity(onVolumeOf: url) ?? 0
+        let reserve = ExportPartTransferPlanner.holdingAreaReserveBytes
+        if needed + reserve > available {
+            lastError = """
+            Not registering \(url.lastPathComponent): holding a copy here needs \
+            \(Formatters.bytes.string(fromByteCount: needed)) plus \
+            \(Formatters.bytes.string(fromByteCount: reserve)) kept free, and this disk has \
+            \(Formatters.bytes.string(fromByteCount: available)) available.
+            """
+            return
+        }
+
+        register(
+            name: name.isEmpty ? url.lastPathComponent : name,
+            kind: .hostDevice,
+            rootURL: url,
+            volumeUUID: nil,
+            configuredPath: path
+        )
+    }
+
+    /// What one full copy of the Local domain weighs. Live Photo motion halves
+    /// are their own files on disk, so they count here even though the Library
+    /// shows them as part of their still.
+    var localArchiveBytes: Int64 {
+        assets.filter { $0.residency == .local }.reduce(0) { $0 + $1.fileSize }
+    }
+
+    /// Drops a target from the registry, freeing its slot.
+    ///
+    /// Nothing on the target is deleted — forgetting says what the app manages,
+    /// not what exists, and registering it again re-adopts the content in
+    /// place. This is the way out of the registration cap: without it, a failed
+    /// drive would leave the archive unable to restore its own redundancy.
+    func forgetTarget(_ targetID: UUID) {
+        guard let target = targetsByID[targetID] else { return }
         do {
-            try DriveMonitor.writeMarker(marker, to: volume.url)
-            let drive = ManagedDrive(
-                id: driveID,
-                name: name.isEmpty ? volume.name : name,
-                volumeUUID: volume.volumeUUID,
+            try catalog.deleteTarget(id: targetID)
+            audit(.drive, "Forgot \(target.name). Its files were left untouched and the slot is free for a replacement.")
+            lastRotPatrol[targetID] = nil
+            lastAnchorCheck[targetID] = nil
+            loadAll()
+            rescanTargets()
+        } catch {
+            lastError = "Could not forget \(target.name): \(error.localizedDescription)"
+        }
+    }
+
+    /// A registered target already living on the same storage, if any. Checked
+    /// against where each target is reachable now, falling back to where it was
+    /// last seen so an absent drive is not quietly forgotten.
+    private func existingTarget(sharing storage: TargetStorage) -> ReplicationTarget? {
+        targets.first { target in
+            let candidate = reachablePaths[target.id]
+                ?? target.configuredPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
+                ?? target.lastKnownPath.map { URL(fileURLWithPath: $0, isDirectory: true) }
+            guard let candidate,
+                  let existing = TargetStorage.of(candidate) else { return false }
+            return existing.isSamePlace(as: storage)
+        }
+    }
+
+    private func register(
+        name: String,
+        kind: TargetKind,
+        rootURL: URL,
+        volumeUUID: String?,
+        configuredPath: String?
+    ) {
+        let targetID = UUID()
+        let token = UUID().uuidString
+        let marker = TargetMarker(targetID: targetID, markerToken: token, appName: "heykinn-clicks")
+        do {
+            try TargetMonitor.writeMarker(marker, to: rootURL)
+            let target = ReplicationTarget(
+                id: targetID,
+                name: name,
+                kind: kind,
+                volumeUUID: volumeUUID,
                 markerToken: token,
                 registeredAt: Date(),
                 lastSeenAt: Date(),
-                lastMountPath: volume.url.path,
-                replicaRootComponent: ManagedDrive.defaultReplicaRoot
+                lastKnownPath: rootURL.path,
+                configuredPath: configuredPath,
+                replicaRootComponent: ReplicationTarget.defaultReplicaRoot
             )
-            try catalog.upsertDrive(drive)
-            // Every existing Local asset owes this new drive a replica.
+            try catalog.upsertTarget(target)
+            // Every existing Local asset owes this new target a replica.
             for asset in assets where asset.residency == .local {
-                try enqueueTask(assetID: asset.id, driveID: driveID, action: .copy)
-                try catalog.upsertReplicaState(DriveReplicaState(
+                try enqueueTask(assetID: asset.id, targetID: targetID, action: .copy)
+                try catalog.upsertReplicaState(TargetReplicaState(
                     assetID: asset.id,
-                    driveID: driveID,
+                    targetID: targetID,
                     state: .pending,
                     relativePath: nil,
                     lastVerifiedAt: nil
                 ))
             }
-            audit(.drive, "Registered drive \(drive.name); backlog seeded for existing Local assets.", driveID: driveID)
+            audit(.drive, "Registered \(kind.displayName.lowercased()) target \(target.name); backlog seeded for existing Local assets.", targetID: targetID)
             loadAll()
-            rescanDrives()
+            rescanTargets()
         } catch {
-            lastError = "Drive registration failed: \(error.localizedDescription)"
+            lastError = "Target registration failed: \(error.localizedDescription)"
         }
     }
 
-    func backlogCount(for driveID: UUID) -> Int {
-        backlogSummary(for: driveID).total
+    /// Starts a sync for any reachable target that has work waiting.
+    ///
+    /// Auto-sync used to hang off the *connect* event alone, so work queued
+    /// while a target was already connected — an import finishing, a target
+    /// being registered, photos arriving from the Photos library — sat in the
+    /// queue until the next unplug and replug. The trigger belongs on the work
+    /// existing, not on the moment the target appeared.
+    func startDueSyncsIfIdle() {
+        guard autoSyncOnConnect, !isSyncing, !isImporting, !isTransferringParts else { return }
+        guard takeoutActivity == nil else { return }
+        for (targetID, _) in reachablePaths {
+            guard !isBusy(targetID), !isQuiescing(targetID) else { continue }
+            guard backlogCount(for: targetID) > 0 else { continue }
+            syncDrive(targetID)
+            return
+        }
+    }
+
+    /// How often the patrol reads a ration of files from a reachable target.
+    private static let rotPatrolInterval: TimeInterval = 30 * 60
+    private var lastRotPatrol: [UUID: Date] = [:]
+
+    /// Reads a small ration of the least recently checked replicas, in the
+    /// background, on a target that is otherwise idle.
+    ///
+    /// This is the only thing in the system that can find bit rot: comparing
+    /// trees compares recorded hashes, and a file whose bytes decayed still
+    /// matches everything the catalog knows about it. Nothing else will ever
+    /// notice, however long it sits there.
+    ///
+    /// Deliberately slow and small. It is not the basis for the verdict — an
+    /// asset the patrol has not reached still meets the policy — it is what
+    /// stops "meets the policy" from quietly ageing into a claim nobody has
+    /// checked in a year. It yields to any real work, because a background
+    /// check that competes with an import is worse than one that waits.
+    func runRotPatrolIfDue(now: Date = Date()) {
+        guard backgroundRotPatrol else { return }
+        guard !isSyncing, !isImporting, !isTransferringParts, takeoutActivity == nil else { return }
+
+        for (targetID, _) in reachablePaths {
+            guard !isBusy(targetID), !isQuiescing(targetID) else { continue }
+            if let last = lastRotPatrol[targetID],
+               now.timeIntervalSince(last) < Self.rotPatrolInterval { continue }
+            // Never queue behind work already waiting: the backlog is the
+            // user's copies, and those matter more than a re-read.
+            guard backlogCount(for: targetID) == 0 else { continue }
+
+            lastRotPatrol[targetID] = now
+            queueVerificationSweep(targetID, budget: .patrol, isPatrol: true)
+            // One target per pass; two drives reading at once is exactly the
+            // kind of background cost that gets noticed.
+            return
+        }
+    }
+
+    /// How often a reachable target's anchors are re-checked. Frequent enough
+    /// that content moved under a drive left plugged in is noticed in about a
+    /// minute; slow enough not to keep an external drive spinning for the sake
+    /// of three `stat` calls.
+    private static let anchorCheckInterval: TimeInterval = 60
+
+    /// The cheap periodic check: are the few directories the recorded paths
+    /// hang from still there?
+    ///
+    /// Comparing Merkle roots would not do this. Those roots are built from the
+    /// hashes the catalog recorded, so they cannot change because something
+    /// happened on disk — only because the catalog did. Answering "has anything
+    /// moved?" needs to touch the disk, and this is the cheapest touch there
+    /// is: a handful of `stat` calls, whatever the archive's size.
+    ///
+    /// Anything more thorough — a file gone from inside an intact directory, or
+    /// bytes edited in place — costs an enumeration or a read, which is the
+    /// sweep this design exists to avoid running on a timer.
+    func checkAnchorsIfDue(now: Date = Date()) {
+        for (targetID, mountURL) in reachablePaths {
+            if let last = lastAnchorCheck[targetID],
+               now.timeIntervalSince(last) < Self.anchorCheckInterval { continue }
+            lastAnchorCheck[targetID] = now
+
+            guard let anchors = targetAnchors[targetID], !anchors.isEmpty else { continue }
+            let moved = anchors.contains { anchor in
+                !FileManager.default.fileExists(atPath: mountURL.appendingPathComponent(anchor).path)
+            }
+            guard moved else { continue }
+            repairReplicaPaths(for: targetID)
+        }
+    }
+
+    /// Checks that a reachable target's recorded paths still resolve, and
+    /// repairs them when the content has simply moved.
+    ///
+    /// The trees cannot see this: a rename changes no hash, so two targets go
+    /// on agreeing while one of them has no resolvable copy at all. A `stat`
+    /// per directory catches it for microseconds, which is why it runs whenever
+    /// a target is looked at rather than on a schedule.
+    ///
+    /// Every rewrite is confirmed to resolve before it is written. A rewrite is
+    /// a guess about where content went, and an unverified guess in the catalog
+    /// is worse than the broken path it replaces.
+    @discardableResult
+    func repairReplicaPaths(for targetID: UUID) -> (repaired: Int, unresolved: Int) {
+        guard let target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
+            return (0, 0)
+        }
+        let mine = replicaStates.filter { $0.targetID == targetID && $0.state == .present }
+        // Archives record absolute paths into the same content, so they move
+        // with it. Planning from both means one pass repairs the replicas and
+        // the export parts together, rather than leaving redundancy checks
+        // reading a directory that is no longer there.
+        let prefix = mountURL.path.hasSuffix("/") ? mountURL.path : mountURL.path + "/"
+        let archivesHere = takeoutArchives.filter { $0.path.hasPrefix(prefix) }
+        let recorded = mine.compactMap(\.relativePath)
+            + archivesHere.map { ReplicaPathRepair.volumePrefix + $0.path.dropFirst(prefix.count) }
+        guard !recorded.isEmpty else { return (0, 0) }
+
+        let plan = ReplicaPathRepair.plan(recordedPaths: recorded, mountURL: mountURL)
+        guard !plan.isEmpty else { return (0, 0) }
+
+        var repaired = 0
+        var unresolved = 0
+        var repairedArchives = 0
+        do {
+            try catalog.transaction {
+                for replica in mine {
+                    guard let recordedPath = replica.relativePath,
+                          recordedPath.hasPrefix(ReplicaPathRepair.volumePrefix) else { continue }
+                    let absolute = mountURL.appendingPathComponent(
+                        String(recordedPath.dropFirst(ReplicaPathRepair.volumePrefix.count))
+                    )
+                    guard !FileManager.default.fileExists(atPath: absolute.path) else { continue }
+
+                    if let rewritten = ReplicaPathRepair.apply(plan, to: recordedPath) {
+                        let candidate = mountURL.appendingPathComponent(
+                            String(rewritten.dropFirst(ReplicaPathRepair.volumePrefix.count))
+                        )
+                        if FileManager.default.fileExists(atPath: candidate.path) {
+                            var updated = replica
+                            updated.relativePath = rewritten
+                            try catalog.upsertReplicaState(updated)
+                            repaired += 1
+                            continue
+                        }
+                    }
+                    // Not where the catalog says, and not found elsewhere. Say
+                    // so rather than leaving a copy counted that is not there.
+                    var updated = replica
+                    updated.state = .missing
+                    try catalog.upsertReplicaState(updated)
+                    unresolved += 1
+                }
+
+                for archive in archivesHere {
+                    guard !FileManager.default.fileExists(atPath: archive.path) else { continue }
+                    let recordedPath = ReplicaPathRepair.volumePrefix + archive.path.dropFirst(prefix.count)
+                    guard let rewritten = ReplicaPathRepair.apply(plan, to: recordedPath) else { continue }
+                    let candidate = mountURL.appendingPathComponent(
+                        String(rewritten.dropFirst(ReplicaPathRepair.volumePrefix.count))
+                    )
+                    guard FileManager.default.fileExists(atPath: candidate.path) else { continue }
+                    var updated = archive
+                    updated.path = candidate.path
+                    try catalog.upsertTakeoutArchive(updated)
+                    repairedArchives += 1
+                }
+            }
+        } catch {
+            lastError = "Could not repair moved replica paths: \(error.localizedDescription)"
+            return (repaired, unresolved)
+        }
+
+        if repaired > 0 || repairedArchives > 0 {
+            var what = ["\(repaired) replica(s)"]
+            if repairedArchives > 0 { what.append("\(repairedArchives) export archive(s)") }
+            audit(.replication, "\(target.name): content had moved; repointed \(what.joined(separator: " and ")) to their new location. Nothing was copied.", targetID: targetID)
+        }
+        if unresolved > 0 {
+            audit(.violation, "\(target.name): \(unresolved) replica(s) are not where the catalog recorded them and were not found on the target.", targetID: targetID)
+        }
+        if repaired > 0 || unresolved > 0 || repairedArchives > 0 { loadAll() }
+        return (repaired, unresolved)
+    }
+
+    /// How one target compares with every other, by root. No reads: this is
+    /// the comparison the trees exist for.
+    ///
+    /// A match means the two targets record the same content, which is a
+    /// different and weaker statement than "the bytes on both are good" — only
+    /// reading them back says that.
+    func agreement(for targetID: UUID) -> [(other: ReplicationTarget, agrees: Bool, divergentCount: Int)] {
+        guard let mine = targetTrees[targetID] else { return [] }
+        return targets.filter { $0.id != targetID }.compactMap { other in
+            guard let theirs = targetTrees[other.id] else { return nil }
+            if mine.agrees(with: theirs) {
+                return (other, true, 0)
+            }
+            return (other, false, mine.divergentKeys(from: theirs).count)
+        }
+    }
+
+    func backlogCount(for targetID: UUID) -> Int {
+        backlogSummary(for: targetID).total
     }
 
     /// Describes the drive's pending work by action and estimated bytes, so
     /// the UI can say "22,880 to verify (~120 GB)" instead of a bare number.
-    func backlogSummary(for driveID: UUID) -> BacklogSummary {
+    func backlogSummary(for targetID: UUID) -> BacklogSummary {
         var summary = BacklogSummary()
-        for task in replicationTasks where task.driveID == driveID && task.state == .queued {
+        for task in replicationTasks where task.targetID == targetID && task.state == .queued {
             switch task.action {
             case .copy: summary.copyCount += 1
             case .verify: summary.verifyCount += 1
@@ -2348,40 +2743,40 @@ final class AppStore: ObservableObject {
 
     /// Drops queued tasks of one action for a drive. Only ever discards work
     /// that can be re-queued on demand — never replica state or files.
-    func clearQueuedTasks(for driveID: UUID, action: ReplicationAction) {
+    func clearQueuedTasks(for targetID: UUID, action: ReplicationAction) {
         let doomed = replicationTasks.filter {
-            $0.driveID == driveID && $0.state == .queued && $0.action == action
+            $0.targetID == targetID && $0.state == .queued && $0.action == action
         }
         guard !doomed.isEmpty else { return }
         do {
             try catalog.transaction {
                 for task in doomed { try catalog.deleteReplicationTask(id: task.id) }
             }
-            let driveName = drivesByID[driveID]?.name ?? "drive"
-            audit(.replication, "Cleared \(doomed.count) queued \(action.rawValue) task(s) for \(driveName); they can be re-queued at any time.", driveID: driveID)
+            let targetName = targetsByID[targetID]?.name ?? "drive"
+            audit(.replication, "Cleared \(doomed.count) queued \(action.rawValue) task(s) for \(targetName); they can be re-queued at any time.", targetID: targetID)
             loadAll()
         } catch {
             lastError = "Could not clear queued tasks: \(error.localizedDescription)"
         }
     }
 
-    func lastCompletedSync(for driveID: UUID) -> Date? {
+    func lastCompletedSync(for targetID: UUID) -> Date? {
         replicationTasks
-            .filter { $0.driveID == driveID && $0.state == .completed }
+            .filter { $0.targetID == targetID && $0.state == .completed }
             .compactMap(\.completedAt)
             .max()
     }
 
     /// Requests a backlog sync for one connected drive. If another drive is
     /// already syncing, the request queues behind it (syncs stay serial).
-    func syncDrive(_ driveID: UUID) {
+    func syncDrive(_ targetID: UUID) {
         if isSyncing {
-            if syncProgress?.driveID != driveID && !pendingSyncDriveIDs.contains(driveID) {
-                pendingSyncDriveIDs.append(driveID)
+            if syncProgress?.targetID != targetID && !pendingSyncTargetIDs.contains(targetID) {
+                pendingSyncTargetIDs.append(targetID)
             }
             return
         }
-        runSync(driveID)
+        runSync(targetID)
     }
 
     /// Stops the running sync after the current task finishes. Remaining tasks
@@ -2390,15 +2785,15 @@ final class AppStore: ObservableObject {
         syncCancelRequested = true
     }
 
-    private func runSync(_ driveID: UUID) {
+    private func runSync(_ targetID: UUID) {
         guard syncProgress == nil else { return }
-        guard let drive = drivesByID[driveID], let mountURL = connectedMounts[driveID] else {
+        guard let drive = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
             lastError = "Drive is not connected."
             startNextPendingSync()
             return
         }
         let queued = replicationTasks
-            .filter { $0.driveID == driveID && $0.state == .queued }
+            .filter { $0.targetID == targetID && $0.state == .queued }
             .sorted { $0.queuedAt < $1.queuedAt }
         guard !queued.isEmpty else {
             startNextPendingSync()
@@ -2407,8 +2802,8 @@ final class AppStore: ObservableObject {
 
         syncCancelRequested = false
         syncProgress = SyncProgress(
-            driveID: driveID,
-            driveName: drive.name,
+            targetID: targetID,
+            targetName: drive.name,
             totalTasks: queued.count,
             completedTasks: 0,
             failedTasks: 0,
@@ -2418,8 +2813,8 @@ final class AppStore: ObservableObject {
         let replicasByKey = Dictionary(uniqueKeysWithValues: replicaStates.map { ($0.id, $0) })
 
         Task { @MainActor in
-            markBusy(driveID, true)
-            defer { markBusy(driveID, false) }
+            markBusy(targetID, true)
+            defer { markBusy(targetID, false) }
             var completed = 0
             var failed = 0
             var interruptionReason: String?
@@ -2429,18 +2824,18 @@ final class AppStore: ObservableObject {
                     interruptionReason = "cancelled"
                     break
                 }
-                // Mount events update connectedMounts on the main actor between
+                // Mount events update reachablePaths on the main actor between
                 // tasks, so an unplug mid-sync is noticed here.
-                guard connectedMounts[driveID] != nil else {
+                guard reachablePaths[targetID] != nil else {
                     interruptionReason = "drive disconnected"
                     break
                 }
-                if isQuiescing(driveID) {
+                if isQuiescing(targetID) {
                     interruptionReason = "drive is being released"
                     break
                 }
                 let asset = assetsSnapshot[task.assetID]
-                let existingReplica = replicasByKey["\(task.assetID.uuidString)/\(task.driveID.uuidString)"]
+                let existingReplica = replicasByKey["\(task.assetID.uuidString)/\(task.targetID.uuidString)"]
                 syncProgress?.currentItem = asset?.originalFilename
                 // Source can be Mac staging or any readable copy on another
                 // connected drive, so drive-only assets replicate drive-to-drive.
@@ -2469,16 +2864,16 @@ final class AppStore: ObservableObject {
                 syncProgress?.failedTasks = failed
             }
 
-            if var updatedDrive = drivesByID[driveID] {
+            if var updatedDrive = targetsByID[targetID] {
                 updatedDrive.lastSeenAt = Date()
-                try? catalog.upsertDrive(updatedDrive)
+                try? catalog.upsertTarget(updatedDrive)
             }
             let remaining = queued.count - completed - failed
             var summary = "Sync with \(drive.name): \(completed) task(s) completed, \(failed) failed"
             if let reason = interruptionReason {
                 summary += "; \(reason) with \(remaining) task(s) still queued"
             }
-            audit(.replication, summary + ".", driveID: driveID)
+            audit(.replication, summary + ".", targetID: targetID)
             syncProgress = nil
             loadAll()
             startNextPendingSync()
@@ -2486,9 +2881,9 @@ final class AppStore: ObservableObject {
     }
 
     private func startNextPendingSync() {
-        while !pendingSyncDriveIDs.isEmpty {
-            let next = pendingSyncDriveIDs.removeFirst()
-            if connectedMounts[next] != nil && backlogCount(for: next) > 0 {
+        while !pendingSyncTargetIDs.isEmpty {
+            let next = pendingSyncTargetIDs.removeFirst()
+            if reachablePaths[next] != nil && backlogCount(for: next) > 0 {
                 runSync(next)
                 return
             }
@@ -2498,30 +2893,30 @@ final class AppStore: ObservableObject {
     /// Checks this drive's content for damage.
     ///
     /// Content held as export parts is confirmed by comparing whole-file
-    /// checksums between drives — a handful of reads that settles everything
+    /// checksums between targets — a handful of reads that settles everything
     /// inside those parts at once. Only what is not covered that way falls
     /// back to reading files one at a time.
-    func verifyDrive(_ driveID: UUID) {
-        guard connectedMounts[driveID] != nil else {
+    func verifyDrive(_ targetID: UUID) {
+        guard reachablePaths[targetID] != nil else {
             lastError = "Drive is not connected."
             return
         }
-        if archiveChecksumCheckWouldHelp(driveID) {
+        if archiveChecksumCheckWouldHelp(targetID) {
             // Fast comparison first: seconds rather than minutes, and enough
             // to catch the failures that actually befall archive copies. A
             // full byte-for-byte comparison stays available in the menu.
             spotCheckExportParts()
             return
         }
-        queueVerificationSweep(driveID, budget: .sweep)
+        queueVerificationSweep(targetID, budget: .sweep)
     }
 
     /// Whether this drive holds export parts whose copies could be compared by
     /// checksum right now, covering replicas not yet confirmed.
-    func archiveChecksumCheckWouldHelp(_ driveID: UUID) -> Bool {
+    func archiveChecksumCheckWouldHelp(_ targetID: UUID) -> Bool {
         let unconfirmed = Set(
             replicaStates
-                .filter { $0.driveID == driveID && $0.state == .present && $0.lastVerifiedAt == nil }
+                .filter { $0.targetID == targetID && $0.state == .present && $0.lastVerifiedAt == nil }
                 .compactMap(\.relativePath)
         )
         guard !unconfirmed.isEmpty else { return false }
@@ -2535,22 +2930,56 @@ final class AppStore: ObservableObject {
     /// a file and byte budget. Re-hashing a whole archive in one go can mean
     /// hours of drive reads, so a sweep takes a slice and the next sweep picks
     /// up where this one left off. Replicas already queued are not re-queued.
-    func queueVerificationSweep(_ driveID: UUID, budget: VerificationBudget = .sweep) {
-        guard let drive = drivesByID[driveID], connectedMounts[driveID] != nil else {
+    /// Queues reads against only the assets the trees say disagree.
+    ///
+    /// This is what the trees buy: a divergence found by comparing roots costs
+    /// nothing to find, and re-reading it costs only the files responsible
+    /// rather than a sweep of the whole target. Falls back to nothing when the
+    /// targets agree — there is no work to do, and reading anyway would be the
+    /// timer this replaced.
+    func queueDivergenceCheck(_ targetID: UUID) {
+        guard reachablePaths[targetID] != nil else {
+            lastError = "That target is not reachable."
+            return
+        }
+        let divergent = Set(
+            agreement(for: targetID)
+                .filter { !$0.agrees }
+                .flatMap { comparison -> [UUID] in
+                    guard let mine = targetTrees[targetID],
+                          let theirs = targetTrees[comparison.other.id] else { return [] }
+                    return mine.divergentKeys(from: theirs).compactMap(UUID.init(uuidString:))
+                }
+        )
+        guard !divergent.isEmpty else {
+            audit(.replication, "\(targetsByID[targetID]?.name ?? "Target") holds the same content as every other target; nothing to re-read.", targetID: targetID)
+            return
+        }
+        queueVerificationSweep(targetID, budget: .unlimited, restrictedTo: divergent)
+    }
+
+    func queueVerificationSweep(
+        _ targetID: UUID,
+        budget: VerificationBudget = .sweep,
+        restrictedTo assetIDs: Set<UUID>? = nil,
+        isPatrol: Bool = false
+    ) {
+        guard let drive = targetsByID[targetID], reachablePaths[targetID] != nil else {
             lastError = "Drive is not connected."
             return
         }
         let alreadyQueued = Set(
             replicationTasks
-                .filter { $0.driveID == driveID && $0.state == .queued && $0.action == .verify }
+                .filter { $0.targetID == targetID && $0.state == .queued && $0.action == .verify }
                 .map(\.assetID)
         )
         // Oldest verification first; never-verified replicas come first of all.
         let candidates = replicaStates
             .filter {
-                $0.driveID == driveID
+                $0.targetID == targetID
                     && ($0.state == .present || $0.state == .stale || $0.state == .drift)
                     && !alreadyQueued.contains($0.assetID)
+                    && (assetIDs?.contains($0.assetID) ?? true)
             }
             .sorted { ($0.lastVerifiedAt ?? .distantPast) < ($1.lastVerifiedAt ?? .distantPast) }
 
@@ -2560,24 +2989,30 @@ final class AppStore: ObservableObject {
             try catalog.transaction {
                 for replica in candidates {
                     if queued >= budget.maxFiles || bytes >= budget.maxBytes { break }
-                    try enqueueTask(assetID: replica.assetID, driveID: driveID, action: .verify)
+                    try enqueueTask(assetID: replica.assetID, targetID: targetID, action: .verify)
                     queued += 1
                     bytes += assetsByID[replica.assetID]?.fileSize ?? 0
                 }
             }
             guard queued > 0 else {
-                audit(.drive, "File check on \(drive.name): nothing due.", driveID: driveID)
+                // The patrol runs on a timer and finding nothing due is its
+                // normal state; saying so every half hour is just noise.
+                if !isPatrol {
+                    audit(.drive, "File check on \(drive.name): nothing due.", targetID: targetID)
+                }
                 return
             }
             let remaining = candidates.count - queued
             audit(
                 .drive,
-                "Queued a file check of \(queued) file(s) (~\(Formatters.bytes.string(fromByteCount: bytes))) on \(drive.name)"
-                    + (remaining > 0 ? "; \(remaining) more will follow in later sweeps." : "."),
-                driveID: driveID
+                isPatrol
+                    ? "Background check on \(drive.name): reading \(queued) file(s) (~\(Formatters.bytes.string(fromByteCount: bytes))) least recently checked; \(remaining) still to come."
+                    : "Queued a file check of \(queued) file(s) (~\(Formatters.bytes.string(fromByteCount: bytes))) on \(drive.name)"
+                        + (remaining > 0 ? "; \(remaining) more will follow in later sweeps." : "."),
+                targetID: targetID
             )
             loadAll()
-            syncDrive(driveID)
+            syncDrive(targetID)
         } catch {
             lastError = "Verification enqueue failed: \(error.localizedDescription)"
         }
@@ -2606,13 +3041,490 @@ final class AppStore: ObservableObject {
 
     // MARK: - Policies
 
+    // MARK: - Cloud connectors
+
+    /// The verifier seam, populated as connectors come alive. Everything that
+    /// asks about cloud presence goes through this — never straight to a
+    /// provider — so nothing can bypass the refuse-to-guess default.
+    private(set) var cloudVerifiers = CloudVerifierRegistry.unconnected
+    @Published private(set) var applePhotosState: ApplePhotosConnectionState = .notDetermined
+    /// Whether the connected Photos library syncs to iCloud. PhotoKit cannot
+    /// report this, so it is asked once and stored as topology — a statement
+    /// about the user's setup, verifiable by them in seconds, and never a
+    /// claim about any individual photo. Nil means unanswered.
+    @Published var iCloudPhotosEnabled: Bool? = UserDefaults.standard.object(forKey: "iCloudPhotosEnabled") as? Bool {
+        didSet {
+            if let iCloudPhotosEnabled {
+                UserDefaults.standard.set(iCloudPhotosEnabled, forKey: "iCloudPhotosEnabled")
+            }
+        }
+    }
+    @Published private(set) var isIndexingApplePhotos = false
+    @Published private(set) var isImportingFromApplePhotos = false
+    @Published private(set) var applePhotosImportSummary: String?
+    /// Copying indexed Photos-library originals into the archive so they gain
+    /// the same protection as everything else. On by default: a photo the app
+    /// can see but not protect is the problem this app exists to solve.
+    @Published var importFromApplePhotos: Bool = UserDefaults.standard.object(forKey: "importFromApplePhotos") as? Bool ?? true {
+        didSet { UserDefaults.standard.set(importFromApplePhotos, forKey: "importFromApplePhotos") }
+    }
+    private var lastApplePhotosImport: Date?
+    @Published private(set) var applePhotosLibraryCount = 0
+    @Published private(set) var isCheckingApplePhotos = false
+    @Published private(set) var lastApplePhotosCheckSummary: String?
+
+    /// Photos found in the library that the archive does not hold. Only ever
+    /// labelled AppleCloud when the user has told us the library syncs;
+    /// otherwise they are a local library's contents, which is a different
+    /// fact and must not be dressed up as a cloud one.
+    var applePhotosResidency: ResidencyDomain { iCloudPhotosEnabled == true ? .appleCloud : .local }
+
+    func refreshApplePhotosState() {
+        applePhotosState = ApplePhotosVerifier.connectionState
+        applePhotosLibraryCount = ApplePhotosVerifier.libraryAssetCount
+        if applePhotosState == .connected {
+            cloudVerifiers.verifiers[.appleCloud] = ApplePhotosVerifier()
+        } else {
+            cloudVerifiers.verifiers[.appleCloud] = UnconnectedCloudVerifier(domain: .appleCloud)
+        }
+    }
+
+    func connectApplePhotos() async {
+        let state = await ApplePhotosVerifier.requestAccess()
+        refreshApplePhotosState()
+        switch state {
+        case .connected:
+            audit(.system, "Apple Photos connected. Presence is now verified in the background by hashing originals — checked, not assumed.")
+            checkApplePhotosPresence()
+        case .denied:
+            lastError = "Photos access was declined. Grant it under System Settings → Privacy & Security → Photos, then try again."
+        case .unavailable(let reason):
+            lastError = reason
+        case .notDetermined:
+            break
+        }
+    }
+
+    /// Reads the whole Photos library from metadata — no downloads — and
+    /// merges it into the catalog so the Library shows one archive rather than
+    /// two.
+    ///
+    /// A library photo that matches one the archive already holds becomes a
+    /// **counterpart link** on the existing asset, not a second row: the same
+    /// photograph in two encodings is one picture. Only photos the archive has
+    /// never seen become rows of their own, carrying the provider's identifier
+    /// so re-indexing updates them instead of duplicating them.
+    func indexApplePhotos() {
+        guard applePhotosState == .connected, !isIndexingApplePhotos else { return }
+        let items = ApplePhotosVerifier.indexLibrary()
+        applePhotosLibraryCount = items.count
+        guard !items.isEmpty else {
+            lastApplePhotosCheckSummary = CloudVerificationError.libraryUnavailable(.appleCloud).localizedDescription
+            return
+        }
+        isIndexingApplePhotos = true
+
+        // Index the archive by capture second so matching is a lookup rather
+        // than a scan of everything for every library item.
+        var localByInstant: [Int: [Asset]] = [:]
+        for asset in assets where asset.providerLocalID == nil {
+            guard let date = asset.captureDate else { continue }
+            localByInstant[Int(date.timeIntervalSince1970), default: []].append(asset)
+        }
+        let alreadyIndexed = Set(assets.compactMap(\.providerLocalID))
+
+        var linked = 0
+        var added = 0
+        let residency = applePhotosResidency
+        let now = Date()
+        do {
+            try catalog.transaction {
+                for item in items where !alreadyIndexed.contains(item.localIdentifier) {
+                    var nearby: [Asset] = []
+                    if let captureDate = item.captureDate {
+                        let instant = Int(captureDate.timeIntervalSince1970)
+                        for offset in -1...1 {
+                            nearby.append(contentsOf: localByInstant[instant + offset] ?? [])
+                        }
+                    }
+                    let unclaimed = nearby.filter { $0.providerLocalID == nil }
+                    if var match = ApplePhotosVerifier.counterpart(for: item, among: unclaimed) {
+                        // Same photograph, different file. A link, not presence.
+                        match.providerLocalID = item.localIdentifier
+                        match.updatedDate = now
+                        try catalog.upsertAsset(match)
+                        linked += 1
+                        continue
+                    }
+                    try catalog.upsertAsset(Asset(
+                        id: UUID(),
+                        kind: item.kind,
+                        originalFilename: item.filename,
+                        importOrigin: .appleExport,
+                        captureDate: item.captureDate,
+                        importDate: now,
+                        updatedDate: now,
+                        fileSize: 0,
+                        pixelWidth: item.pixelWidth,
+                        pixelHeight: item.pixelHeight,
+                        // Not a content hash: the bytes were never read. Scoped
+                        // by the provider id so it can never collide with a
+                        // real hash and never groups as a duplicate.
+                        contentHash: "apple-library:\(item.localIdentifier)",
+                        residency: residency,
+                        residencySource: .importDefault,
+                        presence: residency == .appleCloud
+                            ? DomainPresence(local: false, appleCloud: true, googleCloud: false)
+                            : DomainPresence(local: true, appleCloud: false, googleCloud: false),
+                        stagingRelativePath: nil,
+                        importBatchID: nil,
+                        exifSummary: [:],
+                        // Enumerating the library *is* checking it: these rows
+                        // exist because the provider listed them.
+                        cloudPresenceEvidence: residency == .appleCloud ? .verified : .none,
+                        cloudPresenceCheckedAt: residency == .appleCloud ? now : nil,
+                        providerLocalID: item.localIdentifier
+                    ))
+                    added += 1
+                }
+            }
+        } catch {
+            lastError = "Could not index Apple Photos: \(error.localizedDescription)"
+            isIndexingApplePhotos = false
+            return
+        }
+        let label = residency == .appleCloud ? "Apple Cloud" : "this device's Photos library"
+        audit(.system, "Apple Photos index: \(items.count) item(s) in the library — \(added) added as \(label), \(linked) linked to photos the archive already holds.")
+        lastApplePhotosCheckSummary = "\(added.formatted()) added · \(linked.formatted()) linked"
+        isIndexingApplePhotos = false
+        loadAll()
+    }
+
+    /// Assets indexed from the Photos library whose bytes the app does not yet
+    /// hold. These are visible to the app and protected by nothing.
+    var applePhotosAwaitingImport: [Asset] {
+        assets.filter {
+            $0.providerLocalID != nil
+                && $0.stagingRelativePath == nil
+                && $0.contentHash.hasPrefix(Self.providerHashPrefix)
+        }
+    }
+
+    static let providerHashPrefix = "apple-library:"
+
+    /// Starts draining the backlog if it is not already running.
+    ///
+    /// This is a finite job the user asked for, not perpetual maintenance, so
+    /// it runs to completion rather than trickling: rationing it to a batch a
+    /// minute turned two minutes of work into half an hour of waiting. It
+    /// still yields to real work — an import or a sync stops it until they are
+    /// done — and each batch is small enough to stay responsive.
+    func importFromApplePhotosIfDue(now: Date = Date()) {
+        guard importFromApplePhotos, applePhotosState == .connected else { return }
+        guard !isSyncing, !isImporting, !isTransferringParts, takeoutActivity == nil else { return }
+        guard !isImportingFromApplePhotos else { return }
+        guard !applePhotosAwaitingImport.isEmpty else { return }
+        importOriginalsFromApplePhotos()
+    }
+
+    /// Copies a batch of indexed originals into staging and queues them for
+    /// replication, so photos the Photos library holds become photos the
+    /// archive protects.
+    ///
+    /// Bytes decide what happens to each one. If the exported original hashes
+    /// to something the archive already holds, this was the *same file* all
+    /// along — the indexed row is folded into the existing asset rather than
+    /// stored twice, and that asset gains verified Apple presence, because
+    /// hashing just proved it. Only genuinely new content is staged.
+    func importOriginalsFromApplePhotos(limit: Int = 25) {
+        guard !isImportingFromApplePhotos else { return }
+        let batch = Array(applePhotosAwaitingImport.prefix(limit))
+        guard !batch.isEmpty else { return }
+        isImportingFromApplePhotos = true
+
+        let staging = self.staging
+        let scratch = staging.rootURL.appendingPathComponent("apple-export", isDirectory: true)
+        let existingHashes = Dictionary(assets.filter { !$0.contentHash.hasPrefix(Self.providerHashPrefix) }
+            .map { ($0.contentHash, $0.id) }, uniquingKeysWith: { first, _ in first })
+
+        Task { [weak self] in
+            var staged: [(asset: Asset, path: String, hash: String, size: Int64)] = []
+            var merges: [(indexed: UUID, existing: UUID)] = []
+            var failures = 0
+
+            for asset in batch {
+                guard let providerLocalID = asset.providerLocalID else { continue }
+                do {
+                    let exported = try await ApplePhotosVerifier.exportOriginal(
+                        localIdentifier: providerLocalID, to: scratch
+                    )
+                    defer { try? FileManager.default.removeItem(at: exported) }
+                    let hash = try HashingService.sha256(of: exported)
+                    let size = Int64((try? FileManager.default.attributesOfItem(atPath: exported.path)[.size] as? Int64) ?? 0) ?? 0
+
+                    if let existing = existingHashes[hash] {
+                        merges.append((asset.id, existing))
+                        continue
+                    }
+                    let relativePath = try staging.stage(
+                        fileAt: exported,
+                        assetID: asset.id,
+                        fileExtension: exported.pathExtension.lowercased()
+                    )
+                    staged.append((asset, relativePath, hash, size))
+                } catch {
+                    failures += 1
+                }
+            }
+            await MainActor.run {
+                self?.recordApplePhotosImport(staged: staged, merges: merges, failures: failures)
+            }
+        }
+    }
+
+    private func recordApplePhotosImport(
+        staged: [(asset: Asset, path: String, hash: String, size: Int64)],
+        merges: [(indexed: UUID, existing: UUID)],
+        failures: Int
+    ) {
+        do {
+            try catalog.transaction {
+                for item in staged {
+                    var updated = item.asset
+                    updated.contentHash = item.hash
+                    updated.fileSize = item.size
+                    updated.stagingRelativePath = item.path
+                    updated.presence.local = true
+                    updated.updatedDate = Date()
+                    try catalog.upsertAsset(updated)
+                    // Now that the archive holds the bytes, every target owes
+                    // it a copy — the same path any other Local asset takes.
+                    for target in targets {
+                        try enqueueTask(assetID: updated.id, targetID: target.id, action: .copy)
+                        try catalog.upsertReplicaState(TargetReplicaState(
+                            assetID: updated.id, targetID: target.id,
+                            state: .pending, relativePath: nil, lastVerifiedAt: nil
+                        ))
+                    }
+                }
+                for merge in merges {
+                    // Byte-identical to something already held: one photograph,
+                    // one row. The survivor gains proven Apple presence.
+                    if var existing = assetsByID[merge.existing] {
+                        existing.presence.appleCloud = iCloudPhotosEnabled == true
+                        existing.cloudPresenceEvidence = iCloudPhotosEnabled == true ? .verified : .none
+                        existing.cloudPresenceCheckedAt = Date()
+                        existing.providerLocalID = assetsByID[merge.indexed]?.providerLocalID
+                        existing.updatedDate = Date()
+                        try catalog.upsertAsset(existing)
+                    }
+                    try catalog.deleteAsset(id: merge.indexed)
+                }
+            }
+        } catch {
+            lastError = "Could not bring Photos originals into the archive: \(error.localizedDescription)"
+            isImportingFromApplePhotos = false
+            return
+        }
+        var parts: [String] = []
+        if !staged.isEmpty { parts.append("\(staged.count) copied in and queued for replication") }
+        if !merges.isEmpty { parts.append("\(merges.count) already held byte-for-byte, merged") }
+        if failures > 0 { parts.append("\(failures) original(s) could not be exported") }
+        if !parts.isEmpty {
+            audit(.importEvent, "Photos library: " + parts.joined(separator: "; ") + ".")
+        }
+        let remaining = max(applePhotosAwaitingImport.count - staged.count - merges.count, 0)
+        applePhotosImportSummary = remaining > 0
+            ? "\(remaining.formatted()) still to bring in"
+            : "all indexed photos are in the archive"
+        isImportingFromApplePhotos = false
+        loadAll()
+        // Straight on to the next batch while there is a backlog: the job is
+        // finite and the user is waiting for it, not for a schedule.
+        if remaining > 0 { importFromApplePhotosIfDue() }
+    }
+
+    /// Checks a small batch of Local assets against Apple Photos, oldest
+    /// checks first, and records what hashing actually established.
+    ///
+    /// A found asset gains *verified* Apple presence — which, alongside Local
+    /// residency, is a two-domain coexistence the Violations screen surfaces
+    /// rather than hides. That is the model working: the overlap is real, and
+    /// resolving it is a migration or (eventually) reclamation, never a
+    /// silent edit.
+    /// How often the background presence scan takes a batch, and how old a
+    /// check must be before an asset is worth re-checking. Connecting is the
+    /// consent; after that the scan paces itself — a manual "check 25 now"
+    /// button would be 850 clicks of the same thing.
+    private static let applePhotosScanInterval: TimeInterval = 10 * 60
+    private static let applePhotosRecheckAge: TimeInterval = 30 * 24 * 3600
+    private var lastApplePhotosScan: Date?
+
+    /// Runs off the periodic tick, like the rot patrol: only when connected,
+    /// only when the app is otherwise idle, one batch at a time, oldest
+    /// checks first. Goes quiet by itself once everything eligible has been
+    /// checked within the re-check window.
+    func checkApplePhotosPresenceIfDue(now: Date = Date()) {
+        guard applePhotosState == .connected else { return }
+        guard !isSyncing, !isImporting, !isTransferringParts, takeoutActivity == nil else { return }
+        if let last = lastApplePhotosScan, now.timeIntervalSince(last) < Self.applePhotosScanInterval { return }
+        lastApplePhotosScan = now
+        checkApplePhotosPresence()
+    }
+
+    func checkApplePhotosPresence(limit: Int = 25) {
+        guard !isCheckingApplePhotos else { return }
+        guard let verifier = cloudVerifiers.verifier(for: .appleCloud), verifier.isConnected else {
+            return
+        }
+        let staleBefore = Date().addingTimeInterval(-Self.applePhotosRecheckAge)
+        let batch = Array(
+            assets
+                .filter {
+                    $0.residency == .local && !$0.isLivePhotoMotion && $0.captureDate != nil
+                        && ($0.cloudPresenceCheckedAt ?? .distantPast) < staleBefore
+                }
+                .sorted { ($0.cloudPresenceCheckedAt ?? .distantPast) < ($1.cloudPresenceCheckedAt ?? .distantPast) }
+                .prefix(limit)
+        )
+        guard !batch.isEmpty else { return }
+        isCheckingApplePhotos = true
+        Task { [weak self] in
+            do {
+                let results = try await verifier.verifyPresence(of: batch)
+                await MainActor.run { self?.recordApplePhotosResults(results, requested: batch.count) }
+            } catch {
+                await MainActor.run {
+                    // Not an error the user caused, and not a result: say so
+                    // in the status line rather than recording anything.
+                    self?.lastApplePhotosCheckSummary = error.localizedDescription
+                    self?.isCheckingApplePhotos = false
+                }
+            }
+        }
+    }
+
+    private func recordApplePhotosResults(_ results: [UUID: Bool], requested: Int) {
+        var found = 0
+        var absent = 0
+        do {
+            try catalog.transaction {
+                for (id, present) in results {
+                    guard var asset = assetsByID[id] else { continue }
+                    asset.presence.appleCloud = present
+                    asset.cloudPresenceEvidence = present ? .verified : .none
+                    asset.cloudPresenceCheckedAt = Date()
+                    asset.updatedDate = Date()
+                    try catalog.upsertAsset(asset)
+                    if present { found += 1 } else { absent += 1 }
+                }
+            }
+        } catch {
+            lastError = "Could not record Apple Photos results: \(error.localizedDescription)"
+            isCheckingApplePhotos = false
+            return
+        }
+        let unsearchable = requested - results.count
+        var line = "Apple Photos check: \(found) of \(results.count) byte-identical in the Photos library on this Mac"
+        if results.isEmpty && unsearchable > 0 {
+            line = "Apple Photos check: none of \(requested) could be compared — their originals are not on this Mac (an optimised library with iCloud Photos off keeps previews, not originals)"
+        }
+        if found > 0 {
+            line += " — recorded as verified presence; the Local coexistence shows in Violations until migrated or reclaimed"
+        }
+        if unsearchable > 0 { line += "; \(unsearchable) had no capture date to search by" }
+        audit(.system, line + ".")
+        lastApplePhotosCheckSummary = results.isEmpty && unsearchable > 0
+            ? "originals not on this Mac — nothing could be compared"
+            : "\(found) found · \(absent) not found"
+                + (unsearchable > 0 ? " · \(unsearchable) originals unavailable" : "")
+        isCheckingApplePhotos = false
+        loadAll()
+    }
+
     func savePolicyRule(_ rule: PolicyRule) {
         do {
             try catalog.upsertPolicyRule(rule)
             audit(.policy, "Saved policy rule \(rule.name) → \(rule.targetResidency.displayName).")
             loadAll()
+            // Acting by default: a saved rule applies to the archive that
+            // exists, not only to files that arrive later.
+            applyPolicyRules()
         } catch {
             lastError = "Policy save failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Re-evaluates the rules against every asset a rule may govern.
+    ///
+    /// Manual overrides and migration-assigned residency always win, so they
+    /// are never touched. For everything else the winning rule updates the
+    /// recorded *source* (policy vs import default); residency itself never
+    /// changes here — an asset's residency is what its presence supports, and
+    /// a rule naming a cloud opens a pending migration rather than a label.
+    func applyPolicyRules() {
+        var sourceUpdates = 0
+        var placements: [ResidencyDomain: [UUID]] = [:]
+        do {
+            try catalog.transaction {
+                for asset in assets {
+                    guard asset.residency == .local,
+                          asset.residencySource == .policy || asset.residencySource == .importDefault,
+                          !asset.isLivePhotoMotion else { continue }
+                    let decision = PolicyEngine.assignResidency(
+                        kind: asset.kind,
+                        origin: asset.importOrigin,
+                        fileSize: asset.fileSize,
+                        rules: policyRules
+                    )
+                    if decision.source != asset.residencySource {
+                        var updated = asset
+                        updated.residencySource = decision.source
+                        updated.updatedDate = Date()
+                        try catalog.upsertAsset(updated)
+                        sourceUpdates += 1
+                    }
+                    if let target = decision.pendingCloudTarget {
+                        placements[target, default: []].append(asset.id)
+                    }
+                }
+            }
+        } catch {
+            lastError = "Could not re-apply policy rules: \(error.localizedDescription)"
+            return
+        }
+        openPolicyMigrations(placements)
+        if sourceUpdates > 0 {
+            audit(.policy, "Re-applied rules: \(sourceUpdates) asset(s) changed between rule-assigned and default.")
+        }
+        if sourceUpdates > 0 { loadAll() }
+    }
+
+    /// Turns rule intents into pending Local → cloud migration jobs — the only
+    /// legal doorway to a cloud residency. Jobs stay pending; execution is
+    /// manual until a connector can carry it out. Assets already covered by an
+    /// active job to the same domain are skipped, so re-running rules never
+    /// stacks duplicate jobs.
+    private func openPolicyMigrations(_ placements: [ResidencyDomain: [UUID]]) {
+        for (domain, assetIDs) in placements where domain != .local {
+            let covered = Set(migrationJobs
+                .filter { $0.state.isActive && $0.toDomain == domain }
+                .flatMap(\.assetIDs))
+            let remaining = assetIDs.filter { !covered.contains($0) }
+            guard !remaining.isEmpty else { continue }
+            do {
+                let job = try MigrationService.createJob(
+                    assetIDs: remaining,
+                    from: .local,
+                    to: domain,
+                    note: "Queued by policy rule. Content stays Local until the migration runs; cloud-side execution is manual until a connector exists."
+                )
+                try catalog.upsertMigrationJob(job)
+                migrationJobs.insert(job, at: 0)
+                audit(.policy, "Policy rules queued \(remaining.count) asset(s) for migration to \(domain.displayName) (pending).")
+            } catch {
+                lastError = "Could not queue policy migration: \(error.localizedDescription)"
+            }
         }
     }
 
@@ -2621,6 +3533,7 @@ final class AppStore: ObservableObject {
             try catalog.deletePolicyRule(id: rule.id)
             audit(.policy, "Deleted policy rule \(rule.name).")
             loadAll()
+            applyPolicyRules()
         } catch {
             lastError = "Policy delete failed: \(error.localizedDescription)"
         }
@@ -2662,7 +3575,7 @@ final class AppStore: ObservableObject {
             let effect = try MigrationService.completeCleanup(
                 job,
                 assets: assets,
-                managedDrives: drives,
+                targets: targets,
                 replicaStates: replicaStates
             )
             try applyEffect(effect)
@@ -2705,7 +3618,4 @@ final class AppStore: ObservableObject {
         loadAll()
     }
 
-    // MARK: - Sample-data hooks (used by SampleData seeding)
-
-    func directCatalogAccess() -> CatalogStore { catalog }
 }

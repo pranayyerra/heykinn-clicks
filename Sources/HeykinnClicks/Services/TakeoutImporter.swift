@@ -93,9 +93,9 @@ enum TakeoutImporter {
         /// import cost grow with the square of the library size.
         knownContentHashes: Set<String>? = nil,
         staging: StagingStore,
-        assumeStillInGoogle: Bool,
+        policyRules: [PolicyRule] = [],
         batchID: UUID = UUID(),
-        replicaContext: (driveID: UUID, mountPath: String)? = nil,
+        replicaContext: (targetID: UUID, mountPath: String)? = nil,
         fileURLs: [URL]? = nil
     ) async -> ImportResult {
         var batch = ImportBatch(
@@ -110,7 +110,8 @@ enum TakeoutImporter {
         var imported: [Asset] = []
         var duplicates: [String] = []
         var failures: [(String, String)] = []
-        var archiveBacked: [UUID: DriveReplicaState] = [:]
+        var archiveBacked: [UUID: TargetReplicaState] = [:]
+        var cloudPlacements: [ResidencyDomain: [UUID]] = [:]
         var knownHashes = knownContentHashes ?? Set(existingAssets.map(\.contentHash))
 
         // Phase 1 (parallel): hash + read metadata/sidecar for every file.
@@ -150,13 +151,27 @@ enum TakeoutImporter {
                         continue
                     }
                 let assetID = UUID()
-                var presence = DomainPresence.localOnly
                 // A Takeout export proves the content WAS in Google at export
-                // time, never that it still is. Cloud presence is only recorded
-                // when the user explicitly states it, and is marked as their
-                // assertion — not as something the app verified.
-                presence.googleCloud = assumeStillInGoogle
+                // time, never that it still is, and the app has no account to
+                // ask. So an import records what hashing proves — local
+                // presence — and claims nothing about the cloud.
+                let presence = DomainPresence.localOnly
                 let now = Date()
+
+                // The primary import path consults the same rules as every
+                // other; WhatsApp media travelling through a Takeout keeps its
+                // real origin. A rule naming a cloud is an intent, not a
+                // residency — it becomes a pending migration, never a label.
+                let origin = PolicyEngine.classifyOrigin(
+                    filename: filename,
+                    folderHint: fileURL.deletingLastPathComponent().path
+                )
+                let decision = PolicyEngine.assignResidency(
+                    kind: metadata.kind,
+                    origin: origin,
+                    fileSize: fileSize,
+                    rules: policyRules
+                )
 
                 // When the source file already lives on a managed drive, that
                 // file IS the drive's replica: staging a second copy on the
@@ -168,9 +183,9 @@ enum TakeoutImporter {
                     // The hash above was computed from this very file, so the
                     // replica is genuinely verified as of now.
                     let volumeRelative = String(fileURL.path.dropFirst(context.mountPath.count + 1))
-                    archiveBacked[assetID] = DriveReplicaState(
+                    archiveBacked[assetID] = TargetReplicaState(
                         assetID: assetID,
-                        driveID: context.driveID,
+                        targetID: context.targetID,
                         state: .present,
                         relativePath: ReplicationService.volumeBackedPrefix + volumeRelative,
                         lastVerifiedAt: now
@@ -186,7 +201,7 @@ enum TakeoutImporter {
                     id: assetID,
                     kind: metadata.kind,
                     originalFilename: filename,
-                    importOrigin: .googleTakeout,
+                    importOrigin: origin,
                     captureDate: metadata.captureDate,
                     importDate: now,
                     updatedDate: now,
@@ -194,16 +209,19 @@ enum TakeoutImporter {
                     pixelWidth: metadata.pixelWidth,
                     pixelHeight: metadata.pixelHeight,
                     contentHash: hash,
-                    residency: .local,
-                    residencySource: .importDefault,
+                    residency: decision.residency,
+                    residencySource: decision.source,
                     presence: presence,
                     stagingRelativePath: stagingPath,
                     importBatchID: batch.id,
                     exifSummary: metadata.exifSummary,
-                    cloudPresenceEvidence: assumeStillInGoogle ? .userAsserted : .none,
+                    cloudPresenceEvidence: .none,
                     cloudPresenceCheckedAt: nil,
                     captureDateSource: metadata.captureDateSource
                 ))
+                if let target = decision.pendingCloudTarget {
+                    cloudPlacements[target, default: []].append(assetID)
+                }
                 knownHashes.insert(hash)
                 }
             } catch {
@@ -220,7 +238,8 @@ enum TakeoutImporter {
             importedAssets: imported,
             duplicateFilenames: duplicates,
             failures: failures.map { (filename: $0.0, error: $0.1) },
-            archiveBackedReplicas: archiveBacked
+            archiveBackedReplicas: archiveBacked,
+            cloudPlacements: cloudPlacements
         )
     }
 

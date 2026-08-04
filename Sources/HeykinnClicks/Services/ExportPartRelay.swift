@@ -1,9 +1,9 @@
 import Foundation
 import CryptoKit
 
-/// The Mac's holding area for export parts in transit between drives.
+/// The Mac's holding area for export parts in transit between targets.
 ///
-/// Two managed drives are often not plugged in at the same time — one port,
+/// Two managed targets are often not plugged in at the same time — one port,
 /// one drive at the desk, one kept elsewhere. Without somewhere to put a part
 /// in between, a part that exists only on drive A can never reach drive B, and
 /// the redundancy policy stays unsatisfiable no matter how long you wait. This

@@ -29,11 +29,11 @@ enum ViolationKind: String, Codable, CaseIterable, Hashable {
 struct Violation: Identifiable, Hashable {
     var kind: ViolationKind
     var assetID: UUID?
-    var driveID: UUID?
+    var targetID: UUID?
     var migrationJobID: UUID?
     var detail: String
 
     var id: String {
-        "\(kind.rawValue)|\(assetID?.uuidString ?? "-")|\(driveID?.uuidString ?? "-")|\(migrationJobID?.uuidString ?? "-")"
+        "\(kind.rawValue)|\(assetID?.uuidString ?? "-")|\(targetID?.uuidString ?? "-")|\(migrationJobID?.uuidString ?? "-")"
     }
 }

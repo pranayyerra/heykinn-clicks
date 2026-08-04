@@ -5,11 +5,11 @@ import XCTest
 /// thread at 100% CPU on a real 24k-asset catalog.
 final class ScalePerformanceTests: XCTestCase {
 
-    private func makeCatalogFixture(assetCount: Int) -> ([Asset], [DriveReplicaState]) {
+    private func makeCatalogFixture(assetCount: Int) -> ([Asset], [TargetReplicaState]) {
         let driveA = UUID()
         let driveB = UUID()
         var assets: [Asset] = []
-        var replicas: [DriveReplicaState] = []
+        var replicas: [TargetReplicaState] = []
         assets.reserveCapacity(assetCount)
         for index in 0..<assetCount {
             let asset = Asset(
@@ -20,13 +20,13 @@ final class ScalePerformanceTests: XCTestCase {
                 presence: .localOnly, stagingRelativePath: nil, importBatchID: nil, exifSummary: [:]
             )
             assets.append(asset)
-            replicas.append(DriveReplicaState(
-                assetID: asset.id, driveID: driveA, state: .present,
+            replicas.append(TargetReplicaState(
+                assetID: asset.id, targetID: driveA, state: .present,
                 relativePath: "volume:a/\(index).jpg", lastVerifiedAt: Date()
             ))
             if index.isMultiple(of: 2) {
-                replicas.append(DriveReplicaState(
-                    assetID: asset.id, driveID: driveB, state: .present,
+                replicas.append(TargetReplicaState(
+                    assetID: asset.id, targetID: driveB, state: .present,
                     relativePath: "volume:b/\(index).jpg", lastVerifiedAt: Date()
                 ))
             }
@@ -42,7 +42,7 @@ final class ScalePerformanceTests: XCTestCase {
             let individual = ProtectionEvaluator.protectionState(for: asset, replicaStates: replicas)
             XCTAssertEqual(batch[asset.id], individual, "Batch result must match the per-asset computation")
         }
-        // Alternating fixture: half on both drives, half on one.
+        // Alternating fixture: half on both targets, half on one.
         XCTAssertEqual(batch.values.filter { $0 == .fullyReplicated }.count, 150)
         XCTAssertEqual(batch.values.filter { $0 == .replicatedToOneDrive }.count, 150)
     }
@@ -85,9 +85,9 @@ final class FirstCheckStateTests: XCTestCase {
         )
     }
 
-    private func replica(_ assetID: UUID, verified: Date?) -> DriveReplicaState {
-        DriveReplicaState(
-            assetID: assetID, driveID: UUID(), state: .present,
+    private func replica(_ assetID: UUID, verified: Date?) -> TargetReplicaState {
+        TargetReplicaState(
+            assetID: assetID, targetID: UUID(), state: .present,
             relativePath: "archivepart:takeout-S-001", lastVerifiedAt: verified
         )
     }

@@ -73,15 +73,15 @@ final class ImportParityTests: XCTestCase {
         let file = mount.appendingPathComponent("photo.jpg")
         try Data("bytes".utf8).write(to: file)
         let staging = StagingStore(rootURL: try makeTempDirectory())
-        let driveID = UUID()
+        let targetID = UUID()
 
         let result = await ImportService.importFiles(
             [file], sourceDescription: "drive folder", existingAssets: [], policyRules: [],
-            staging: staging, replicaContext: (driveID: driveID, mountPath: mount.path)
+            staging: staging, replicaContext: (targetID: targetID, mountPath: mount.path)
         )
         let asset = try XCTUnwrap(result.importedAssets.first)
         XCTAssertNil(asset.stagingRelativePath, "The drive already holds the bytes")
-        XCTAssertEqual(result.archiveBackedReplicas[asset.id]?.driveID, driveID)
+        XCTAssertEqual(result.archiveBackedReplicas[asset.id]?.targetID, targetID)
         XCTAssertEqual(staging.totalBytes, 0)
     }
 

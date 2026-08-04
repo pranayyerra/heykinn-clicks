@@ -12,7 +12,7 @@ enum ProtectionEvaluator {
     /// hundreds of millions of struct copies and stalled the main thread.
     static func protectionStates(
         for assets: [Asset],
-        replicaStates: [DriveReplicaState],
+        replicaStates: [TargetReplicaState],
         policy: LocalRedundancyPolicy = .default,
         now: Date = Date()
     ) -> [UUID: ProtectionState] {
@@ -34,7 +34,7 @@ enum ProtectionEvaluator {
     /// replicas, letting batch callers skip the per-asset scan.
     static func protectionState(
         for asset: Asset,
-        replicaStates: [DriveReplicaState],
+        replicaStates: [TargetReplicaState],
         alreadyFiltered: Bool = false,
         policy: LocalRedundancyPolicy = .default,
         now: Date = Date()
@@ -52,8 +52,8 @@ enum ProtectionEvaluator {
             return .driftDetected
         }
 
-        // Full replication means the policy's number of drives hold the asset.
-        // With fewer drives registered than the policy asks for, an asset can
+        // Full replication means the policy's number of targets hold the asset.
+        // With fewer targets registered than the policy asks for, an asset can
         // never be fully replicated — a truthful statement about the archive,
         // not a bug.
         let present = states.filter { $0.state == .present }

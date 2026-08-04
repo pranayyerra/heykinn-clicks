@@ -24,26 +24,48 @@ struct OverviewView: View {
         return counts
     }
 
+    /// Two segments, because the user is given one answer. The six-state
+    /// breakdown that used to live here made the reader learn a taxonomy in
+    /// order to work out whether their photos were safe.
     private var protectionSegments: [SegmentedBar.Segment] {
         let counts = protectionCounts
-        return [
-            (ProtectionState.fullyReplicated, "Safe on \(store.redundancyPolicy.description)"),
-            (.awaitingFirstCheck, ProtectionState.awaitingFirstCheck.displayName),
-            (.verificationOverdue, ProtectionState.verificationOverdue.displayName),
-            (.replicatedToOneDrive, ProtectionState.replicatedToOneDrive.displayName),
-            (.stagedOnly, "Only on this Mac"),
-            (.driftDetected, ProtectionState.driftDetected.displayName)
-        ].map { state, label in
-            SegmentedBar.Segment(label: label, count: counts[state] ?? 0, color: state.tint)
+        var met = 0
+        var short = 0
+        var diverged = 0
+        for (state, count) in counts {
+            switch state.verdict {
+            case .meetsPolicy: met += count
+            case .shortOfPolicy: short += count
+            case .diverged: diverged += count
+            case .notLocal: break
+            }
         }
+        return [
+            SegmentedBar.Segment(label: "Safe on \(store.redundancyPolicy.description)", count: met, color: .green),
+            SegmentedBar.Segment(label: "Not yet on \(store.redundancyPolicy.description)", count: short, color: .orange),
+            SegmentedBar.Segment(label: "A copy no longer matches", count: diverged, color: .red)
+        ]
     }
 
     private var protectedCount: Int {
-        protectionCounts.filter { $0.key.isHealthy }.values.reduce(0, +)
+        protectionCounts.filter { $0.key.verdict.isSatisfied }.values.reduce(0, +)
     }
 
     private var localCount: Int {
         protectionCounts.values.reduce(0, +)
+    }
+
+    /// The evidence behind the verdict, kept out of it. A check that has gone
+    /// stale is not a copy that has gone missing, and reporting it as though it
+    /// were is what made a healthy archive look broken.
+    private var evidenceNote: String? {
+        let neverRead = protectionCounts.filter { $0.key.checkStanding == .neverRead }.values.reduce(0, +)
+        let stale = protectionCounts.filter { $0.key.checkStanding == .stale }.values.reduce(0, +)
+        var parts: [String] = []
+        if neverRead > 0 { parts.append("\(neverRead.formatted()) never read back") }
+        if stale > 0 { parts.append("\(stale.formatted()) not read back recently") }
+        guard !parts.isEmpty else { return nil }
+        return parts.joined(separator: " · ")
     }
 
     private var residencySegments: [SegmentedBar.Segment] {
@@ -107,11 +129,20 @@ struct OverviewView: View {
                         .font(.title3)
                         .fixedSize(horizontal: false, vertical: true)
                     SegmentLegend(segments: protectionSegments)
-                    if store.drives.count < store.redundancyPolicy.desiredCopies {
+                    if let evidenceNote {
+                        // Below the verdict, in the smaller type its weight
+                        // deserves: this is what is known about the copies, not
+                        // whether they exist.
+                        Label(evidenceNote, systemImage: "clock.badge.questionmark")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .help("Copies the app has not read back. They still satisfy the policy — reading them back is how it confirms the bytes are undamaged.")
+                    }
+                    if store.targets.count < store.redundancyPolicy.desiredCopies {
                         Button {
-                            selection = .drives
+                            selection = .targets
                         } label: {
-                            Label("Set up drives", systemImage: "externaldrive.badge.plus")
+                            Label("Set up targets", systemImage: "externaldrive.badge.plus")
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -130,65 +161,80 @@ struct OverviewView: View {
         if countedAssets.isEmpty {
             return "Nothing imported yet. Import a folder or a Google export to start the archive."
         }
-        if store.drives.count < store.redundancyPolicy.desiredCopies {
-            let missing = store.redundancyPolicy.desiredCopies - store.drives.count
-            return "\(localCount.formatted()) photos are on this Mac only. Register \(missing) more drive(s) to keep \(store.redundancyPolicy.description) of everything."
+        if store.targets.count < store.redundancyPolicy.desiredCopies {
+            let missing = store.redundancyPolicy.desiredCopies - store.targets.count
+            return "\(localCount.formatted()) photos have nowhere to go. Add \(missing) more target(s) to keep \(store.redundancyPolicy.description) of everything."
         }
+        // One answer. What the app has and has not read back is reported under
+        // it, not folded into it — the copies either satisfy the policy or they
+        // do not, and a stale check does not change that.
         if protectedCount == localCount {
-            // "Safe" here means the copies exist. Saying so without mentioning
-            // the ones never read back would overstate what the app has proven.
-            let unchecked = (protectionCounts[.awaitingFirstCheck] ?? 0) + (protectionCounts[.verificationOverdue] ?? 0)
-            guard unchecked > 0 else {
-                return "All \(localCount.formatted()) photos have \(store.redundancyPolicy.description)."
-            }
-            return "All \(localCount.formatted()) photos have \(store.redundancyPolicy.description) — \(unchecked.formatted()) of them not read back yet."
+            return "All \(localCount.formatted()) photos are safe on \(store.redundancyPolicy.description)."
         }
-        return "\(protectedCount.formatted()) of \(localCount.formatted()) photos have \(store.redundancyPolicy.description). The rest are waiting on a drive."
+        let short = localCount - protectedCount
+        return "\(short.formatted()) of \(localCount.formatted()) photos are not yet on \(store.redundancyPolicy.description)."
     }
 
     // MARK: - Drives
 
+    /// One line, not a second copy of Storage & Health. The cards live there;
+    /// repeating them here made the same state render twice and gave neither
+    /// screen a clear job.
     private var drivesCard: some View {
         CardBox(
-            title: "Drives",
+            title: "Copies",
             systemImage: "externaldrive",
             accessory: AnyView(
-                Button("Manage") { selection = .drives }
+                Button("Manage") { selection = .targets }
                     .buttonStyle(.link)
             )
         ) {
-            if store.drives.isEmpty {
-                emptyDrivesPrompt
-            } else {
-                LazyVGrid(
-                    columns: [GridItem(.adaptive(minimum: 320), spacing: 12)],
-                    spacing: 12
-                ) {
-                    ForEach(store.drives) { drive in
-                        DriveCard(drive: drive, showsActions: false)
+            if store.targets.isEmpty {
+                HStack(spacing: 12) {
+                    Image(systemName: "externaldrive.badge.plus")
+                        .font(.largeTitle)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Nothing holds a copy yet")
+                            .font(.headline)
+                        Text("Imports land in staging and stay there until a target holds them.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
+                    Spacer()
+                    Button("Add a target…") { selection = .targets }
+                        .buttonStyle(.borderedProminent)
                 }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(copiesSummary)
+                        .font(.title3)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(store.targets.map(\.name).sorted().joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
     }
 
-    private var emptyDrivesPrompt: some View {
-        HStack(spacing: 12) {
-            Image(systemName: "externaldrive.badge.plus")
-                .font(.largeTitle)
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 3) {
-                Text("No drives registered yet")
-                    .font(.headline)
-                Text("Imports land on this Mac and stay there until two drives hold them.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Spacer()
-            Button("Register a drive…") { selection = .drives }
-                .buttonStyle(.borderedProminent)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
+    private var copiesSummary: String {
+        let reachable = store.targets.filter { store.reachablePaths[$0.id] != nil }.count
+        let complete = store.targets.filter { target in
+            let breakdown = store.driveBreakdowns[target.id] ?? DriveContentBreakdown()
+            return breakdown.expectedPhotos > 0 && breakdown.presentPhotos == breakdown.expectedPhotos
+        }.count
+        let total = store.targets.count
+
+        let completeness = complete == total
+            ? "\(total) copies, all complete"
+            : "\(complete) of \(total) copies complete"
+        let availability = reachable == 0
+            ? "none reachable right now"
+            : (reachable == total ? "all reachable now" : "\(reachable) reachable now")
+        return "\(completeness) — \(availability)."
     }
 
     // MARK: - Attention
@@ -221,7 +267,7 @@ struct OverviewView: View {
                 value: unprotectedCount.formatted(),
                 title: "photos without \(store.redundancyPolicy.description) yet",
                 tint: .orange,
-                destination: .drives
+                destination: .targets
             ))
         }
         if !store.violations.isEmpty {
@@ -342,11 +388,13 @@ struct OverviewView: View {
                         VStack(spacing: 4) {
                             AssetThumbnailView(asset: asset)
                                 .frame(width: 96, height: 96)
-                            if let state = store.protectionStates[asset.id], state != .notApplicable {
-                                Image(systemName: state.symbolName)
+                            if let state = store.protectionStates[asset.id],
+                               case let verdict = state.verdict,
+                               verdict != .notLocal, !verdict.isSatisfied {
+                                Image(systemName: verdict.symbolName)
                                     .font(.caption)
-                                    .foregroundStyle(state.tint)
-                                    .help(state.displayName)
+                                    .foregroundStyle(verdict.tint)
+                                    .help(verdict.displayName(policy: store.redundancyPolicy))
                             }
                         }
                         .help(asset.originalFilename)

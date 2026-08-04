@@ -66,6 +66,14 @@ struct Asset: Identifiable, Hashable {
     /// writes `.verified` without a connected account confirming it.
     var cloudPresenceEvidence: CloudPresenceEvidence = .none
     var cloudPresenceCheckedAt: Date?
+    /// The provider library's own identifier, for assets indexed from one.
+    /// Present means "this row describes a photo the app does not hold" —
+    /// re-indexing updates it instead of creating a second row.
+    var providerLocalID: String?
+    /// The same photograph in another domain, when the bytes differ because
+    /// the provider re-encoded it. A link, deliberately not a presence claim:
+    /// it says "these are the same picture", never "this content is there".
+    var counterpartAssetID: UUID?
     /// Set on the *motion* half of a Live Photo, pointing at the still it
     /// belongs to. Apple exports a Live Photo as a still plus a short movie
     /// linked by a content identifier; Google Takeout preserves both files but

@@ -4,8 +4,9 @@ A local-first **photo residency manager** for macOS. Not a gallery app, not a
 cloud-sync clone — a storage-governance, metadata-authority, and
 archive-coordination tool for personal photos and videos.
 
-The spec this was built from — including the twelve things the original
-design got wrong, and why — is in [docs/SPEC.md](docs/SPEC.md).
+The vision, the invariants that must never regress, and the path from here
+are in [docs/SPEC.md](docs/SPEC.md). For shipped behavior, this codebase is
+the source of truth; the full build-time spec lives in git history.
 
 ## Core model
 
@@ -15,27 +16,34 @@ in steady state: `Local`, `AppleCloud` (iCloud / Apple Photos), or
 active migration job is a **violation** — flagged, never silently tolerated,
 never auto-fixed.
 
-**The Mac is the control plane.** The catalog (SQLite at
+**The host machine is the control plane.** The catalog (SQLite at
 `~/Library/Application Support/HeykinnClicks/catalog.sqlite`) is the canonical
 authority for metadata, residency, duplicate state, policies, migration jobs,
-the drive registry, per-drive backlog, protection state, and audit history.
-Nothing about system state depends on a drive being attached.
+the target registry, per-target backlog, protection state, and audit history.
+Nothing about system state depends on a target being attached.
 
-**Local is a logical domain with two physical replicas.** The Local domain is
-backed by two managed external drives that may be attached in any combination
-(0, 1, or 2 at a time), plus a Mac staging/cache area:
+**Local is a logical domain held by replication targets.** A target is a
+device: either **this machine** (a folder on its own disk) or an **external
+volume**. How many there are and which they are is configuration —
+`desiredCopies` says how many copies the policy wants — and any number of them
+may be reachable at once, from none to all:
 
-- **0 drives connected** — imports still work; files land in staging;
-  replication tasks queue per drive.
-- **1 drive connected** — identified by a marker file written at registration
-  (volume UUID as fallback; never mount path). Its backlog syncs; the absent
-  drive keeps accumulating backlog and stays pending.
-- **2 drives connected** — both sync as independent replicas, serially in v1.
+- **Nothing reachable** — imports still work; files land in staging;
+  replication tasks queue per target.
+- **Some reachable** — each is identified by a marker file written at
+  registration (volume UUID as fallback for removable ones; never path alone).
+  Their backlogs sync; absent targets keep accumulating backlog.
+- **Two targets on one device are refused at registration** — a copy on each
+  does not survive that device failing, so the policy would count one copy as
+  two.
 
 **Protection state ≠ residency.** Local assets carry a computed protection
-state: `StagedOnly` → `ReplicatedToOneDrive` → `FullyReplicated`, plus
-`DriftDetected` (replica content diverged from catalog hash) and
-`VerificationOverdue` (replica integrity not re-checked recently). An asset can
+state: `StagedOnly` → `ReplicatedToOneDrive` → `AwaitingFirstCheck` →
+`FullyReplicated`, plus `DriftDetected` (replica content diverged from catalog
+hash), `VerificationOverdue` (replica integrity not re-checked recently) and
+`NotApplicable` (asset is not Local-resident). `AwaitingFirstCheck` means the
+copies exist but none has been read back — it satisfies the redundancy policy,
+and is deliberately distinct from a check that has gone stale. An asset can
 validly be residency=Local, protection=ReplicatedToOneDrive, present on Drive A,
 pending on Drive B — the model represents that directly.
 
@@ -58,14 +66,13 @@ like external volumes:
 hdiutil create -size 100m -fs APFS -volname HeykinnDriveA /tmp/HeykinnDriveA.dmg && hdiutil attach /tmp/HeykinnDriveA.dmg
 ```
 
-Mount it, register it in Drives & Health, and the backlog syncs to it; detach
+Mount it, register it in Storage & Health, and the backlog syncs to it; detach
 (`hdiutil detach /Volumes/HeykinnDriveA`) mid-sync to see interruption handling,
 re-attach to see reconnect + auto-sync resume.
 
-First launch seeds sample data: 8 Local photos (real PNGs in staging, including
-an exact-duplicate pair and WhatsApp-named files), cloud-resident placeholders,
-a deliberate two-cloud violation, default policies, and a pending migration —
-so every screen shows real behavior immediately.
+First launch starts empty. Nothing is seeded: demo rows asserting cloud
+residency described a state the app has no connector to establish, and the rest
+was noise sitting alongside a real archive.
 
 ## Architecture
 
@@ -78,14 +85,16 @@ Sources/HeykinnClicks/
 │   ├── Residency.swift          ResidencyDomain, DomainPresence (presence ≠ residency)
 │   ├── Asset.swift              Asset, AssetVariant, AssetKind, ImportOrigin
 │   ├── Protection.swift         ProtectionState (computed, never stored blindly)
-│   ├── Drive.swift              ManagedDrive, DriveMarker, VolumeInfo
-│   ├── Replication.swift        DriveReplicaState, ReplicationTask (per-drive backlog)
+│   ├── Target.swift             ReplicationTarget, TargetKind, TargetMarker,
+│   │                            TargetStorage (one device = one copy), VolumeInfo
+│   ├── Replication.swift        TargetReplicaState, ReplicationTask (per-target backlog)
 │   ├── Policy.swift             PolicyRule
 │   ├── Migration.swift          MigrationJob + MigrationState (overlap legality)
 │   ├── Violation.swift          ViolationKind (computed, surfaced, never auto-fixed)
 │   ├── Takeout.swift            TakeoutArchive, TakeoutExportSet, pipeline phases
 │   ├── ArchiveReplication.swift ExportPart, PartRedundancy (graded, not binary),
 │   │                            HeldExportPart, ExportPartTransferPlanner
+│   ├── CloudClaimWithdrawal.swift withdrawing claims the app never verified
 │   └── …                        ImportBatch, AuditEvent, DuplicateGroup
 ├── Persistence/
 │   ├── SQLiteDatabase.swift     thin sqlite3 wrapper (WAL, prepared statements)
@@ -99,7 +108,7 @@ Sources/HeykinnClicks/
 │   ├── PolicyEngine.swift       priority-ordered rule evaluation + origin classification
 │   ├── DuplicateDetector.swift  exact hash groups (perceptual matching = later phase)
 │   ├── StagingStore.swift       Mac staging/cache area
-│   ├── DriveMonitor.swift       volume enumeration, marker identity, mount notifications
+│   ├── TargetMonitor.swift      volume enumeration, marker identity, mount notifications
 │   ├── ReplicationService.swift copy/verify/remove backlog execution (hash-verified,
 │   │                            temp-file + atomic rename; interruption-safe)
 │   ├── ExportPartRelay.swift    the Mac holding area; verified large-file copy
@@ -112,18 +121,17 @@ Sources/HeykinnClicks/
 │   ├── ViolationScanner.swift   invariant checks incl. migration-overlap exemption
 │   └── MigrationService.swift   explicit state machine: pending → copyingToTarget →
 │                                verifyingTarget → clearingSource → completed/failed
-├── Support/SampleData.swift     first-run seed (real files, real hashes)
 └── UI/                          Overview (visual dashboard), Library (hover-plays
-                                 Live Photos and video), Asset Detail, Drives &
+                                 Live Photos and video), Asset Detail, Storage &
                                  Health, Duplicates, Violations, Policies,
                                  Migrations, Google Takeout, Activity, Settings (⌘,)
 ```
 
 ### Sync behavior
 
-- **Auto-sync on connect** (toggleable in Settings → Automation): when a managed
-  drive appears with pending backlog, its sync starts automatically. Multiple
-  drives serialize — a second drive queues behind a running sync.
+- **Auto-sync on connect** (toggleable in Settings → Automation): when a target
+  becomes reachable with pending backlog, its sync starts automatically. Syncs
+  serialize — a second target queues behind a running one.
 - **Progress + cancel**: syncs process one task at a time with a live progress
   bar and current-file readout. Cancel stops after the current task; a drive
   unplugged mid-sync is detected between tasks. Either way the remaining
@@ -136,7 +144,7 @@ The **Google Takeout** screen finds and imports Takeout exports that already
 sit on your drives — the common case of Takeout zips downloaded straight onto
 the external archive drive:
 
-- **Scan** any connected managed drive (one click per drive) or any folder.
+- **Scan** any reachable target (one click per target) or any folder.
   Detected: `takeout-*.zip`, any zip whose listing is rooted at `Takeout/`
   (renamed downloads), extracted folders including extraction-collision names
   (`Takeout`, `Takeout 2`, `Takeout (1)`, …), and renamed roots found
@@ -189,11 +197,11 @@ the external archive drive:
 
 ### Automatic Takeout management & archive-backed replicas
 
-With "Automatically manage Takeout" on (default), connecting a managed drive
+With "Automatically manage Takeout" on (default), a target becoming reachable
 runs the zero-button pipeline: **scan → reconcile → extract → import**.
 
 - **Archive-backed replicas.** Assets imported from a Takeout folder on a
-  managed drive record the folder's own files as that drive's replica
+  target record the folder's own files as that target's replica
   (`volume:`-prefixed replica paths) — hash-verified at import, with no
   duplicate copy queued onto the same disk. Only the *other* drive gets copy
   tasks.

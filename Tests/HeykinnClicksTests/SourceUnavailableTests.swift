@@ -13,11 +13,11 @@ final class SourceUnavailableTests: XCTestCase {
         return url
     }
 
-    private func makeDrive() -> ManagedDrive {
-        ManagedDrive(
+    private func makeDrive() -> ReplicationTarget {
+        ReplicationTarget(
             id: UUID(), name: "Target", volumeUUID: nil, markerToken: "t",
             registeredAt: Date(), lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
     }
 
@@ -35,7 +35,7 @@ final class SourceUnavailableTests: XCTestCase {
         let drive = makeDrive()
         let asset = makeAsset()
         let task = ReplicationTask(
-            id: UUID(), assetID: asset.id, driveID: drive.id, action: .copy,
+            id: UUID(), assetID: asset.id, targetID: drive.id, action: .copy,
             state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
         )
 
@@ -60,7 +60,7 @@ final class SourceUnavailableTests: XCTestCase {
 
         let result = ReplicationService.perform(
             ReplicationTask(
-                id: UUID(), assetID: asset.id, driveID: drive.id, action: .copy,
+                id: UUID(), assetID: asset.id, targetID: drive.id, action: .copy,
                 state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
             ),
             drive: drive, mountURL: try makeTempDirectory(), asset: asset, sourceURL: source
@@ -83,7 +83,7 @@ final class SourceUnavailableTests: XCTestCase {
         // First attempt with the source drive absent.
         let blocked = ReplicationService.perform(
             ReplicationTask(
-                id: UUID(), assetID: asset.id, driveID: drive.id, action: .copy,
+                id: UUID(), assetID: asset.id, targetID: drive.id, action: .copy,
                 state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
             ),
             drive: drive, mountURL: mount, asset: asset, sourceURL: nil

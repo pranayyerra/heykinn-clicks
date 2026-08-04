@@ -43,7 +43,15 @@ final class ThumbnailCacheTests: XCTestCase {
             FileManager.default.fileExists(atPath: cache.diskURL(for: assetID).path),
             "The disk tier is what keeps the Library browsable offline"
         )
-        XCTAssertNotNil(cache.cachedInMemory(assetID))
+        // Deliberately *not* asserting `cachedInMemory` is populated: the memory
+        // tier is an NSCache, which may evict whenever it likes, and asserting
+        // it retained an object makes the test fail under memory pressure for a
+        // cache that is behaving exactly as documented. What the cache actually
+        // promises is that a second lookup is served without the source, which
+        // is also all the app relies on — `cachedInMemory` is a fast path with
+        // a fallback, never a source of truth.
+        let refetched = await cache.thumbnail(for: assetID, sourceURL: nil)
+        XCTAssertNotNil(refetched, "A generated thumbnail must be servable without re-reading the source")
     }
 
     func testDiskTierServesThumbnailsWhenTheSourceIsGone() async throws {

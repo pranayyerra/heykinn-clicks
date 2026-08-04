@@ -5,7 +5,7 @@ import AVFoundation
 import UniformTypeIdentifiers
 
 /// Two-level thumbnail cache: an in-memory tier for scrolling, and a small
-/// on-disk tier so the Library stays browsable when the drives are unplugged.
+/// on-disk tier so the Library stays browsable when the targets are unplugged.
 ///
 /// Without it, every cell scrolling back into view re-read and re-decoded the
 /// original from the external drive. Thumbnails are stored downsampled — not
@@ -67,7 +67,9 @@ final class ThumbnailCache {
         return image
     }
 
-    private func store(_ image: NSImage, for assetID: UUID) {
+    /// Memory-tier insert. Internal so provider-served thumbnails — which have
+    /// no source file on disk to regenerate from — can be kept for scrolling.
+    func store(_ image: NSImage, for assetID: UUID) {
         let cost = Int(image.size.width * image.size.height * 4)
         memory.setObject(image, forKey: assetID.uuidString as NSString, cost: max(cost, 1))
     }

@@ -36,10 +36,10 @@ struct TakeoutView: View {
         .toolbar {
             ToolbarItem {
                 Menu {
-                    ForEach(store.drives.filter { store.connectedMounts[$0.id] != nil }) { drive in
+                    ForEach(store.targets.filter { store.reachablePaths[$0.id] != nil }) { drive in
                         Button("Look on \(drive.name)") {
-                            if let mount = store.connectedMounts[drive.id] {
-                                store.scanForTakeout(rootURL: mount, driveID: drive.id)
+                            if let mount = store.reachablePaths[drive.id] {
+                                store.scanForTakeout(rootURL: mount, targetID: drive.id)
                             }
                         }
                     }
@@ -56,7 +56,7 @@ struct TakeoutView: View {
             allowsMultipleSelection: false
         ) { result in
             if case .success(let urls) = result, let url = urls.first {
-                store.scanForTakeout(rootURL: url, driveID: nil)
+                store.scanForTakeout(rootURL: url, targetID: nil)
             }
         }
         .sheet(item: $importRequest) { TakeoutImportSheet(request: $0) }
@@ -115,12 +115,12 @@ struct ExportSummary: Identifiable {
         TakeoutExportSet(setID: setID, parts: archives).missingPartNumbers
     }
 
-    /// Parts short of the policy, with the drives each one still owes a copy to.
+    /// Parts short of the policy, with the targets each one still owes a copy to.
     var shortfall: [(part: ExportPart, destinations: [UUID])] {
         parts.compactMap { part in
-            let redundancy = part.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy)
+            let redundancy = part.redundancy(acrossTargets: plan.managedTargetIDs, policy: plan.policy)
             guard !redundancy.meetsPolicy else { return nil }
-            let destinations = Array(part.drivesNeedingACopy(managedDriveIDs: plan.managedDriveIDs))
+            let destinations = Array(part.targetsNeedingACopy(managedTargetIDs: plan.managedTargetIDs))
             guard !destinations.isEmpty else { return nil }
             return (part, destinations)
         }
@@ -151,10 +151,10 @@ struct ExportSummary: Identifiable {
             )
         }
         let verified = parts.filter {
-            $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy) == .redundantVerified
+            $0.redundancy(acrossTargets: plan.managedTargetIDs, policy: plan.policy) == .redundantVerified
         }
         let spotChecked = parts.filter {
-            $0.redundancy(acrossManagedDrives: plan.managedDriveIDs, policy: plan.policy) == .redundantSpotChecked
+            $0.redundancy(acrossTargets: plan.managedTargetIDs, policy: plan.policy) == .redundantSpotChecked
         }
         if verified.count == parts.count {
             return ("On every drive, copies verified byte for byte", "checkmark.seal.fill", .green)
@@ -169,13 +169,13 @@ struct ExportSummary: Identifiable {
 
 /// A single export: what it is, whether it is safe, and a menu for the rare
 /// occasions the automatic handling needs overriding.
-private struct ExportCard: View {
+struct ExportCard: View {
     let export: ExportSummary
     @Binding var importRequest: TakeoutImportRequest?
     @EnvironmentObject private var store: AppStore
 
     private var driveNames: [UUID: String] {
-        Dictionary(uniqueKeysWithValues: store.drives.map { ($0.id, $0.name) })
+        Dictionary(uniqueKeysWithValues: store.targets.map { ($0.id, $0.name) })
     }
 
     var body: some View {
@@ -278,7 +278,7 @@ private struct ExportCard: View {
         }
         if !deferred.isEmpty {
             Label(
-                "\(deferred.count) part(s) need to wait on the Mac while the other drive is away, and there is not enough free space for them. Connect both drives at once, or free up space.",
+                "\(deferred.count) part(s) need to wait on the Mac while the other drive is away, and there is not enough free space for them. Connect both targets at once, or free up space.",
                 systemImage: "internaldrive"
             )
             .font(.caption)
@@ -369,14 +369,13 @@ struct TakeoutImportRequest: Identifiable {
     var setID: String?
 }
 
-/// The one question importing cannot answer for itself.
+/// Confirms the import. It asks nothing about Google: whether the content is
+/// still there is not something the user can answer per asset, and not
+/// something the app may record on their say-so.
 struct TakeoutImportSheet: View {
     let request: TakeoutImportRequest
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    // Off by default: the app cannot check Google, so it must not pre-tick a
-    // claim on the user's behalf.
-    @State private var stillInGoogle = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -386,11 +385,7 @@ struct TakeoutImportSheet: View {
             Text("Photos and videos are added to the library with their dates and locations from Google's metadata. Anything already in the library is skipped.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-
-            Toggle("I know these are still in Google Photos", isOn: $stillInGoogle)
-            Text(stillInGoogle
-                 ? "Recorded as your statement, not a verified fact — the app has no Google account connection. A migration job will track the overlap until you confirm you have deleted them from Google."
-                 : "They will be recorded as living only on your own drives. Leave this off if you are unsure.")
+            Text("They are recorded as living on your own targets. The export proves this content was in Google when the export was made, which is not evidence about now — so the app claims nothing about Google until it can check for itself.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 
@@ -398,7 +393,7 @@ struct TakeoutImportSheet: View {
                 Spacer()
                 Button("Cancel") { dismiss() }
                 Button("Import") {
-                    store.importTakeoutArchives(request.archives.map(\.id), assumeStillInGoogle: stillInGoogle)
+                    store.importTakeoutArchives(request.archives.map(\.id))
                     dismiss()
                 }
                 .buttonStyle(.borderedProminent)

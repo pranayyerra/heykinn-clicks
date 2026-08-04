@@ -29,12 +29,41 @@ final class CatalogBackupTests: XCTestCase {
         return (catalog, path)
     }
 
+    /// A volume the app cannot write to is the failure a user actually hits:
+    /// macOS gates external volumes, and SQLite reports the refusal as
+    /// "unable to open database", which reads like corruption and sends you
+    /// looking at the disk instead of at the permission.
+    func testAnUnwritableVolumeIsReportedAsBlockedAccessNotCorruption() throws {
+        let (catalog, _) = try makePopulatedCatalog(assets: 3)
+        let mount = try makeTempDirectory()
+        let directory = CatalogBackupService.backupDirectory(onMount: mount)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        // Read and execute, no write: what a denied volume looks like from here.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: directory.path)
+        addTeardownBlock {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: directory.path)
+        }
+
+        XCTAssertThrowsError(
+            try CatalogBackupService.writeSnapshot(
+                from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 3
+            )
+        ) { error in
+            guard case CatalogBackupService.BackupError.accessBlocked(let volume, _) = error else {
+                return XCTFail("Expected accessBlocked, got \(error)")
+            }
+            XCTAssertEqual(volume, mount.lastPathComponent)
+            let described = error.localizedDescription
+            XCTAssertTrue(described.contains("Privacy & Security"), "Must say how to fix it")
+        }
+    }
+
     func testSnapshotIsReadableAndCompleteAndLeavesNoTempFile() throws {
         let (catalog, _) = try makePopulatedCatalog(assets: 25)
         let mount = try makeTempDirectory()
 
         let snapshot = try CatalogBackupService.writeSnapshot(
-            from: catalog, toMount: mount, driveID: UUID(), expectedAssetCount: 25
+            from: catalog, toMount: mount, targetID: UUID(), expectedAssetCount: 25
         )
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: snapshot.url.path))
@@ -58,7 +87,7 @@ final class CatalogBackupTests: XCTestCase {
         let (catalog, _) = try makePopulatedCatalog(assets: 12)
         let mount = try makeTempDirectory()
         try CatalogBackupService.writeSnapshot(
-            from: catalog, toMount: mount, driveID: nil, expectedAssetCount: 12
+            from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 12
         )
         let entries = try FileManager.default.contentsOfDirectory(
             atPath: CatalogBackupService.backupDirectory(onMount: mount).path
@@ -79,7 +108,7 @@ final class CatalogBackupTests: XCTestCase {
         try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
 
         let snapshot = try CatalogBackupService.writeSnapshot(
-            from: catalog, toMount: mount, driveID: nil, expectedAssetCount: 4
+            from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 4
         )
         XCTAssertTrue(FileManager.default.fileExists(atPath: snapshot.url.path))
         let restored = try CatalogStore(databasePath: snapshot.url.path)
@@ -90,7 +119,7 @@ final class CatalogBackupTests: XCTestCase {
         let (catalog, _) = try makePopulatedCatalog(assets: 10)
         let mount = try makeTempDirectory()
         let snapshot = try CatalogBackupService.writeSnapshot(
-            from: catalog, toMount: mount, driveID: nil, expectedAssetCount: 10
+            from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 10
         )
         // Corrupt the snapshot the way a half-finished write would.
         try Data(repeating: 0, count: 4096).write(to: snapshot.url)
@@ -103,7 +132,7 @@ final class CatalogBackupTests: XCTestCase {
         let (catalog, _) = try makePopulatedCatalog(assets: 5)
         let mount = try makeTempDirectory()
         let snapshot = try CatalogBackupService.writeSnapshot(
-            from: catalog, toMount: mount, driveID: nil, expectedAssetCount: 5
+            from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 5
         )
         // A snapshot that holds fewer assets than the live catalog is stale or
         // partial and must not pass as a backup.
@@ -118,12 +147,12 @@ final class CatalogBackupTests: XCTestCase {
         var written: [URL] = []
         for offset in 0..<(CatalogBackupService.retainCount + 3) {
             let snapshot = try CatalogBackupService.writeSnapshot(
-                from: catalog, toMount: mount, driveID: nil, expectedAssetCount: 3,
+                from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 3,
                 now: Date().addingTimeInterval(Double(offset))
             )
             written.append(snapshot.url)
         }
-        let remaining = CatalogBackupService.listSnapshots(onMount: mount, driveID: nil)
+        let remaining = CatalogBackupService.listSnapshots(onMount: mount, targetID: nil)
         XCTAssertEqual(remaining.count, CatalogBackupService.retainCount)
         // The newest must survive, the oldest must be gone.
         XCTAssertTrue(FileManager.default.fileExists(atPath: written.last!.path))
@@ -138,7 +167,7 @@ final class CatalogBackupTests: XCTestCase {
         let mount = try makeTempDirectory()
         try catalog.upsertAsset(makeAsset())
         let snapshot = try CatalogBackupService.writeSnapshot(
-            from: catalog, toMount: mount, driveID: nil, expectedAssetCount: 21
+            from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 21
         )
         let restored = try CatalogStore(databasePath: snapshot.url.path)
         XCTAssertEqual(try restored.fetchAssets().count, 21)

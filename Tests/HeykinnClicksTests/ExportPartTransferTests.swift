@@ -2,7 +2,7 @@ import XCTest
 @testable import HeykinnClicks
 
 /// Getting a part from the drive that has it onto the drive that needs it,
-/// including the case the whole holding area exists for: the two drives are
+/// including the case the whole holding area exists for: the two targets are
 /// never plugged in at the same time.
 final class ExportPartTransferTests: XCTestCase {
 
@@ -16,14 +16,14 @@ final class ExportPartTransferTests: XCTestCase {
         TakeoutArchive(
             id: UUID(),
             path: "/Volumes/D/takeout-\(setID)-\(String(format: "%03d", part))\(kind == .zip ? ".zip" : "")",
-            kind: kind, sizeBytes: tenGB, driveID: drive, discoveredAt: Date(),
+            kind: kind, sizeBytes: tenGB, targetID: drive, discoveredAt: Date(),
             importedAt: nil, importBatchID: nil, importedAssetCount: 0,
             skippedDuplicateCount: 0, note: nil, exportSetID: setID, partNumber: part
         )
     }
 
     private func replicationPlan(_ archives: [TakeoutArchive]) -> ArchiveReplicationPlan {
-        ArchiveReplicationPlanner.plan(archives: archives, managedDriveIDs: [driveA, driveB])
+        ArchiveReplicationPlanner.plan(archives: archives, managedTargetIDs: [driveA, driveB])
     }
 
     private func held(part: Int, setID: String = "S1", size: Int64? = nil) -> HeldExportPart {

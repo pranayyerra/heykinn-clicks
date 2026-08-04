@@ -2,7 +2,7 @@ import Foundation
 
 /// The Mac-side staging/cache area for Local-resident assets. Files land here
 /// at import and remain until replicated (and beyond, as a cache) — so imports
-/// work with zero drives connected.
+/// work with zero targets connected.
 struct StagingStore {
     let rootURL: URL
 

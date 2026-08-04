@@ -17,44 +17,44 @@ final class DriveResilienceTests: XCTestCase {
         return url
     }
 
-    private func makeDrive(id: UUID = UUID()) -> ManagedDrive {
-        ManagedDrive(
+    private func makeDrive(id: UUID = UUID()) -> ReplicationTarget {
+        ReplicationTarget(
             id: id, name: "Test", volumeUUID: "VOL-UUID", markerToken: "token",
             registeredAt: Date(), lastSeenAt: nil,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
     }
 
     func testConnectedDriveSurvivesEnumerationMiss() throws {
-        let monitor = DriveMonitor()
+        let monitor = TargetMonitor()
         let drive = makeDrive()
         let mount = try makeTempDirectory()
 
         // Seed a connected state as a successful rescan would produce.
-        monitor.setConnectedMountsForTesting([drive.id: mount])
-        XCTAssertEqual(monitor.connectedMounts[drive.id], mount)
+        monitor.setReachablePathsForTesting([drive.id: mount])
+        XCTAssertEqual(monitor.reachablePaths[drive.id], mount)
 
         // Now rescan while the volume is invisible to enumeration (no marker
         // file, and its UUID is not discoverable) — the mount point still
         // exists on disk, so the drive must remain connected.
-        monitor.rescan(managedDrives: [drive])
+        monitor.rescan(targets: [drive])
         XCTAssertEqual(
-            monitor.connectedMounts[drive.id], mount,
+            monitor.reachablePaths[drive.id], mount,
             "A transient enumeration miss must not look like a disconnect"
         )
     }
 
     func testDriveDropsWhenMountPointGenuinelyDisappears() throws {
-        let monitor = DriveMonitor()
+        let monitor = TargetMonitor()
         let drive = makeDrive()
         let mount = try makeTempDirectory()
-        monitor.setConnectedMountsForTesting([drive.id: mount])
+        monitor.setReachablePathsForTesting([drive.id: mount])
 
         // A real unmount removes the mount point.
         try FileManager.default.removeItem(at: mount)
-        monitor.rescan(managedDrives: [drive])
+        monitor.rescan(targets: [drive])
         XCTAssertNil(
-            monitor.connectedMounts[drive.id],
+            monitor.reachablePaths[drive.id],
             "A genuine unmount must still be detected"
         )
     }
@@ -62,7 +62,7 @@ final class DriveResilienceTests: XCTestCase {
     func testVolumeStillEnumeratedWhenMarkerUnreadable() throws {
         // A volume with no marker file must still produce a VolumeInfo (so
         // UUID fallback matching can run) rather than vanishing entirely.
-        let volumes = DriveMonitor.enumerateVolumes()
+        let volumes = TargetMonitor.enumerateVolumes()
         for volume in volumes {
             XCTAssertFalse(volume.name.isEmpty, "Every enumerated volume needs a usable name")
         }

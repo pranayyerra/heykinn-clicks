@@ -23,7 +23,7 @@ struct TakeoutArchive: Identifiable, Hashable {
     var sizeBytes: Int64
     /// Managed drive it was found on, if any — lets the UI say "on Drive A
     /// (offline)" when the volume is unmounted.
-    var driveID: UUID?
+    var targetID: UUID?
     var discoveredAt: Date
     var importedAt: Date?
     var importBatchID: UUID?

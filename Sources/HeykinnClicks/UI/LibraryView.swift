@@ -117,11 +117,16 @@ struct LibraryView: View {
                 .lineLimit(1)
             HStack(spacing: 4) {
                 ResidencyBadge(domain: asset.residency)
-                if let protection = store.protectionStates[asset.id], protection != .notApplicable {
-                    Image(systemName: protection.symbolName)
+                // Only assets that fail the policy are marked. A badge on every
+                // cell is a field of icons the eye has to decode one by one;
+                // the useful signal is which few are not safe.
+                if let protection = store.protectionStates[asset.id],
+                   case let verdict = protection.verdict,
+                   verdict != .notLocal, !verdict.isSatisfied {
+                    Image(systemName: verdict.symbolName)
                         .font(.caption)
-                        .foregroundStyle(protection.tint)
-                        .help(protection.displayName)
+                        .foregroundStyle(verdict.tint)
+                        .help(verdict.displayName(policy: store.redundancyPolicy))
                 }
             }
         }

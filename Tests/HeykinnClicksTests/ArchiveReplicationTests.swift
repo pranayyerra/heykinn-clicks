@@ -12,7 +12,7 @@ final class ArchiveReplicationTests: XCTestCase {
         TakeoutArchive(
             id: UUID(),
             path: "/Volumes/D/takeout-\(setID)-\(String(format: "%03d", part))\(kind == .zip ? ".zip" : "")",
-            kind: kind, sizeBytes: size, driveID: drive, discoveredAt: Date(),
+            kind: kind, sizeBytes: size, targetID: drive, discoveredAt: Date(),
             importedAt: nil, importBatchID: nil, importedAssetCount: 0,
             skippedDuplicateCount: 0, note: nil, exportSetID: setID, partNumber: part,
             contentHash: hash
@@ -23,10 +23,10 @@ final class ArchiveReplicationTests: XCTestCase {
         let a = UUID(), b = UUID()
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(part: 1, drive: a), archive(part: 1, drive: b)],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
         XCTAssertEqual(plan.parts.count, 1)
-        XCTAssertEqual(plan.parts[0].redundancy(acrossManagedDrives: [a, b]), .redundantUnverified)
+        XCTAssertEqual(plan.parts[0].redundancy(acrossTargets: [a, b]), .redundantUnverified)
         XCTAssertTrue(plan.isSatisfied)
         XCTAssertEqual(plan.bytesOutstanding, 0, "Nothing to transfer — both copies exist")
     }
@@ -38,9 +38,9 @@ final class ArchiveReplicationTests: XCTestCase {
                 archive(part: 1, drive: a, hash: "same"),
                 archive(part: 1, drive: b, hash: "same"),
             ],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
-        XCTAssertEqual(plan.parts[0].redundancy(acrossManagedDrives: [a, b]), .redundantVerified)
+        XCTAssertEqual(plan.parts[0].redundancy(acrossTargets: [a, b]), .redundantVerified)
     }
 
     func testDisagreeingSizesAreNotClaimedAsRedundant() {
@@ -50,10 +50,10 @@ final class ArchiveReplicationTests: XCTestCase {
                 archive(part: 1, drive: a, size: 10_000_000_000),
                 archive(part: 1, drive: b, size: 9_000_000_000),
             ],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
         XCTAssertEqual(
-            plan.parts[0].redundancy(acrossManagedDrives: [a, b]), .singleCopy,
+            plan.parts[0].redundancy(acrossTargets: [a, b]), .singleCopy,
             "Same part number is not proof the bytes match"
         )
         XCTAssertFalse(plan.isSatisfied)
@@ -63,11 +63,11 @@ final class ArchiveReplicationTests: XCTestCase {
         let a = UUID(), b = UUID()
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(part: 1, drive: a, size: 5_000)],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
         let part = plan.parts[0]
-        XCTAssertEqual(part.redundancy(acrossManagedDrives: [a, b]), .singleCopy)
-        XCTAssertEqual(part.drivesNeedingACopy(managedDriveIDs: [a, b]), [b])
+        XCTAssertEqual(part.redundancy(acrossTargets: [a, b]), .singleCopy)
+        XCTAssertEqual(part.targetsNeedingACopy(managedTargetIDs: [a, b]), [b])
         XCTAssertEqual(plan.bytesOutstanding, 5_000, "One part, one drive short")
     }
 
@@ -78,9 +78,9 @@ final class ArchiveReplicationTests: XCTestCase {
                 archive(part: 3, drive: a, kind: .folder, size: 7_000),
                 archive(part: 3, drive: b, kind: .zip, size: 7_000),
             ],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
-        XCTAssertTrue(plan.parts[0].redundancy(acrossManagedDrives: [a, b]).meetsPolicy,
+        XCTAssertTrue(plan.parts[0].redundancy(acrossTargets: [a, b]).meetsPolicy,
                       "The bytes are present either way")
     }
 
@@ -91,7 +91,7 @@ final class ArchiveReplicationTests: XCTestCase {
                 archive(part: 2, drive: a, kind: .zip),
                 archive(part: 2, drive: a, kind: .folder),
             ],
-            managedDriveIDs: [a]
+            managedTargetIDs: [a]
         )
         XCTAssertEqual(plan.parts[0].copies[a]?.kind, .zip, "The zip is what gets transferred")
     }
@@ -103,7 +103,7 @@ final class ArchiveReplicationTests: XCTestCase {
             archives.append(archive(part: part, drive: a))
             archives.append(archive(part: part, drive: b))
         }
-        let plan = ArchiveReplicationPlanner.plan(archives: archives, managedDriveIDs: [a, b])
+        let plan = ArchiveReplicationPlanner.plan(archives: archives, managedTargetIDs: [a, b])
         XCTAssertEqual(plan.parts.count, 12)
         XCTAssertEqual(plan.partsMeetingPolicy.count, 12)
         XCTAssertTrue(plan.partsNeedingWork.isEmpty)
@@ -117,7 +117,7 @@ final class ArchiveReplicationTests: XCTestCase {
         let a = UUID(), b = UUID()
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(part: 1, drive: a), archive(part: 1, drive: b)],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
         let stem = plan.parts[0].displayName
         XCTAssertEqual(stem, "takeout-S1-001")
@@ -132,7 +132,7 @@ final class ArchiveReplicationTests: XCTestCase {
     }
 
     /// The number of copies is policy, not a constant. Someone wanting three
-    /// drives must get three-drive answers from the same model.
+    /// targets must get three-drive answers from the same model.
     func testRedundancyFollowsTheConfiguredPolicyNotTheNumberTwo() {
         let a = UUID(), b = UUID(), c = UUID()
         let archives = [
@@ -142,15 +142,15 @@ final class ArchiveReplicationTests: XCTestCase {
         let threeCopies = LocalRedundancyPolicy(desiredCopies: 3)
 
         let underDefault = ArchiveReplicationPlanner.plan(
-            archives: archives, managedDriveIDs: [a, b, c]
+            archives: archives, managedTargetIDs: [a, b, c]
         )
         XCTAssertTrue(underDefault.isSatisfied, "Two copies satisfies the default policy")
 
         let underThree = ArchiveReplicationPlanner.plan(
-            archives: archives, managedDriveIDs: [a, b, c], policy: threeCopies
+            archives: archives, managedTargetIDs: [a, b, c], policy: threeCopies
         )
         XCTAssertFalse(underThree.isSatisfied, "Two copies does not satisfy a three-copy policy")
-        XCTAssertEqual(underThree.partsNeedingWork.first?.drivesNeedingACopy(managedDriveIDs: [a, b, c]), [c])
+        XCTAssertEqual(underThree.partsNeedingWork.first?.targetsNeedingACopy(managedTargetIDs: [a, b, c]), [c])
         XCTAssertEqual(underThree.bytesOutstanding, 100)
     }
 
@@ -163,8 +163,8 @@ final class ArchiveReplicationTests: XCTestCase {
             importBatchID: nil, exifSummary: [:]
         )
         let replicas = (0..<2).map { _ in
-            DriveReplicaState(
-                assetID: asset.id, driveID: UUID(), state: .present,
+            TargetReplicaState(
+                assetID: asset.id, targetID: UUID(), state: .present,
                 relativePath: "volume:x", lastVerifiedAt: Date()
             )
         }
@@ -189,13 +189,13 @@ final class ArchiveReplicationTests: XCTestCase {
             archives.append(archive(part: part, drive: a, size: 1_000))
             if part <= 9 { archives.append(archive(part: part, drive: b, size: 1_000)) }
         }
-        let plan = ArchiveReplicationPlanner.plan(archives: archives, managedDriveIDs: [a, b])
+        let plan = ArchiveReplicationPlanner.plan(archives: archives, managedTargetIDs: [a, b])
         XCTAssertEqual(plan.partsNeedingWork.map(\.partNumber).sorted(), [10, 11, 12])
         XCTAssertEqual(plan.bytesOutstanding, 3_000)
     }
 }
 
-/// An asset is only protected by the drives holding *its own* part. Treating
+/// An asset is only protected by the targets holding *its own* part. Treating
 /// every covered asset as present wherever any satisfied part lives would
 /// claim redundancy that does not exist.
 final class PerPartCoverageTests: XCTestCase {
@@ -231,14 +231,14 @@ final class PerPartCoverageTests: XCTestCase {
         )
     }
 
-    /// The case the bug would have got wrong: drives holding different
+    /// The case the bug would have got wrong: targets holding different
     /// subsets. Only the part they both hold is redundant.
     func testDrivesHoldingDifferentPartsOnlyShareWhatTheyBothHave() {
         let a = UUID(), b = UUID()
         func archive(_ part: Int, _ drive: UUID) -> TakeoutArchive {
             TakeoutArchive(
                 id: UUID(), path: "/V/takeout-S-\(String(format: "%03d", part)).zip",
-                kind: .zip, sizeBytes: 100, driveID: drive, discoveredAt: Date(),
+                kind: .zip, sizeBytes: 100, targetID: drive, discoveredAt: Date(),
                 importedAt: nil, importBatchID: nil, importedAssetCount: 0,
                 skippedDuplicateCount: 0, note: nil, exportSetID: "S", partNumber: part
             )
@@ -246,7 +246,7 @@ final class PerPartCoverageTests: XCTestCase {
         // Both hold part 1; only A holds 2, only B holds 3.
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(1, a), archive(1, b), archive(2, a), archive(3, b)],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
         XCTAssertEqual(plan.partsMeetingPolicy.map(\.partNumber), [1])
         XCTAssertEqual(plan.partsNeedingWork.map(\.partNumber).sorted(), [2, 3])
@@ -259,24 +259,24 @@ final class PerPartCoverageTests: XCTestCase {
 /// done — or worse, reports protection that is missing.
 final class DriveAttributionTests: XCTestCase {
 
-    private func drive(name: String, mount: String?) -> ManagedDrive {
-        ManagedDrive(
+    private func drive(name: String, mount: String?) -> ReplicationTarget {
+        ReplicationTarget(
             id: UUID(), name: name, volumeUUID: nil, markerToken: "t",
-            registeredAt: Date(), lastSeenAt: nil, lastMountPath: mount,
-            replicaRootComponent: ManagedDrive.defaultReplicaRoot
+            registeredAt: Date(), lastSeenAt: nil, lastKnownPath: mount,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         )
     }
 
     /// Mirrors the store's resolution: connected mounts first, then each
     /// drive's last known mount point.
     private func resolve(
-        path: String, connected: [UUID: URL], drives: [ManagedDrive]
+        path: String, connected: [UUID: URL], targets: [ReplicationTarget]
     ) -> UUID? {
         if let hit = connected.first(where: { path.hasPrefix($0.value.path + "/") })?.key {
             return hit
         }
-        return drives.first {
-            guard let mount = $0.lastMountPath else { return false }
+        return targets.first {
+            guard let mount = $0.lastKnownPath else { return false }
             return path.hasPrefix(mount + "/")
         }?.id
     }
@@ -286,7 +286,7 @@ final class DriveAttributionTests: XCTestCase {
         let resolved = resolve(
             path: "/Volumes/A/Backup/takeout-S-001.zip",
             connected: [d.id: URL(fileURLWithPath: "/Volumes/A")],
-            drives: [d]
+            targets: [d]
         )
         XCTAssertEqual(resolved, d.id)
     }
@@ -298,15 +298,15 @@ final class DriveAttributionTests: XCTestCase {
         let resolved = resolve(
             path: "/Volumes/A/Backup/takeout-S-001.zip",
             connected: [:],
-            drives: [d]
+            targets: [d]
         )
         XCTAssertEqual(resolved, d.id, "An unplugged drive's archives must still count")
     }
 
     func testPathsOutsideAnyDriveAreNotAttributed() {
         let d = drive(name: "A", mount: "/Volumes/A")
-        XCTAssertNil(resolve(path: "/Users/me/Downloads/takeout-S-001.zip", connected: [:], drives: [d]))
-        XCTAssertNil(resolve(path: "/Volumes/Another/takeout-S-001.zip", connected: [:], drives: [d]))
+        XCTAssertNil(resolve(path: "/Users/me/Downloads/takeout-S-001.zip", connected: [:], targets: [d]))
+        XCTAssertNil(resolve(path: "/Volumes/Another/takeout-S-001.zip", connected: [:], targets: [d]))
     }
 
     /// An archive with no drive is invisible to planning, so a part with an
@@ -315,19 +315,19 @@ final class DriveAttributionTests: XCTestCase {
         let a = UUID()
         let attributed = TakeoutArchive(
             id: UUID(), path: "/V/A/takeout-S-001.zip", kind: .zip, sizeBytes: 10,
-            driveID: a, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
+            targetID: a, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
             importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
             exportSetID: "S", partNumber: 1
         )
         var orphan = attributed
-        orphan.driveID = nil
+        orphan.targetID = nil
         orphan.path = "/V/B/takeout-S-001.zip"
 
         let plan = ArchiveReplicationPlanner.plan(
-            archives: [attributed, orphan], managedDriveIDs: [a, UUID()]
+            archives: [attributed, orphan], managedTargetIDs: [a, UUID()]
         )
         XCTAssertEqual(
-            plan.parts.first?.redundancy(acrossManagedDrives: plan.managedDriveIDs), .singleCopy,
+            plan.parts.first?.redundancy(acrossTargets: plan.managedTargetIDs), .singleCopy,
             "A copy that belongs to no known drive cannot be counted as protection"
         )
     }
@@ -340,7 +340,7 @@ final class ChecksumVerificationTests: XCTestCase {
     private func archive(part: Int, drive: UUID, hash: String?, size: Int64 = 100) -> TakeoutArchive {
         TakeoutArchive(
             id: UUID(), path: "/V/\(drive.uuidString)/takeout-S-\(String(format: "%03d", part)).zip",
-            kind: .zip, sizeBytes: size, driveID: drive, discoveredAt: Date(),
+            kind: .zip, sizeBytes: size, targetID: drive, discoveredAt: Date(),
             importedAt: nil, importBatchID: nil, importedAssetCount: 0,
             skippedDuplicateCount: 0, note: nil, exportSetID: "S", partNumber: part,
             contentHash: hash
@@ -351,9 +351,9 @@ final class ChecksumVerificationTests: XCTestCase {
         let a = UUID(), b = UUID()
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(part: 1, drive: a, hash: "abc"), archive(part: 1, drive: b, hash: "abc")],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
-        XCTAssertEqual(plan.parts[0].redundancy(acrossManagedDrives: [a, b]), .redundantVerified)
+        XCTAssertEqual(plan.parts[0].redundancy(acrossTargets: [a, b]), .redundantVerified)
         XCTAssertTrue(plan.parts[0].hashesAgree)
     }
 
@@ -363,23 +363,23 @@ final class ChecksumVerificationTests: XCTestCase {
         let a = UUID(), b = UUID()
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(part: 1, drive: a, hash: "abc"), archive(part: 1, drive: b, hash: "xyz")],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
         let part = plan.parts[0]
         XCTAssertFalse(part.hashesAgree)
         // Sizes still match, so it reads as present-but-unproven rather than
         // verified — the mismatch is what the check then flags.
-        XCTAssertEqual(part.redundancy(acrossManagedDrives: [a, b]), .redundantUnverified)
+        XCTAssertEqual(part.redundancy(acrossTargets: [a, b]), .redundantUnverified)
     }
 
     func testUnfingerprintedCopiesAreNotClaimedAsVerified() {
         let a = UUID(), b = UUID()
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(part: 1, drive: a, hash: "abc"), archive(part: 1, drive: b, hash: nil)],
-            managedDriveIDs: [a, b]
+            managedTargetIDs: [a, b]
         )
         XCTAssertFalse(plan.parts[0].hashesAgree, "One hash is not a comparison")
-        XCTAssertEqual(plan.parts[0].redundancy(acrossManagedDrives: [a, b]), .redundantUnverified)
+        XCTAssertEqual(plan.parts[0].redundancy(acrossTargets: [a, b]), .redundantUnverified)
     }
 
     /// The point of the approach: one hash per part, whatever it contains.
@@ -390,7 +390,7 @@ final class ChecksumVerificationTests: XCTestCase {
             archives.append(archive(part: part, drive: a, hash: "h\(part)"))
             archives.append(archive(part: part, drive: b, hash: "h\(part)"))
         }
-        let plan = ArchiveReplicationPlanner.plan(archives: archives, managedDriveIDs: [a, b])
+        let plan = ArchiveReplicationPlanner.plan(archives: archives, managedTargetIDs: [a, b])
         let comparisons = plan.parts.reduce(0) { $0 + $1.copies.count }
         XCTAssertEqual(comparisons, 24, "Two copies of twelve parts — not one read per photo")
         XCTAssertEqual(plan.partsMeetingPolicy.count, 12)
@@ -405,16 +405,16 @@ final class ShortfallReportingTests: XCTestCase {
     private func archive(part: Int, drive: UUID, size: Int64 = 1_000) -> TakeoutArchive {
         TakeoutArchive(
             id: UUID(), path: "/V/takeout-S-\(String(format: "%03d", part)).zip",
-            kind: .zip, sizeBytes: size, driveID: drive, discoveredAt: Date(),
+            kind: .zip, sizeBytes: size, targetID: drive, discoveredAt: Date(),
             importedAt: nil, importBatchID: nil, importedAssetCount: 0,
             skippedDuplicateCount: 0, note: nil, exportSetID: "S", partNumber: part
         )
     }
 
-    private func summary(_ archives: [TakeoutArchive], drives: Set<UUID>) -> ExportSummary {
+    private func summary(_ archives: [TakeoutArchive], targets: Set<UUID>) -> ExportSummary {
         ExportSummary(
             setID: "S", archives: archives,
-            plan: ArchiveReplicationPlanner.plan(archives: archives, managedDriveIDs: drives)
+            plan: ArchiveReplicationPlanner.plan(archives: archives, managedTargetIDs: targets)
         )
     }
 
@@ -425,7 +425,7 @@ final class ShortfallReportingTests: XCTestCase {
                         archive(part: 2, drive: a), archive(part: 2, drive: b)]
         archives += [archive(part: 3, drive: a), archive(part: 4, drive: a)]
 
-        let export = summary(archives, drives: [a, b])
+        let export = summary(archives, targets: [a, b])
         let text = export.protection(driveNames: [a: "Drive A", b: "Drive B"]).text
 
         XCTAssertTrue(text.contains("3"), text)
@@ -441,11 +441,11 @@ final class ShortfallReportingTests: XCTestCase {
         let mine = [archive(part: 1, drive: a, size: 500)]
         let other = TakeoutArchive(
             id: UUID(), path: "/V/takeout-OTHER-001.zip", kind: .zip, sizeBytes: 9_000,
-            driveID: a, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
+            targetID: a, discoveredAt: Date(), importedAt: nil, importBatchID: nil,
             importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
             exportSetID: "OTHER", partNumber: 1
         )
-        let plan = ArchiveReplicationPlanner.plan(archives: mine + [other], managedDriveIDs: [a, b])
+        let plan = ArchiveReplicationPlanner.plan(archives: mine + [other], managedTargetIDs: [a, b])
         let export = ExportSummary(setID: "S", archives: mine, plan: plan)
 
         XCTAssertEqual(export.bytesOutstanding, 500, "The other export's 9,000 bytes are not this export's problem")
@@ -454,7 +454,7 @@ final class ShortfallReportingTests: XCTestCase {
 
     func testFullyPresentExportReportsNoShortfall() {
         let a = UUID(), b = UUID()
-        let export = summary([archive(part: 1, drive: a), archive(part: 1, drive: b)], drives: [a, b])
+        let export = summary([archive(part: 1, drive: a), archive(part: 1, drive: b)], targets: [a, b])
         XCTAssertTrue(export.shortfall.isEmpty)
         XCTAssertEqual(export.bytesOutstanding, 0)
         XCTAssertTrue(export.protection(driveNames: [:]).text.contains("On every drive"))
@@ -462,7 +462,7 @@ final class ShortfallReportingTests: XCTestCase {
 
     func testSingularWordingForOnePart() {
         let a = UUID(), b = UUID()
-        let export = summary([archive(part: 7, drive: a)], drives: [a, b])
+        let export = summary([archive(part: 7, drive: a)], targets: [a, b])
         let text = export.protection(driveNames: [a: "A", b: "B"]).text
         XCTAssertTrue(text.hasPrefix("Part 7"), text)
         XCTAssertFalse(text.hasPrefix("Parts"), text)

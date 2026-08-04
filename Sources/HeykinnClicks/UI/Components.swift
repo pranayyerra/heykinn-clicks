@@ -93,16 +93,69 @@ struct ResidencyBadge: View {
     }
 }
 
+extension ProtectionVerdict {
+    var tint: Color {
+        switch self {
+        case .meetsPolicy: return .green
+        case .shortOfPolicy: return .orange
+        case .diverged: return .red
+        case .notLocal: return .secondary
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .meetsPolicy: return "checkmark.shield.fill"
+        case .shortOfPolicy: return "shield.lefthalf.filled"
+        case .diverged: return "exclamationmark.triangle.fill"
+        case .notLocal: return "minus"
+        }
+    }
+
+    func displayName(policy: LocalRedundancyPolicy) -> String {
+        switch self {
+        case .meetsPolicy: return "Safe on \(policy.description)"
+        case .shortOfPolicy: return "Not yet on \(policy.description)"
+        case .diverged: return "A copy no longer matches"
+        case .notLocal: return "—"
+        }
+    }
+}
+
+extension CheckStanding {
+    /// The evidence behind the verdict, said quietly. Never a verdict itself:
+    /// a check that has gone stale is not a copy that has gone missing.
+    var note: String? {
+        switch self {
+        case .neverRead: return "not read back yet"
+        case .stale: return "not read back recently"
+        case .disagreed: return "content no longer matches"
+        case .fresh, .notApplicable: return nil
+        }
+    }
+}
+
+/// The one protection answer the user is given, with the evidence behind it as
+/// a footnote rather than a competing state.
 struct ProtectionBadge: View {
     let state: ProtectionState
+    var policy: LocalRedundancyPolicy = .default
 
     var body: some View {
-        Label(state.displayName, systemImage: state.symbolName)
-            .font(.caption)
-            .padding(.horizontal, 7)
-            .padding(.vertical, 3)
-            .background(state.tint.opacity(0.15), in: Capsule())
-            .foregroundStyle(state.tint)
+        let verdict = state.verdict
+        HStack(spacing: 6) {
+            Label(verdict.displayName(policy: policy), systemImage: verdict.symbolName)
+                .font(.caption)
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(verdict.tint.opacity(0.15), in: Capsule())
+                .foregroundStyle(verdict.tint)
+            if let note = state.checkStanding.note {
+                Text(note)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

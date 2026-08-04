@@ -27,15 +27,15 @@ enum ReplicaFileState: String, Codable, Hashable {
     }
 }
 
-struct DriveReplicaState: Hashable, Identifiable {
+struct TargetReplicaState: Hashable, Identifiable {
     var assetID: UUID
-    var driveID: UUID
+    var targetID: UUID
     var state: ReplicaFileState
     /// Path relative to the drive's replica root.
     var relativePath: String?
     var lastVerifiedAt: Date?
 
-    var id: String { "\(assetID.uuidString)/\(driveID.uuidString)" }
+    var id: String { "\(assetID.uuidString)/\(targetID.uuidString)" }
 }
 
 /// What one drive actually holds, tallied in a single pass over replica state.
@@ -50,8 +50,17 @@ struct DriveContentBreakdown: Equatable {
     var missing = 0
     var presentBytes: Int64 = 0
 
-    /// Everything the drive is meant to end up holding.
+    /// The same tallies counted in photos rather than files: a Live Photo is
+    /// one photo, though it is a still *and* a movie on disk. Files are what
+    /// gets copied and verified; photos are what the user thinks they own, and
+    /// showing one number where the other is meant reads as a contradiction.
+    var presentPhotos = 0
+    var pendingPhotos = 0
+    var driftPhotos = 0
+
+    /// Everything the target is meant to end up holding.
     var expected: Int { present + pending + drift }
+    var expectedPhotos: Int { presentPhotos + pendingPhotos + driftPhotos }
 }
 
 enum ReplicationAction: String, Codable, Hashable {
@@ -67,7 +76,7 @@ enum ReplicationTaskState: String, Codable, Hashable {
     case failed
 }
 
-/// How many managed drives should hold each Local asset.
+/// How many managed targets should hold each Local asset.
 ///
 /// Two is the shape the product is designed around — one drive can fail, and a
 /// second is what makes that survivable — but nothing in the model requires
@@ -121,14 +130,18 @@ struct VerificationBudget {
 
     static let sweep = VerificationBudget(maxFiles: 500, maxBytes: 4 * 1024 * 1024 * 1024)
     static let unlimited = VerificationBudget(maxFiles: .max, maxBytes: .max)
+    /// The background patrol's ration. Small enough that a run finishes in
+    /// seconds and is never what the user notices about the app — the point is
+    /// that reading eventually happens, not that it happens quickly.
+    static let patrol = VerificationBudget(maxFiles: 40, maxBytes: 256 * 1024 * 1024)
 }
 
 /// Live progress of an in-flight sync against one drive. Present only while a
 /// sync runs; cancellation or disconnect simply leaves unprocessed tasks
 /// queued, so resuming is just running sync again.
 struct SyncProgress: Equatable {
-    var driveID: UUID
-    var driveName: String
+    var targetID: UUID
+    var targetName: String
     var totalTasks: Int
     var completedTasks: Int
     var failedTasks: Int
@@ -144,7 +157,7 @@ struct SyncProgress: Equatable {
 struct ReplicationTask: Identifiable, Hashable {
     let id: UUID
     var assetID: UUID
-    var driveID: UUID
+    var targetID: UUID
     var action: ReplicationAction
     var state: ReplicationTaskState
     var queuedAt: Date
