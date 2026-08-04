@@ -155,3 +155,53 @@ final class ImportBatchOriginTests: XCTestCase {
         XCTAssertTrue(batch("/Volumes/Field Drive/Exports", .localFolder).isFilesystemPath)
     }
 }
+
+/// The count above a list and the list itself have to be answering the same
+/// question. On a real archive they were not: the header counted photos by
+/// where they came from and the list counted recorded folders, and eight
+/// photos imported before the app wrote batch rows fell between them — "All 8
+/// in the archive" over an empty list, which reads as the app having lost them.
+final class FolderSourceAccountingTests: XCTestCase {
+
+    private func asset(_ origin: ImportOrigin, batch: UUID? = nil) -> Asset {
+        Asset(
+            id: UUID(), kind: .photo, originalFilename: "IMG.jpg", importOrigin: origin,
+            captureDate: nil, importDate: Date(), updatedDate: Date(), fileSize: 1,
+            pixelWidth: nil, pixelHeight: nil, contentHash: UUID().uuidString,
+            residency: .local, residencySource: .importDefault, presence: .localOnly,
+            stagingRelativePath: nil, importBatchID: batch, exifSummary: [:]
+        )
+    }
+
+    /// One definition of "came from a folder", shared by the photo and the
+    /// batch, so the two counts cannot drift apart again.
+    func testTheOriginDefinitionIsShared() {
+        XCTAssertTrue(ImportOrigin.localFolder.isFolderLike)
+        XCTAssertTrue(ImportOrigin.whatsapp.isFolderLike)
+        XCTAssertTrue(ImportOrigin.messagingApp.isFolderLike)
+        XCTAssertFalse(ImportOrigin.googleTakeout.isFolderLike)
+        XCTAssertFalse(ImportOrigin.appleExport.isFolderLike)
+
+        for origin in ImportOrigin.allCases {
+            let batch = ImportBatch(
+                id: UUID(), sourcePath: "x", startedAt: Date(), completedAt: nil,
+                importedCount: 0, duplicateCount: 0, failedCount: 0, origin: origin
+            )
+            XCTAssertEqual(
+                batch.isFolderImport, origin.isFolderLike,
+                "\(origin) must mean the same thing to a batch and to a photo"
+            )
+        }
+    }
+
+    /// A photo with no batch at all is the shape that was falling through.
+    func testAPhotoWithNoBatchStillCountsAsComingFromAFolder() {
+        let orphan = asset(.localFolder, batch: nil)
+        XCTAssertNil(orphan.importBatchID)
+        XCTAssertTrue(orphan.importOrigin.isFolderLike)
+    }
+
+    func testATakeoutPhotoIsNotCreditedToFolders() {
+        XCTAssertFalse(asset(.googleTakeout).importOrigin.isFolderLike)
+    }
+}

@@ -29,10 +29,5 @@ struct ImportBatch: Identifiable, Hashable {
 
     /// True for imports somebody performed by pointing at a folder — the ones
     /// "folders you have added" means.
-    var isFolderImport: Bool {
-        switch origin {
-        case .localFolder, .whatsapp, .messagingApp: return true
-        case .googleTakeout, .appleExport, .unknown, nil: return false
-        }
-    }
+    var isFolderImport: Bool { origin?.isFolderLike == true }
 }

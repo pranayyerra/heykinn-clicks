@@ -28,6 +28,17 @@ enum ImportOrigin: String, Codable, CaseIterable, Identifiable, Hashable {
 
     var id: String { rawValue }
 
+    /// Came in because somebody pointed the app at a folder, rather than from
+    /// a Takeout the app unpacked or a library it read. One definition, shared
+    /// by the batch and the photo, so a screen cannot count photos one way and
+    /// list their sources another.
+    var isFolderLike: Bool {
+        switch self {
+        case .localFolder, .whatsapp, .messagingApp: return true
+        case .googleTakeout, .appleExport, .unknown: return false
+        }
+    }
+
     var displayName: String {
         switch self {
         case .localFolder: return "Local folder"

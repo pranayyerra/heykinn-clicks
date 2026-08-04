@@ -27,6 +27,25 @@ struct FolderSourceList: View {
             .sorted { $0.startedAt > $1.startedAt }
     }
 
+    /// Photos this source is credited with that no recorded folder accounts
+    /// for — imported before the app wrote a batch row, or by a version that
+    /// did not.
+    ///
+    /// The count above this list comes from the photos and the list comes from
+    /// the batches, and those are two different questions. On a real archive
+    /// they disagreed by eight: the header said "All 8 in the archive" over an
+    /// empty list, which reads as the app having lost them. They are not lost;
+    /// what is missing is the record of which folder they came from, and that
+    /// is worth saying rather than hiding by counting the other way.
+    private var unaccountedFor: [Asset] {
+        let folderBatchIDs = Set(batches.map(\.id))
+        return store.assets.filter { asset in
+            guard asset.importOrigin.isFolderLike, !asset.isLivePhotoMotion else { return false }
+            guard let batchID = asset.importBatchID else { return true }
+            return !folderBatchIDs.contains(batchID)
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(batches) { batch in
@@ -35,6 +54,50 @@ struct FolderSourceList: View {
                     contents(of: batch)
                 }
             }
+            if !unaccountedFor.isEmpty {
+                unaccountedRow
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var unaccountedRow: some View {
+        let assets = unaccountedFor
+        let origins = Set(assets.map(\.importOrigin))
+            .map(\.displayName)
+            .sorted()
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 10) {
+                Image(systemName: "questionmark.folder")
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Added before the app kept a record")
+                        .font(.callout.weight(.medium))
+                    Text("From \(origins.joined(separator: " and ")) — the folder itself was not written down")
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 8)
+                Text(Formatters.count(assets.count, "photo"))
+                    .font(.callout)
+                    .monospacedDigit()
+            }
+            .padding(8)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 6) {
+                    ForEach(assets.prefix(24)) { asset in
+                        AssetThumbnailView(asset: asset, allowsHoverPreview: false)
+                            .frame(width: 56, height: 56)
+                            .clipShape(RoundedRectangle(cornerRadius: 5))
+                    }
+                }
+            }
+            .padding(.leading, 28)
         }
     }
 

@@ -95,9 +95,17 @@ struct SourcesView: View {
         )
     }
 
+    private var hasFolderOriginPhotos: Bool {
+        store.assets.contains { $0.importOrigin.isFolderLike && !$0.isLivePhotoMotion }
+    }
+
     private var folderSource: PhotoSource {
+        // One definition, shared with the list below and with the batch model,
+        // so the node cannot count photos one way while the list counts their
+        // sources another — which is how "All 8 in the archive" ended up over
+        // an empty list.
         let fromFolders = store.assets.filter {
-            $0.importOrigin == .localFolder || $0.importOrigin == .whatsapp
+            $0.importOrigin.isFolderLike && !$0.isLivePhotoMotion
         }.count
         // Names the folders rather than the category. "Photos copied in from a
         // folder on a disk" describes what this kind of source *is*, which the
@@ -113,6 +121,10 @@ struct SourcesView: View {
             detail = folderBatches.count == 1
                 ? name
                 : "\(Formatters.count(folderBatches.count, "folder")) · most recently \(name)"
+        } else if fromFolders > 0 {
+            // Photos from folders, but no folder recorded. Saying "not set up"
+            // over a count of eight is the same contradiction from the other end.
+            detail = "Added before the app recorded which folder"
         } else {
             detail = "A backup, a memory card, anywhere photos sit loose"
         }
@@ -448,7 +460,7 @@ struct SourcesView: View {
     private var folderCard: some View {
         Group {
             VStack(alignment: .leading, spacing: 10) {
-                if store.importBatches.filter(\.isFolderImport).isEmpty {
+                if store.importBatches.filter(\.isFolderImport).isEmpty && !hasFolderOriginPhotos {
                     Text("An old backup, a memory card, a Downloads folder — anywhere photos and videos are sitting loose. The app copies them into the archive and leaves the folder exactly as it found it.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
