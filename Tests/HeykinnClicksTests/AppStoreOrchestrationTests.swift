@@ -673,6 +673,148 @@ final class AppStoreOrchestrationTests: XCTestCase {
         )
     }
 
+    /// The destination almost always already has a row, and that is the normal
+    /// case: the part was delivered *because* the copy that sat there was
+    /// deleted, and the row for that copy outlived the file. One path is one
+    /// row, so the arriving copy moves into it — colliding with it is what
+    /// stopped the move on a real drive.
+    func testAPartMovesIntoTheRowOfTheCopyItReplaces() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        let seed = try catalog(at: directory)
+
+        let home = mount.appendingPathComponent("Google_Photos_Backup_July2026", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        for part in 1...11 {
+            let url = home.appendingPathComponent("takeout-S1-\(String(format: "%03d", part)).zip")
+            try Data("part".utf8).write(to: url)
+            try seed.upsertTakeoutArchive(TakeoutArchive(
+                id: UUID(), path: url.path, kind: .zip, sizeBytes: 4, targetID: targetID,
+                discoveredAt: Date(), importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+                skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: part
+            ))
+        }
+
+        // Part 012's own copy was deleted from the user's folder: no file, but
+        // the row survives, carrying what was imported out of it.
+        let originalID = UUID()
+        let originalPath = home.appendingPathComponent("takeout-S1-012.zip").path
+        var original = TakeoutArchive(
+            id: originalID, path: originalPath, kind: .zip, sizeBytes: 4, targetID: targetID,
+            discoveredAt: Date(), importedAt: Date(), importBatchID: nil, importedAssetCount: 3_362,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 12,
+            contentHash: "hash-of-the-file-that-was-deleted"
+        )
+        original.missingSince = Date()
+        try seed.upsertTakeoutArchive(original)
+
+        // And a replacement was delivered into the app's folder.
+        let strayDirectory = ExportPartRelay.destinationDirectory(onMount: mount)
+        try FileManager.default.createDirectory(at: strayDirectory, withIntermediateDirectories: true)
+        let stray = strayDirectory.appendingPathComponent("takeout-S1-012.zip")
+        try Data("delivered".utf8).write(to: stray)
+        let strayID = UUID()
+        try seed.upsertTakeoutArchive(TakeoutArchive(
+            id: strayID, path: stray.path, kind: .zip, sizeBytes: 9, targetID: targetID,
+            discoveredAt: Date(), importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 12,
+            quickChecksum: "spot-checked-on-arrival"
+        ))
+        store.loadAll()
+
+        XCTAssertEqual(store.tidyAppFolders(for: targetID).parts, 1)
+        XCTAssertNil(store.lastError)
+
+        XCTAssertTrue(FileManager.default.fileExists(atPath: originalPath))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: stray.path))
+        XCTAssertNil(
+            store.takeoutArchives.first { $0.id == strayID },
+            "The delivered row moved into the destination's row rather than beside it"
+        )
+
+        let merged = try XCTUnwrap(store.takeoutArchives.first { $0.id == originalID })
+        XCTAssertNil(merged.missingSince, "The part is here again")
+        XCTAssertEqual(merged.importedAssetCount, 3_362, "What was imported out of this part still happened")
+        XCTAssertEqual(merged.sizeBytes, 9, "The bytes described are the ones that arrived")
+        XCTAssertEqual(merged.quickChecksum, "spot-checked-on-arrival")
+        XCTAssertNil(
+            merged.contentHash,
+            "The old hash described the file that was deleted; nobody has read these bytes in full"
+        )
+        XCTAssertEqual(store.takeoutArchives.filter { $0.partNumber == 12 }.count, 1)
+    }
+
+    /// A row for a part recorded as gone from the app's own delivery folder,
+    /// while the part is present on the drive, is the app describing its own
+    /// tidying as data loss. It can never resolve, because nothing will put a
+    /// file back at that path.
+    func testARecordOfAPartTheAppItselfMovedIsNotKeptAsALostCopy() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        let seed = try catalog(at: directory)
+
+        let home = mount.appendingPathComponent("Google_Photos_Backup_July2026", isDirectory: true)
+        try FileManager.default.createDirectory(at: home, withIntermediateDirectories: true)
+        let live = home.appendingPathComponent("takeout-S1-012.zip")
+        try Data("part".utf8).write(to: live)
+        try seed.upsertTakeoutArchive(TakeoutArchive(
+            id: UUID(), path: live.path, kind: .zip, sizeBytes: 4, targetID: targetID,
+            discoveredAt: Date(), importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 12
+        ))
+
+        let phantomID = UUID()
+        var phantom = TakeoutArchive(
+            id: phantomID,
+            path: ExportPartRelay.destinationDirectory(onMount: mount)
+                .appendingPathComponent("takeout-S1-012.zip").path,
+            kind: .zip, sizeBytes: 4, targetID: targetID, discoveredAt: Date(),
+            importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 12
+        )
+        phantom.missingSince = Date()
+        try seed.upsertTakeoutArchive(phantom)
+        store.loadAll()
+
+        store.tidyAppFolders(for: targetID)
+
+        XCTAssertNil(store.takeoutArchives.first { $0.id == phantomID })
+        XCTAssertEqual(store.takeoutArchives.filter { $0.partNumber == 12 }.count, 1)
+    }
+
+    /// A part genuinely deleted out of the app's folder, with no copy of it
+    /// anywhere else on the drive, is a real lost copy and stays reported.
+    func testAGenuinelyLostPartInTheAppsFolderIsStillReported() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+
+        let lostID = UUID()
+        var lost = TakeoutArchive(
+            id: lostID,
+            path: ExportPartRelay.destinationDirectory(onMount: mount)
+                .appendingPathComponent("takeout-S1-007.zip").path,
+            kind: .zip, sizeBytes: 4, targetID: targetID, discoveredAt: Date(),
+            importedAt: nil, importBatchID: nil, importedAssetCount: 0,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 7
+        )
+        lost.missingSince = Date()
+        try catalog(at: directory).upsertTakeoutArchive(lost)
+        store.loadAll()
+
+        store.tidyAppFolders(for: targetID)
+
+        XCTAssertNotNil(
+            store.takeoutArchives.first { $0.id == lostID },
+            "Nothing else on this drive holds part 7 — that copy really is gone"
+        )
+    }
+
     /// With nowhere better to put it, the app's own folder is the right answer
     /// and the part stays there.
     func testADeliveredPartStaysPutWhenTheDriveHoldsNoneOfItsSet() throws {

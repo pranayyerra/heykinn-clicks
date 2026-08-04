@@ -2954,12 +2954,19 @@ final class AppStore: ObservableObject {
     /// answer expires: the moment the drive does hold the rest of the set, the
     /// part has somewhere it belongs, and leaving it at the root is what split
     /// a twelve-part export across two directories.
+    ///
+    /// The destination usually already has a catalog row, and that is the
+    /// normal case rather than an error: the part was delivered precisely
+    /// *because* the copy that used to sit there was deleted, and the row for
+    /// that copy outlived it. One path is one row — the archive path is
+    /// unique — so the delivered copy moves *into* that row rather than beside
+    /// it, and the row it came from goes away. It is not a lost copy; it is a
+    /// copy this method itself moved.
     private func rehomeDeliveredParts(for targetID: UUID, mountURL: URL, targetName: String) -> Int {
         let appParts = ExportPartRelay.destinationDirectory(onMount: mountURL).path + "/"
         let strays = takeoutArchives.filter {
             $0.targetID == targetID && $0.holdsBytes && $0.path.hasPrefix(appParts)
         }
-        guard !strays.isEmpty else { return 0 }
 
         var moved = 0
         var example: String?
@@ -2973,27 +2980,96 @@ final class AppStore: ObservableObject {
             // Never write over something already sitting there. Two files with
             // this name means a question the app cannot answer by guessing.
             guard !FileManager.default.fileExists(atPath: destination.path) else { continue }
+
+            let source = URL(fileURLWithPath: archive.path)
             do {
-                try FileManager.default.moveItem(
-                    at: URL(fileURLWithPath: archive.path), to: destination
-                )
-                var updated = archive
-                updated.path = destination.path
-                try catalog.upsertTakeoutArchive(updated)
+                try FileManager.default.moveItem(at: source, to: destination)
+            } catch {
+                lastError = "Could not move \(archive.displayName) beside its export: \(error.localizedDescription)"
+                continue
+            }
+            do {
+                try catalog.transaction {
+                    if var occupant = takeoutArchives.first(
+                        where: { $0.path == destination.path && $0.id != archive.id }
+                    ) {
+                        // The row that already describes this path keeps its
+                        // import history — what was imported out of this part
+                        // happened, whichever copy of it is sitting here now.
+                        // What it takes from the arriving copy is everything
+                        // that describes the bytes, and it takes the *absence*
+                        // of a content hash too: nobody has read these bytes
+                        // in full, and the hash of the file that used to be
+                        // here would be a claim about a different file.
+                        occupant.sizeBytes = archive.sizeBytes
+                        occupant.contentHash = archive.contentHash
+                        occupant.quickChecksum = archive.quickChecksum
+                        occupant.kind = archive.kind
+                        occupant.missingSince = nil
+                        try catalog.upsertTakeoutArchive(occupant)
+                        try catalog.deleteTakeoutArchive(id: archive.id)
+                    } else {
+                        var updated = archive
+                        updated.path = destination.path
+                        try catalog.upsertTakeoutArchive(updated)
+                    }
+                }
                 if example == nil { example = archive.displayName }
                 moved += 1
             } catch {
-                lastError = "Could not move \(archive.displayName) beside its export: \(error.localizedDescription)"
+                // The catalog is the record of where things are. If it would
+                // not take the move, the move did not happen: put the file
+                // back rather than leave the two disagreeing.
+                try? FileManager.default.moveItem(at: destination, to: source)
+                lastError = "Could not record the move of \(archive.displayName): \(error.localizedDescription)"
             }
         }
-        guard moved > 0 else { return 0 }
+
+        let pruned = pruneMovedPartRecords(for: targetID, mountURL: mountURL)
+        guard moved > 0 || pruned > 0 else { return 0 }
         takeoutArchives = (try? catalog.fetchTakeoutArchives()) ?? takeoutArchives
-        audit(
-            .drive,
-            "\(targetName): moved \(moved) delivered export part(s) (e.g. \(example ?? "one")) in beside the rest of their export, where this drive already keeps it. A rename within the drive; no bytes moved.",
-            targetID: targetID
-        )
+        if moved > 0 {
+            audit(
+                .drive,
+                "\(targetName): moved \(moved) delivered export part(s) (e.g. \(example ?? "one")) in beside the rest of their export, where this drive already keeps it. A rename within the drive; no bytes moved.",
+                targetID: targetID
+            )
+        }
         return moved
+    }
+
+    /// Drops rows for parts recorded as gone from the app's own delivery
+    /// folder while the same part is present elsewhere on the same target.
+    ///
+    /// Such a row is not a lost copy. The app's folder is the app's own
+    /// waiting room, and a part that left it while still being on the drive
+    /// left because the app moved it. Reporting that as a missing copy is the
+    /// app describing its own tidying as data loss — and unlike a real
+    /// absence, it can never resolve, because nothing will ever put a file
+    /// back at that path.
+    private func pruneMovedPartRecords(for targetID: UUID, mountURL: URL) -> Int {
+        let appParts = ExportPartRelay.destinationDirectory(onMount: mountURL).path + "/"
+        let presentStems = Set(
+            takeoutArchives
+                .filter { $0.targetID == targetID && $0.holdsBytes && !$0.path.hasPrefix(appParts) }
+                .compactMap(\.exportPartStem)
+        )
+        let phantoms = takeoutArchives.filter {
+            $0.targetID == targetID
+                && !$0.holdsBytes
+                && $0.path.hasPrefix(appParts)
+                && $0.exportPartStem.map(presentStems.contains) == true
+        }
+        guard !phantoms.isEmpty else { return 0 }
+        do {
+            try catalog.transaction {
+                for phantom in phantoms { try catalog.deleteTakeoutArchive(id: phantom.id) }
+            }
+        } catch {
+            lastError = "Could not clear moved-part records: \(error.localizedDescription)"
+            return 0
+        }
+        return phantoms.count
     }
 
     /// Re-confirms the target is still the thing sitting at this path, checked
