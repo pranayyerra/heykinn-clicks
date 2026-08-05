@@ -1,0 +1,73 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    Bundle metadata for the .app that Packaging/bundle.sh assembles around the
+    SwiftPM executable.
+
+    Concrete values, not $(BUILD_SETTING) placeholders: there is no Xcode target
+    to substitute them, so a placeholder here ships literally and the app ends
+    up with a bundle identifier of "$(PRODUCT_BUNDLE_IDENTIFIER)". Version is the
+    one exception — bundle.sh writes it in.
+-->
+<plist version="1.0">
+<dict>
+	<key>CFBundleDevelopmentRegion</key>
+	<string>en</string>
+
+	<key>CFBundleDisplayName</key>
+	<string>Heykinn Clicks</string>
+
+	<key>CFBundleName</key>
+	<string>HeykinnClicks</string>
+
+	<key>CFBundleExecutable</key>
+	<string>HeykinnClicks</string>
+
+	<key>CFBundleIdentifier</key>
+	<string>com.heykinn.HeykinnClicks</string>
+
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+
+	<key>CFBundleShortVersionString</key>
+	<string>0.1.0</string>
+
+	<key>CFBundleVersion</key>
+	<string>1</string>
+
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.photography</string>
+
+	<!-- Matches Package.swift's .macOS(.v14). -->
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+
+	<key>NSHumanReadableCopyright</key>
+	<string>Copyright © 2026</string>
+
+	<key>NSPrincipalClass</key>
+	<string>NSApplication</string>
+
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+
+	<!--
+	    Required. Without it the first PhotoKit call terminates the process
+	    rather than prompting. It says what the app does with the library and
+	    what it does not do, because this string is the whole basis on which
+	    somebody decides.
+	-->
+	<key>NSPhotoLibraryUsageDescription</key>
+	<string>Heykinn Clicks reads your Photos library to find which photos the archive is missing, and copies those in. It never changes or uploads anything in the library.</string>
+
+	<!--
+	    macOS 13+ asks separately about removable volumes, and the archive lives
+	    on drives the user registers, so this is asked on the first one.
+	-->
+	<key>NSRemovableVolumesUsageDescription</key>
+	<string>Heykinn Clicks keeps verified copies of your photos on the drives you register, so your archive survives any one device failing.</string>
+</dict>
+</plist>
