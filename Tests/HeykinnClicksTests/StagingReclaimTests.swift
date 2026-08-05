@@ -119,15 +119,24 @@ final class StagingReclaimIntegrationTests: XCTestCase {
     }
 
     private func makeStore(reclaim: Bool = true) throws -> AppStore {
+        try makeStoreReturningDirectory(reclaim: reclaim).store
+    }
+
+    /// For tests that have to reach the same catalog from a second connection,
+    /// to seed the state an earlier session would have left.
+    private func makeStoreReturningDirectory(
+        reclaim: Bool = true
+    ) throws -> (store: AppStore, directory: URL) {
         let directory = try makeDirectory("store")
         let suiteName = "heykinn-tests-\(UUID().uuidString)"
         suiteNames.append(suiteName)
         let defaults = UserDefaults(suiteName: suiteName)!
         defaults.set(reclaim, forKey: "reclaimStagingWhenSafe")
         defaults.set(false, forKey: "autoSyncOnConnect")
-        return AppStore(environment: AppEnvironment(
+        let store = AppStore(environment: AppEnvironment(
             appDirectory: directory, defaults: defaults, runsBackgroundWork: false
         ))
+        return (store, directory)
     }
 
     private func waitUntil(
@@ -181,6 +190,89 @@ final class StagingReclaimIntegrationTests: XCTestCase {
         store.reclaimStaging(force: true)
         XCTAssertEqual(store.staging.totalBytes, before, "No target holds it at all")
         XCTAssertNotNil(store.assets.first?.stagingRelativePath)
+    }
+
+    /// Two targets that are never connected at the same time cannot copy to
+    /// each other. Whichever one is present, the one holding the bytes is the
+    /// other — so the work stays queued and nothing can ever run it.
+    ///
+    /// Export parts already went via a holding area on the Mac when they could
+    /// not go straight across. This is the same route for ordinary photos, and
+    /// the holding area is staging, which is what staging is for.
+    func testATargetThatIsNeverPresentAtTheSameTimeIsBridgedThroughTheMac() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let here = try makeDirectory("target-here")
+        let source = try makeDirectory("source")
+        try Data("a photo".utf8).write(to: source.appendingPathComponent("photo.jpg"))
+
+        store.registerHostDeviceTarget(at: here, name: "Drive here")
+        let hereID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        // A second target the app knows about and cannot reach — the drive
+        // that is never plugged in at the same time as this one.
+        let side = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let awayID = UUID()
+        try side.upsertTarget(ReplicationTarget(
+            id: awayID, name: "Drive away", kind: .externalVolume, volumeUUID: nil,
+            markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
+            lastKnownPath: "/Volumes/Not Plugged In", configuredPath: nil,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+        ))
+        store.loadAll()
+        XCTAssertEqual(store.targets.count, 2)
+        XCTAssertNil(store.reachablePaths[awayID], "The away drive is not here")
+
+        store.importFolders([source])
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        store.syncDrive(hereID)
+        try await waitUntil("the sync to drain") { !store.isSyncing }
+
+        // The away drive is still owed a copy, and this is the state that
+        // deadlocks: the only shared source has been released because both
+        // *recorded* copies could not be checked against it.
+        let asset = try XCTUnwrap(store.assets.first)
+        let stagedAt = try XCTUnwrap(asset.stagingRelativePath)
+        try store.staging.remove(relativePath: stagedAt)
+        var released = asset
+        released.stagingRelativePath = nil
+        try side.upsertAsset(released)
+        store.loadAll()
+        XCTAssertNil(store.assets.first?.stagingRelativePath)
+        XCTAssertEqual(store.backlogCount(for: awayID), 1, "Still owed, with nothing to give it")
+
+        await store.relayForAbsentTargets(from: hereID)
+
+        let bridged = try XCTUnwrap(store.assets.first)
+        let relative = try XCTUnwrap(
+            bridged.stagingRelativePath,
+            "The photo the away drive is owed is held on the Mac for it"
+        )
+        XCTAssertTrue(store.staging.exists(relativePath: relative))
+        XCTAssertGreaterThan(store.staging.totalBytes, 0)
+    }
+
+    /// It holds only what is actually owed. A target with no backlog does not
+    /// pull the archive back onto the boot disk.
+    func testNothingIsHeldWhenTheAbsentTargetIsOwedNothing() async throws {
+        let (store, _) = try makeStoreReturningDirectory()
+        let here = try makeDirectory("target-here")
+        let source = try makeDirectory("source")
+        try Data("a photo".utf8).write(to: source.appendingPathComponent("photo.jpg"))
+
+        store.registerHostDeviceTarget(at: here, name: "Drive here")
+        let hereID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+        store.importFolders([source])
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        store.syncDrive(hereID)
+        try await waitUntil("the sync to drain") { !store.isSyncing }
+
+        // One target, satisfied, so its staged copy went. Nothing is absent.
+        XCTAssertNil(store.assets.first?.stagingRelativePath)
+        await store.relayForAbsentTargets(from: hereID)
+        XCTAssertNil(store.assets.first?.stagingRelativePath, "Nothing to hold for anybody")
+        XCTAssertEqual(store.staging.totalBytes, 0)
     }
 
     func testTurningItOffKeepsTheStagedCopy() async throws {

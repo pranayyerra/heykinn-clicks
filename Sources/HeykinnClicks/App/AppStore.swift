@@ -1564,7 +1564,11 @@ final class AppStore: ObservableObject {
                 await autoTakeoutPipeline(targetID: targetID)
                 await adoptContentAlreadyOnTarget(targetID)
                 if autoSyncOnConnect && backlogCount(for: targetID) > 0 {
+                    // The sync bridges for absent targets when it finishes,
+                    // where the catalog is fresh and the disk is free again.
                     syncDrive(targetID)
+                } else {
+                    await relayForAbsentTargets(from: targetID)
                 }
             }
         }
@@ -1772,6 +1776,91 @@ final class AppStore: ObservableObject {
         let present = (replicasByAssetID[assetID] ?? []).filter { $0.state == .present }
         guard !present.isEmpty else { return false }
         return present.allSatisfy { ReplicationService.isArchiveBacked($0) }
+    }
+
+    // MARK: - Bridging targets that are never present together
+
+    /// Brings onto the Mac what an absent target is owed, while the target that
+    /// holds it is here.
+    ///
+    /// Two drives that are never plugged in at the same time cannot copy to
+    /// each other. The backlog is not wrong — the work is real and stays
+    /// queued — but nothing can ever run it: whichever drive is present, the
+    /// one holding the bytes is the other one. A target that falls behind stays
+    /// behind, and the archive quietly stops being able to repair itself.
+    ///
+    /// Export parts already had the answer. A part that cannot go straight
+    /// across goes to a holding area on the Mac and is delivered when the
+    /// receiving drive appears. Ordinary photos had no such route, and once
+    /// their staged copy is released — correctly, both targets have them — the
+    /// last source both drives could reach is gone.
+    ///
+    /// The holding area for a photo is staging, because that is exactly what
+    /// staging is: a copy on the Mac that exists to be a source and is never
+    /// counted as protection. So this puts one back, and `StagingReclaimer`
+    /// takes it away again the moment the target it was for is holding it.
+    ///
+    /// Bounded twice over — only what an absent target is actually owed, and
+    /// never past the reserve the Mac keeps free for the export-part holding
+    /// area. It bridges what it can and leaves the rest for next time.
+    func relayForAbsentTargets(from targetID: UUID) async {
+        guard !isSyncing, !isImporting, reachablePaths[targetID] != nil else { return }
+        let absent = Set(targets.map(\.id)).subtracting(reachablePaths.keys)
+        guard !absent.isEmpty else { return }
+
+        var budget = (TakeoutExtractor.availableCapacity(onVolumeOf: staging.rootURL) ?? 0)
+            - ExportPartTransferPlanner.holdingAreaReserveBytes
+        guard budget > 0 else { return }
+
+        // What the absent targets are owed and this one can supply. A source
+        // has to be a file that can be read: content whose only copy is inside
+        // a zip or an export part is the part relay's job, not this one, and
+        // `localFileURL` already declines to name one.
+        var plan: [(assetID: UUID, source: URL, ext: String, size: Int64)] = []
+        var seen = Set<UUID>()
+        for task in replicationTasks
+        where task.state == .queued && task.action == .copy && absent.contains(task.targetID) {
+            guard seen.insert(task.assetID).inserted else { continue }
+            guard let asset = assetsByID[task.assetID] else { continue }
+            guard !staging.exists(relativePath: asset.stagingRelativePath) else { continue }
+            guard asset.fileSize <= budget else { continue }
+            guard let source = localFileURL(for: asset) else { continue }
+            plan.append((asset.id, source, asset.fileExtension, asset.fileSize))
+            budget -= asset.fileSize
+        }
+        guard !plan.isEmpty else { return }
+
+        let stagingStore = staging
+        let staged = await Task.detached(priority: .utility) { () -> [(UUID, String)] in
+            var written: [(UUID, String)] = []
+            for item in plan {
+                guard let relative = try? stagingStore.stage(
+                    fileAt: item.source, assetID: item.assetID, fileExtension: item.ext
+                ) else { continue }
+                written.append((item.assetID, relative))
+            }
+            return written
+        }.value
+
+        var bytes: Int64 = 0
+        for (assetID, relative) in staged {
+            guard var asset = assetsByID[assetID] else { continue }
+            asset.stagingRelativePath = relative
+            do {
+                try catalog.upsertAsset(asset)
+                bytes += asset.fileSize
+            } catch { continue }
+        }
+        guard !staged.isEmpty else { return }
+
+        let name = targetsByID[targetID]?.name ?? "drive"
+        let waiting = absent.compactMap { targetsByID[$0]?.name }.sorted().joined(separator: " and ")
+        audit(
+            .replication,
+            "Held \(Formatters.count(staged.count, "photo")) — \(Formatters.bytes.string(fromByteCount: bytes)) — from \(name) on this Mac, so \(waiting.isEmpty ? "the other target" : waiting) can be given them without both being connected at once.",
+            targetID: targetID
+        )
+        loadAll()
     }
 
     // MARK: - Staging reclamation
@@ -3805,6 +3894,11 @@ final class AppStore: ObservableObject {
             // After the reload, so the verdicts this reads are the ones the
             // sync just established rather than the ones it started with.
             reclaimStaging()
+            // Then hold, for any target that is not here, what this one could
+            // give it. Runs after the release so it does not re-stage what was
+            // just let go, and after the sync so it is not competing with it
+            // for the same disk.
+            await relayForAbsentTargets(from: targetID)
             startNextPendingSync()
         }
     }
