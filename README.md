@@ -335,7 +335,7 @@ protected on three levels.
   workspaces, and half-written `.extracting` folders. It only removes files
   the catalog does not reference.
 - **Verified snapshots on the drives.** `VACUUM INTO` writes a consistent,
-  compacted copy of the catalog to `HeykinnClicksCatalogBackups/` at each
+  compacted copy of the catalog to `HeykinnClicks/CatalogBackups/` at each
   connected drive's root — outside the replica root, so replica cleanup can
   never touch it. Every snapshot is written under a temporary name, read back
   **read-only** (integrity check plus an asset count), and only then renamed
@@ -395,5 +395,11 @@ scanning is needed.
 4. Account integration behind `CloudDomainVerifier`, so cloud presence can be
    recorded as `verified` instead of only asserted, and migrations can confirm
    deletion rather than asking the user to.
-5. Xcode app-bundle wrapper (icon, sandbox entitlements with security-scoped
-   bookmarks for drive access) once the SwiftPM skeleton stabilizes.
+5. An icon, a Developer ID signature and notarisation. The bundle itself is
+   done — `Packaging/bundle.sh` assembles and signs `HeykinnClicks.app` around
+   the SwiftPM binary, which is what gives the app a stable identity for the
+   Photos permission. Not sandboxed, and not using security-scoped bookmarks:
+   the app reaches volumes the user registers and identifies them by a marker
+   file at the volume root, and that identity survives a rename, a remount and
+   a different mount path, which is more than a bookmark does. The cost is no
+   Mac App Store. See `Packaging/README.md`.
