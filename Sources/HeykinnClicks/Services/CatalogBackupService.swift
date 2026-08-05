@@ -25,8 +25,6 @@ enum CatalogBackupService {
     /// folder, deliberately not *inside* it, so replica cleanup can never
     /// remove the backups.
     static let directoryName = ReplicationTarget.appFolderName + "/CatalogBackups"
-    /// The pre-consolidation location, still on drives already backed up to.
-    static let legacyDirectoryName = "HeykinnClicksCatalogBackups"
     /// Snapshots retained per drive; older ones are pruned oldest-first.
     static let retainCount = 5
 

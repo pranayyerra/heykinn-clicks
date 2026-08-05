@@ -765,7 +765,6 @@ final class ExportSetLayoutTests: XCTestCase {
             archive("/Volumes/My Passport/Google_Photos_Backup_July2026/takeout-S1-\($0).zip", part: $0)
         }
         archives.append(archive("/Volumes/My Passport/HeykinnClicks/ExportParts/takeout-S1-012.zip", part: 12))
-        archives.append(archive("/Volumes/My Passport/HeykinnClicks Export Parts/takeout-S1-013.zip", part: 13))
 
         XCTAssertEqual(
             ExportSetLayout.home(forSet: "S1", onMount: mount, archives: archives)?.path,

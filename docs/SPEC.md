@@ -71,10 +71,9 @@ Shipped and tested; the pointers are where to look.
   was recorded at; a delivered export part goes in beside the rest of its set
   wherever that drive keeps it. Everything the app writes that has no place of
   its own — replicas of content imported from the Mac, catalog snapshots, a
-  part with no set on that drive yet — lives under one `HeykinnClicks/` folder,
-  migrated from the three that used to sit at the volume root:
+  part with no set on that drive yet — lives under one `HeykinnClicks/` folder:
   `Domain/ArchiveReplication.swift` (`ExportSetLayout`),
-  `AppStore.tidyAppFolders`.
+  `AppStore.rehomeDeliveredParts`.
 - **Verification** — binary protection verdict with check-standing as
   evidence; the aimed-reads triad complete (Merkle-tree agreement between
   targets, anchor checks with in-place path repair, and the size/mtime gate on

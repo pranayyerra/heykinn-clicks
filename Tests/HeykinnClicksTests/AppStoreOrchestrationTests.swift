@@ -531,105 +531,9 @@ final class AppStoreOrchestrationTests: XCTestCase {
 
     // MARK: - Drive layout
 
-    /// Three folders at a volume root read as three unrelated applications
-    /// having helped themselves to a drive that belongs to the user. They
-    /// become one, by rename, and everything recorded against them follows.
-    func testTheAppsThreeFoldersBecomeOne() throws {
-        let (store, directory) = try makeStore()
-        let mount = try makeDirectory("target")
-        store.registerHostDeviceTarget(at: mount, name: "Target")
-        let targetID = try XCTUnwrap(store.targets.first?.id)
-
-        // A drive as an earlier version of the app left it.
-        let legacyReplica = mount.appendingPathComponent(
-            "\(ReplicationTarget.legacyReplicaRoot)/d6/photo.jpg"
-        )
-        let legacyBackup = mount.appendingPathComponent(
-            "\(CatalogBackupService.legacyDirectoryName)/catalog-1.sqlite"
-        )
-        let legacyPart = mount.appendingPathComponent(
-            "\(ExportPartRelay.legacyOnDriveDirectoryName)/takeout-S1-012.zip"
-        )
-        for file in [legacyReplica, legacyBackup, legacyPart] {
-            try FileManager.default.createDirectory(
-                at: file.deletingLastPathComponent(), withIntermediateDirectories: true
-            )
-            try Data("bytes".utf8).write(to: file)
-        }
-        var target = try XCTUnwrap(store.targetsByID[targetID])
-        target.replicaRootComponent = ReplicationTarget.legacyReplicaRoot
-        let seed = try catalog(at: directory)
-        try seed.upsertTarget(target)
-        try seed.upsertTakeoutArchive(TakeoutArchive(
-            id: UUID(), path: legacyPart.path, kind: .zip, sizeBytes: 5, targetID: targetID,
-            discoveredAt: Date(), importedAt: nil, importBatchID: nil, importedAssetCount: 0,
-            skippedDuplicateCount: 0, note: nil, exportSetID: "S1", partNumber: 12
-        ))
-        store.loadAll()
-
-        XCTAssertEqual(store.tidyAppFolders(for: targetID).folders, 3)
-
-        let appFolder = mount.appendingPathComponent(ReplicationTarget.appFolderName)
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: appFolder.appendingPathComponent("Replicas/d6/photo.jpg").path
-        ))
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: appFolder.appendingPathComponent("CatalogBackups/catalog-1.sqlite").path
-        ))
-        XCTAssertTrue(FileManager.default.fileExists(
-            atPath: appFolder.appendingPathComponent("ExportParts/takeout-S1-012.zip").path
-        ))
-        XCTAssertEqual(
-            store.targetsByID[targetID]?.replicaRootComponent, ReplicationTarget.defaultReplicaRoot,
-            "One stored value repoints every replica under the root — no per-file write"
-        )
-        XCTAssertEqual(
-            store.takeoutArchives.first?.path,
-            appFolder.appendingPathComponent("ExportParts/takeout-S1-012.zip").path,
-            "An export part records an absolute path, so its row moves with it"
-        )
-        for legacy in [
-            ReplicationTarget.legacyReplicaRoot,
-            CatalogBackupService.legacyDirectoryName,
-            ExportPartRelay.legacyOnDriveDirectoryName,
-        ] {
-            XCTAssertFalse(
-                FileManager.default.fileExists(atPath: mount.appendingPathComponent(legacy).path),
-                "\(legacy) should no longer be at the volume root"
-            )
-        }
-    }
-
-    /// Nothing already in place is written over. A half-migrated drive is worse
-    /// than an untidy one.
-    func testAFolderIsNotMigratedOntoOneAlreadyThere() throws {
-        let (store, directory) = try makeStore()
-        let mount = try makeDirectory("target")
-        store.registerHostDeviceTarget(at: mount, name: "Target")
-        let targetID = try XCTUnwrap(store.targets.first?.id)
-
-        let old = mount.appendingPathComponent("\(ReplicationTarget.legacyReplicaRoot)/d6/old.jpg")
-        let new = mount.appendingPathComponent("\(ReplicationTarget.defaultReplicaRoot)/d6/new.jpg")
-        for file in [old, new] {
-            try FileManager.default.createDirectory(
-                at: file.deletingLastPathComponent(), withIntermediateDirectories: true
-            )
-            try Data("bytes".utf8).write(to: file)
-        }
-        var target = try XCTUnwrap(store.targetsByID[targetID])
-        target.replicaRootComponent = ReplicationTarget.legacyReplicaRoot
-        try catalog(at: directory).upsertTarget(target)
-        store.loadAll()
-
-        store.tidyAppFolders(for: targetID)
-
-        XCTAssertTrue(FileManager.default.fileExists(atPath: old.path), "Left alone rather than merged")
-        XCTAssertTrue(FileManager.default.fileExists(atPath: new.path), "Not written over")
-    }
-
-    /// The other half of the reported bug: a part restored to the app's folder
-    /// because the drive held none of its set, on a drive that holds the rest
-    /// of the set. It belongs with the export, and moving it is a rename.
+    /// A part restored to the app's folder because the drive held none of its
+    /// set, on a drive that holds the rest of the set. It belongs with the
+    /// export, and moving it is a rename.
     func testADeliveredPartMovesInBesideTheRestOfItsExport() throws {
         let (store, directory) = try makeStore()
         let mount = try makeDirectory("target")
@@ -662,7 +566,7 @@ final class AppStoreOrchestrationTests: XCTestCase {
         ))
         store.loadAll()
 
-        XCTAssertEqual(store.tidyAppFolders(for: targetID).parts, 1)
+        XCTAssertEqual(store.rehomeDeliveredParts(for: targetID), 1)
 
         let landed = home.appendingPathComponent("takeout-S1-012.zip")
         XCTAssertTrue(FileManager.default.fileExists(atPath: landed.path))
@@ -724,7 +628,7 @@ final class AppStoreOrchestrationTests: XCTestCase {
         ))
         store.loadAll()
 
-        XCTAssertEqual(store.tidyAppFolders(for: targetID).parts, 1)
+        XCTAssertEqual(store.rehomeDeliveredParts(for: targetID), 1)
         XCTAssertNil(store.lastError)
 
         XCTAssertTrue(FileManager.default.fileExists(atPath: originalPath))
@@ -780,7 +684,7 @@ final class AppStoreOrchestrationTests: XCTestCase {
         try seed.upsertTakeoutArchive(phantom)
         store.loadAll()
 
-        store.tidyAppFolders(for: targetID)
+        store.rehomeDeliveredParts(for: targetID)
 
         XCTAssertNil(store.takeoutArchives.first { $0.id == phantomID })
         XCTAssertEqual(store.takeoutArchives.filter { $0.partNumber == 12 }.count, 1)
@@ -807,7 +711,7 @@ final class AppStoreOrchestrationTests: XCTestCase {
         try catalog(at: directory).upsertTakeoutArchive(lost)
         store.loadAll()
 
-        store.tidyAppFolders(for: targetID)
+        store.rehomeDeliveredParts(for: targetID)
 
         XCTAssertNotNil(
             store.takeoutArchives.first { $0.id == lostID },
@@ -834,7 +738,7 @@ final class AppStoreOrchestrationTests: XCTestCase {
         ))
         store.loadAll()
 
-        XCTAssertEqual(store.tidyAppFolders(for: targetID).parts, 0)
+        XCTAssertEqual(store.rehomeDeliveredParts(for: targetID), 0)
         XCTAssertTrue(FileManager.default.fileExists(atPath: stray.path))
     }
 
@@ -863,6 +767,33 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertEqual(store.dropContainerArchives(), 1)
         XCTAssertNil(store.takeoutArchives.first { $0.id == container.id })
         XCTAssertEqual(store.takeoutArchives.count, 2, "The exports inside it are untouched")
+    }
+
+    /// The rule runs where containers are made, so a scan never leaves one
+    /// behind for the next launch to clean up.
+    ///
+    /// The shape that still reaches it: a `Google Photos` directory marks its
+    /// parent as an export, and here that parent is a folder somebody keeps
+    /// their zips in. Naming alone would not have registered it — this comes
+    /// from the structural rule, which is why fixing the folder-name test was
+    /// only ever half of it.
+    func testAScanLeavesNoContainerBehind() async throws {
+        let (store, _) = try makeStore()
+        let root = try makeDirectory("scan")
+        let export = root.appendingPathComponent("Google_Photos_Backup", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: export.appendingPathComponent("Google Photos", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try Data("part".utf8).write(to: export.appendingPathComponent("takeout-S1-001.zip"))
+
+        await store.performTakeoutScan(rootURL: root, targetID: nil)
+
+        XCTAssertEqual(
+            store.takeoutArchives.map { ($0.path as NSString).lastPathComponent },
+            ["takeout-S1-001.zip"],
+            "The folder holding the export is not itself an export"
+        )
     }
 
     /// A zip holds no rows and an extracted folder is not nested inside another
@@ -1334,105 +1265,5 @@ final class RedundancyPolicyBoundTests: XCTestCase {
 
         let (reopened, _, _) = try makeStore(root)
         XCTAssertEqual(reopened.requestedCopies, 3)
-    }
-}
-
-/// Batches written before the app recorded what kind of import they were.
-/// The information was never lost — every asset carries its own origin — but
-/// nothing had asked the batch, so a screen listing folder imports had to read
-/// a free-text description and got it wrong.
-@MainActor
-final class ImportBatchBackfillTests: XCTestCase {
-
-    private var roots: [URL] = []
-    private var suiteNames: [String] = []
-
-    override func tearDown() {
-        for url in roots { try? FileManager.default.removeItem(at: url) }
-        for name in suiteNames { UserDefaults.standard.removePersistentDomain(forName: name) }
-        roots = []; suiteNames = []
-        super.tearDown()
-    }
-
-    private func makeStore() throws -> (AppStore, CatalogStore) {
-        let root = FileManager.default.temporaryDirectory
-            .appendingPathComponent("heykinn-backfill-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
-        roots.append(root)
-        let suiteName = "heykinn-backfill-\(root.lastPathComponent)"
-        suiteNames.append(suiteName)
-        let store = AppStore(environment: AppEnvironment(
-            appDirectory: root, defaults: UserDefaults(suiteName: suiteName)!, runsBackgroundWork: false
-        ))
-        let catalog = try CatalogStore(
-            databasePath: root.appendingPathComponent("catalog.sqlite").path
-        )
-        return (store, catalog)
-    }
-
-    private func asset(_ origin: ImportOrigin, batch: UUID) -> Asset {
-        Asset(
-            id: UUID(), kind: .photo, originalFilename: "IMG.jpg", importOrigin: origin,
-            captureDate: nil, importDate: Date(), updatedDate: Date(), fileSize: 1,
-            pixelWidth: nil, pixelHeight: nil, contentHash: UUID().uuidString,
-            residency: .local, residencySource: .importDefault, presence: .localOnly,
-            stagingRelativePath: nil, importBatchID: batch, exifSummary: [:]
-        )
-    }
-
-    private func batch(_ label: String) -> ImportBatch {
-        ImportBatch(
-            id: UUID(), sourcePath: label, startedAt: Date(), completedAt: nil,
-            importedCount: 1, duplicateCount: 0, failedCount: 0, origin: nil
-        )
-    }
-
-    /// The reported shape: seven Takeout imports, described in prose, showing
-    /// up as folders somebody had added.
-    func testATakeoutBatchIsTypedFromItsOwnPhotos() throws {
-        let (store, catalog) = try makeStore()
-        let takeout = batch("Recovered import (Google Takeout)")
-        let folder = batch("/Users/me/Pictures/Camera Roll")
-        try catalog.upsertImportBatch(takeout)
-        try catalog.upsertImportBatch(folder)
-        try catalog.upsertAsset(asset(.googleTakeout, batch: takeout.id))
-        try catalog.upsertAsset(asset(.localFolder, batch: folder.id))
-        store.loadAll()
-
-        store.reconcileAfterRestart()
-
-        let typed = Dictionary(uniqueKeysWithValues: store.importBatches.map { ($0.id, $0) })
-        XCTAssertEqual(typed[takeout.id]?.origin, .googleTakeout)
-        XCTAssertFalse(typed[takeout.id]?.isFolderImport ?? true)
-        XCTAssertEqual(typed[folder.id]?.origin, .localFolder)
-        XCTAssertTrue(typed[folder.id]?.isFolderImport ?? false)
-    }
-
-    /// A batch whose photos disagree is not evidence of anything. Filing it
-    /// under the majority would put it under a source it only partly came from.
-    func testAMixedBatchIsLeftUnrecorded() throws {
-        let (store, catalog) = try makeStore()
-        let mixed = batch("Some import")
-        try catalog.upsertImportBatch(mixed)
-        try catalog.upsertAsset(asset(.googleTakeout, batch: mixed.id))
-        try catalog.upsertAsset(asset(.localFolder, batch: mixed.id))
-        store.loadAll()
-
-        store.reconcileAfterRestart()
-
-        XCTAssertNil(store.importBatches.first { $0.id == mixed.id }?.origin)
-    }
-
-    /// It survives the round trip, so the next launch has nothing to do.
-    func testTheRecordedOriginIsPersisted() throws {
-        let (store, catalog) = try makeStore()
-        let takeout = batch("Takeout export S1 (3 parts)")
-        try catalog.upsertImportBatch(takeout)
-        try catalog.upsertAsset(asset(.googleTakeout, batch: takeout.id))
-        store.loadAll()
-        store.reconcileAfterRestart()
-
-        let reread = try catalog.fetchImportBatches().first { $0.id == takeout.id }
-        XCTAssertEqual(reread?.origin, .googleTakeout)
     }
 }

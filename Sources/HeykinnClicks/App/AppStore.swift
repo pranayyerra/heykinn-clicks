@@ -1322,73 +1322,7 @@ final class AppStore: ObservableObject {
             }
             if !stuck.isEmpty { repairs.append("requeued \(stuck.count) interrupted replication task(s)") }
 
-            // 2. Archives recorded without a drive — scanned as a plain folder,
-            // or discovered by an older build — count towards no drive at all,
-            // so their copy silently stops satisfying the redundancy policy.
-            // Attribute any whose path sits on a drive we know the mount of.
-            let unattributed = takeoutArchives.filter { $0.targetID == nil }
-            var attributed = 0
-            for var archive in unattributed {
-                guard let resolved = targetID(forPath: archive.path) else { continue }
-                archive.targetID = resolved
-                try catalog.upsertTakeoutArchive(archive)
-                attributed += 1
-            }
-            if attributed > 0 {
-                repairs.append("attributed \(attributed) archive(s) to the drive holding them")
-            }
-
-            // Batches written before the app recorded what kind of import they
-            // were. The information was never lost — every asset carries its
-            // own origin — but nothing had asked the batch, so a screen listing
-            // folder imports had to take a free-text description at its word
-            // and showed Takeout imports as folders somebody had chosen.
-            var typed = 0
-            for var batch in importBatches where batch.origin == nil {
-                let members = assets.filter { $0.importBatchID == batch.id }
-                guard let origin = members.first?.importOrigin else { continue }
-                // One kind or it stays unknown: a batch whose assets disagree
-                // is not evidence of anything, and guessing the majority would
-                // file it under a source it only partly came from.
-                guard members.allSatisfy({ $0.importOrigin == origin }) else { continue }
-                batch.origin = origin
-                try catalog.upsertImportBatch(batch)
-                typed += 1
-            }
-            if typed > 0 {
-                repairs.append("recorded what kind of import \(typed) earlier batch(es) were")
-            }
-
-            // A folder registered as an export while holding other exports —
-            // counted twice in every total, and shown as an export of its own.
-            let containers = dropContainerArchives()
-            if containers > 0 {
-                repairs.append("stopped treating \(containers) folder(s) as exports when they only hold exports")
-            }
-
-            // 3. Assets can reference a batch row that never got written by an
-            // older build; synthesise it so import history is not lost.
-            let knownBatchIDs = Set(importBatches.map(\.id))
-            let orphanBatchIDs = Set(assets.compactMap(\.importBatchID)).subtracting(knownBatchIDs)
-            for batchID in orphanBatchIDs {
-                let members = assets.filter { $0.importBatchID == batchID }
-                guard let earliest = members.map(\.importDate).min() else { continue }
-                try catalog.upsertImportBatch(ImportBatch(
-                    id: batchID,
-                    sourcePath: "Recovered import (\(members.first?.importOrigin.displayName ?? "unknown"))",
-                    startedAt: earliest,
-                    completedAt: members.map(\.updatedDate).max(),
-                    importedCount: members.count,
-                    duplicateCount: 0,
-                    failedCount: 0,
-                    origin: members.first?.importOrigin
-                ))
-            }
-            if !orphanBatchIDs.isEmpty {
-                repairs.append("recovered \(orphanBatchIDs.count) import batch record(s) covering \(assets.filter { $0.importBatchID.map(orphanBatchIDs.contains) ?? false }.count) asset(s)")
-            }
-
-            // 3. Staged files no asset points at: bytes copied in just before
+            // 2. Staged files no asset points at: bytes copied in just before
             // the process died. Reclaimable, and nothing references them.
             let referenced = Set(assets.compactMap(\.stagingRelativePath))
             var orphanedStaging = 0
@@ -1406,7 +1340,7 @@ final class AppStore: ObservableObject {
             }
             if orphanedStaging > 0 { repairs.append("removed \(orphanedStaging) orphaned staged file(s)") }
 
-            // 4. Abandoned zip-extraction workspaces on the Mac (each can be
+            // 3. Abandoned zip-extraction workspaces on the Mac (each can be
             // many GB) and half-written `.extracting` folders on targets.
             let workArea = staging.rootURL.deletingLastPathComponent()
                 .appendingPathComponent("TakeoutWork", isDirectory: true)
@@ -1583,12 +1517,11 @@ final class AppStore: ObservableObject {
             // Before anything reads or copies: confirm the paths still resolve.
             // Content the user moved must be repointed, not copied again.
             repairReplicaPaths(for: targetID)
-            // Then gather what the app has left lying around this drive into
-            // one folder, and put delivered parts beside their export. Renames
-            // within the volume, and it runs before the presence checks so
-            // they read the paths the catalog now holds rather than reporting
-            // everything this moved as gone.
-            tidyAppFolders(for: targetID)
+            // Then put any part the app was holding for this drive in beside
+            // its export. A rename within the volume, and it runs before the
+            // presence checks so they read the paths the catalog now holds
+            // rather than reporting everything this moved as gone.
+            rehomeDeliveredParts(for: targetID)
             // Then: are the export archives this drive is credited with still
             // on it? One stat each, and it must come before the replica gate
             // so a part that survives only as its extracted twin is stat-ed
@@ -1782,7 +1715,7 @@ final class AppStore: ObservableObject {
         Task { await performTakeoutScan(rootURL: rootURL, targetID: targetID) }
     }
 
-    private func performTakeoutScan(rootURL: URL, targetID: UUID?) async {
+    func performTakeoutScan(rootURL: URL, targetID: UUID?) async {
         guard takeoutActivity == nil else { return }
         takeoutActivity = TakeoutActivity(phase: .scanning, detail: rootURL.lastPathComponent)
         let knownByPath = Dictionary(uniqueKeysWithValues: takeoutArchives.map { ($0.path, $0) })
@@ -1853,6 +1786,10 @@ final class AppStore: ObservableObject {
         }
         takeoutActivity = nil
         loadAll()
+        // Registering an archive is the only thing that can produce a folder
+        // holding other exports, so this is where one is caught — before the
+        // totals it would double-count are ever shown.
+        dropContainerArchives()
     }
 
     func importTakeoutArchive(_ archiveID: UUID) {
@@ -2897,112 +2834,6 @@ final class AppStore: ObservableObject {
         return (repaired, unresolved)
     }
 
-    /// Gathers what the app has scattered over a target into one folder, and
-    /// puts delivered export parts beside the export they belong to.
-    ///
-    /// The app used to write three directories at a volume root —
-    /// `HeykinnClicksReplicas`, `HeykinnClicksCatalogBackups`, and
-    /// `HeykinnClicks Export Parts` — which reads as three unrelated
-    /// applications having helped themselves to a drive that belongs to the
-    /// user. One folder, `HeykinnClicks/`, and what is theirs stays theirs.
-    ///
-    /// Every move here is a rename within one volume: instant, and it moves no
-    /// bytes. Nothing is moved out of a directory the user chose — the only
-    /// files this relocates are ones the app put where it did because it had
-    /// no better idea, and the catalog is repointed in the same pass so no
-    /// copy is ever lost track of.
-    @discardableResult
-    func tidyAppFolders(for targetID: UUID) -> (folders: Int, parts: Int) {
-        guard var target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
-            return (0, 0)
-        }
-        guard !isBusy(targetID), !isQuiescing(targetID), !isTransferringParts else { return (0, 0) }
-
-        let fileManager = FileManager.default
-        var movedFolders: [String] = []
-
-        /// Renames a legacy directory under the app's folder, but only when
-        /// there is nothing already at the destination — a half-migrated drive
-        /// is worse than an untidy one.
-        func relocate(legacy: String, to modern: String) -> Bool {
-            let from = mountURL.appendingPathComponent(legacy, isDirectory: true)
-            let to = mountURL.appendingPathComponent(modern, isDirectory: true)
-            var isDirectory: ObjCBool = false
-            guard fileManager.fileExists(atPath: from.path, isDirectory: &isDirectory),
-                  isDirectory.boolValue,
-                  !fileManager.fileExists(atPath: to.path) else { return false }
-            do {
-                try fileManager.createDirectory(
-                    at: to.deletingLastPathComponent(), withIntermediateDirectories: true
-                )
-                try fileManager.moveItem(at: from, to: to)
-                return true
-            } catch {
-                lastError = "Could not tidy \(legacy) on \(target.name): \(error.localizedDescription)"
-                return false
-            }
-        }
-
-        // Replicas are recorded relative to the target's replica root, so
-        // moving the directory and updating that one stored value repoints
-        // every replica under it at once — no per-file catalog write.
-        if target.replicaRootComponent == ReplicationTarget.legacyReplicaRoot {
-            if relocate(legacy: ReplicationTarget.legacyReplicaRoot, to: ReplicationTarget.defaultReplicaRoot) {
-                target.replicaRootComponent = ReplicationTarget.defaultReplicaRoot
-                do {
-                    try catalog.upsertTarget(target)
-                    movedFolders.append("replicas")
-                } catch {
-                    lastError = "Could not record \(target.name)'s replica root: \(error.localizedDescription)"
-                }
-            } else if !fileManager.fileExists(
-                atPath: mountURL.appendingPathComponent(ReplicationTarget.legacyReplicaRoot).path
-            ) {
-                // Nothing was ever written to the old root on this target, so
-                // the new one is simply where its replicas go from now on.
-                target.replicaRootComponent = ReplicationTarget.defaultReplicaRoot
-                try? catalog.upsertTarget(target)
-            }
-        }
-
-        // Snapshots are found by listing the directory rather than recorded in
-        // the catalog, so moving it is the whole migration.
-        if relocate(legacy: CatalogBackupService.legacyDirectoryName, to: CatalogBackupService.directoryName) {
-            movedFolders.append("catalog backups")
-        }
-
-        // Export parts record absolute paths, so these rows move with the file.
-        let legacyParts = mountURL
-            .appendingPathComponent(ExportPartRelay.legacyOnDriveDirectoryName, isDirectory: true).path
-        if relocate(legacy: ExportPartRelay.legacyOnDriveDirectoryName, to: ExportPartRelay.onDriveDirectoryName) {
-            movedFolders.append("delivered export parts")
-            let modernParts = ExportPartRelay.destinationDirectory(onMount: mountURL).path
-            do {
-                try catalog.transaction {
-                    for var archive in takeoutArchives where archive.path.hasPrefix(legacyParts + "/") {
-                        archive.path = modernParts + archive.path.dropFirst(legacyParts.count)
-                        try catalog.upsertTakeoutArchive(archive)
-                    }
-                }
-            } catch {
-                lastError = "Could not repoint moved export parts on \(target.name): \(error.localizedDescription)"
-            }
-        }
-        if !movedFolders.isEmpty {
-            targets = (try? catalog.fetchTargets()) ?? targets
-            takeoutArchives = (try? catalog.fetchTakeoutArchives()) ?? takeoutArchives
-            audit(
-                .drive,
-                "\(target.name): gathered the app's \(movedFolders.joined(separator: ", ")) into one \(ReplicationTarget.appFolderName) folder. Files were renamed within the drive; nothing was copied and none of your own folders were touched.",
-                targetID: targetID
-            )
-        }
-
-        let parts = rehomeDeliveredParts(for: targetID, mountURL: mountURL, targetName: target.name)
-        if !movedFolders.isEmpty || parts > 0 { loadAll() }
-        return (movedFolders.count, parts)
-    }
-
     /// Moves a delivered export part out of the app's folder and in beside the
     /// rest of its export, once the drive shows where that export lives.
     ///
@@ -3012,6 +2843,12 @@ final class AppStore: ObservableObject {
     /// part has somewhere it belongs, and leaving it at the root is what split
     /// a twelve-part export across two directories.
     ///
+    /// The move is a rename within one volume: instant, and it moves no bytes.
+    /// Nothing is moved out of a directory the user chose — the only files
+    /// this relocates are ones the app put where it did because it had no
+    /// better idea, and the catalog is repointed in the same pass so no copy
+    /// is ever lost track of.
+    ///
     /// The destination usually already has a catalog row, and that is the
     /// normal case rather than an error: the part was delivered precisely
     /// *because* the copy that used to sit there was deleted, and the row for
@@ -3019,7 +2856,14 @@ final class AppStore: ObservableObject {
     /// unique — so the delivered copy moves *into* that row rather than beside
     /// it, and the row it came from goes away. It is not a lost copy; it is a
     /// copy this method itself moved.
-    private func rehomeDeliveredParts(for targetID: UUID, mountURL: URL, targetName: String) -> Int {
+    @discardableResult
+    func rehomeDeliveredParts(for targetID: UUID) -> Int {
+        guard let target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
+            return 0
+        }
+        guard !isBusy(targetID), !isQuiescing(targetID), !isTransferringParts else { return 0 }
+
+        let targetName = target.name
         let appParts = ExportPartRelay.destinationDirectory(onMount: mountURL).path + "/"
         let strays = takeoutArchives.filter {
             $0.targetID == targetID && $0.holdsBytes && $0.path.hasPrefix(appParts)
@@ -3091,6 +2935,7 @@ final class AppStore: ObservableObject {
                 "\(targetName): moved \(moved) delivered export part(s) (e.g. \(example ?? "one")) in beside the rest of their export, where this drive already keeps it. A rename within the drive; no bytes moved.",
                 targetID: targetID
             )
+            loadAll()
         }
         return moved
     }

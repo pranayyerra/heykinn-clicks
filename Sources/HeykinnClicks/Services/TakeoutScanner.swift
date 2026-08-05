@@ -17,8 +17,7 @@ enum TakeoutScanner {
 
     /// Directories never descended into: our own managed structures.
     private static let excludedDirectoryNames: Set<String> = [
-        ReplicationTarget.appFolderName, ReplicationTarget.legacyReplicaRoot,
-        CatalogBackupService.legacyDirectoryName,
+        ReplicationTarget.appFolderName,
         "Staging", "TakeoutWork", ".Trashes", ".Spotlight-V100",
     ]
 

@@ -41,7 +41,12 @@ final class CatalogStore {
             live_photo_still_id TEXT,
             live_photo_checked_at REAL,
             capture_date_source TEXT,
-            edited_from_asset_id TEXT
+            edited_from_asset_id TEXT,
+            -- Assets indexed from a provider library carry that library's own
+            -- id, so re-indexing updates rather than duplicates. A counterpart
+            -- links the same photograph across domains when the bytes differ.
+            provider_local_id TEXT,
+            counterpart_asset_id TEXT
         );
 
         CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(content_hash);
@@ -54,6 +59,10 @@ final class CatalogStore {
             file_size INTEGER NOT NULL
         );
 
+        -- Targets: a registered place that holds a copy, which may be an
+        -- external volume or a folder on any disk the user pointed at.
+        -- Still called `drives` because the marker files that identify them
+        -- are already sitting on users' volumes under that name.
         CREATE TABLE IF NOT EXISTS drives (
             id TEXT PRIMARY KEY,
             name TEXT NOT NULL,
@@ -62,7 +71,9 @@ final class CatalogStore {
             registered_at REAL NOT NULL,
             last_seen_at REAL,
             replica_root TEXT NOT NULL,
-            last_mount_path TEXT
+            last_mount_path TEXT,
+            kind TEXT,
+            configured_path TEXT
         );
 
         CREATE TABLE IF NOT EXISTS replica_states (
@@ -71,6 +82,9 @@ final class CatalogStore {
             state TEXT NOT NULL,
             relative_path TEXT,
             last_verified_at REAL,
+            -- What this replica's file looked like when the app last knew it
+            -- was right, so a connect can aim its reads at the files that
+            -- changed underneath it rather than re-reading the target.
             observed_size INTEGER,
             observed_modified_at REAL,
             PRIMARY KEY (asset_id, drive_id)
@@ -116,7 +130,13 @@ final class CatalogStore {
             completed_at REAL,
             imported_count INTEGER NOT NULL DEFAULT 0,
             duplicate_count INTEGER NOT NULL DEFAULT 0,
-            failed_count INTEGER NOT NULL DEFAULT 0
+            failed_count INTEGER NOT NULL DEFAULT 0,
+            -- What kind of import a batch was. `source_path` holds a label
+            -- rather than a path for three of the four things that write it,
+            -- so it cannot be used to tell a folder somebody chose from a
+            -- Takeout the app unpacked — which is a question the Sources
+            -- screen has to answer.
+            origin TEXT
         );
 
         CREATE TABLE IF NOT EXISTS takeout_archives (
@@ -135,7 +155,12 @@ final class CatalogStore {
             part_number INTEGER,
             imported_through_index INTEGER NOT NULL DEFAULT 0,
             imported_file_total INTEGER NOT NULL DEFAULT 0,
-            quick_checksum TEXT
+            content_hash TEXT,
+            quick_checksum TEXT,
+            -- An export archive the app looked for on a connected target and
+            -- did not find. The row stays for the import history it carries;
+            -- this is what stops it counting as a copy of its part.
+            missing_since REAL
         );
 
         CREATE UNIQUE INDEX IF NOT EXISTS idx_takeout_path ON takeout_archives(path);
@@ -149,45 +174,6 @@ final class CatalogStore {
             drive_id TEXT
         );
         """)
-
-        // Additive migrations for catalogs created before these columns
-        // existed; "duplicate column" failures on fresh databases are expected.
-        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN export_set_id TEXT;")
-        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN part_number INTEGER;")
-        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN content_hash TEXT;")
-        try? database.exec("ALTER TABLE assets ADD COLUMN cloud_evidence TEXT;")
-        try? database.exec("ALTER TABLE assets ADD COLUMN cloud_checked_at REAL;")
-        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN imported_through_index INTEGER NOT NULL DEFAULT 0;")
-        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN imported_file_total INTEGER NOT NULL DEFAULT 0;")
-        try? database.exec("ALTER TABLE assets ADD COLUMN live_photo_still_id TEXT;")
-        try? database.exec("ALTER TABLE assets ADD COLUMN live_photo_checked_at REAL;")
-        try? database.exec("ALTER TABLE assets ADD COLUMN capture_date_source TEXT;")
-        try? database.exec("ALTER TABLE assets ADD COLUMN edited_from_asset_id TEXT;")
-        try? database.exec("ALTER TABLE drives ADD COLUMN last_mount_path TEXT;")
-        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN quick_checksum TEXT;")
-        // Targets: a registered place that holds a copy, which may be an
-        // external volume or a folder on any disk the user pointed at.
-        try? database.exec("ALTER TABLE drives ADD COLUMN kind TEXT;")
-        try? database.exec("ALTER TABLE drives ADD COLUMN configured_path TEXT;")
-        // Assets indexed from a provider library carry that library's own id,
-        // so re-indexing updates rather than duplicates. A counterpart links
-        // the same photograph across domains when the bytes differ.
-        try? database.exec("ALTER TABLE assets ADD COLUMN provider_local_id TEXT;")
-        try? database.exec("ALTER TABLE assets ADD COLUMN counterpart_asset_id TEXT;")
-        // What each replica's file looked like when the app last knew it was
-        // right, so a connect can aim its reads at the files that changed
-        // underneath it rather than re-reading the target.
-        try? database.exec("ALTER TABLE replica_states ADD COLUMN observed_size INTEGER;")
-        try? database.exec("ALTER TABLE replica_states ADD COLUMN observed_modified_at REAL;")
-        // An export archive the app looked for on a connected target and did
-        // not find. The row stays for the import history it carries; this is
-        // what stops it counting as a copy of its part.
-        try? database.exec("ALTER TABLE takeout_archives ADD COLUMN missing_since REAL;")
-        // What kind of import a batch was. `source_path` holds a label rather
-        // than a path for three of the four things that write it, so it can
-        // not be used to tell a folder somebody chose from a Takeout the app
-        // unpacked — which is a question the Sources screen has to answer.
-        try? database.exec("ALTER TABLE import_batches ADD COLUMN origin TEXT;")
     }
 
     /// Writes a consistent, compacted copy of the whole catalog to `path`.

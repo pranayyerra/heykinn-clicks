@@ -25,9 +25,6 @@ struct ExportPartRelay {
     /// already lives somewhere on that drive is delivered beside its siblings
     /// instead; see `AppStore.exportSetHome`.
     static let onDriveDirectoryName = ReplicationTarget.appFolderName + "/ExportParts"
-    /// The pre-consolidation location, still on drives the app has delivered
-    /// to. Parts are moved out of it, never into it.
-    static let legacyOnDriveDirectoryName = "HeykinnClicks Export Parts"
 
     init(rootURL: URL) {
         self.rootURL = rootURL

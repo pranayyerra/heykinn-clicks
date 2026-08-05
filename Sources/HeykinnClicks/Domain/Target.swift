@@ -59,19 +59,11 @@ struct ReplicationTarget: Identifiable, Hashable {
     static let markerFileName = ".heykinn-clicks-drive.json"
 
     /// The one directory the app writes into on a target. Everything the app
-    /// puts on a drive that is not the user's own content lives under here.
-    ///
-    /// It used to be three folders at the volume root — replicas, catalog
-    /// backups, and delivered export parts — which read as three unrelated
-    /// applications having scattered themselves across a drive that belongs to
-    /// the user. One folder, and the user can see at a glance what is the
-    /// app's and what is theirs.
+    /// puts on a drive that is not the user's own content lives under here —
+    /// one folder, so the user can see at a glance what is the app's and what
+    /// is theirs.
     static let appFolderName = "HeykinnClicks"
     static let defaultReplicaRoot = appFolderName + "/Replicas"
-    /// The pre-consolidation folders, still on every drive the app has touched.
-    /// Kept so the migration knows what to look for; nothing new is written to
-    /// them.
-    static let legacyReplicaRoot = "HeykinnClicksReplicas"
 
     /// A folder target is expected at a fixed path; a removable one is wherever
     /// it happens to be mounted.

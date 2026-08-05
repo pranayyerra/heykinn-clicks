@@ -224,7 +224,6 @@ enum ExportSetLayout {
     ) -> URL? {
         let prefix = mountURL.path.hasSuffix("/") ? mountURL.path : mountURL.path + "/"
         let appFolder = prefix + ReplicationTarget.appFolderName + "/"
-        let legacyPartsFolder = prefix + ExportPartRelay.legacyOnDriveDirectoryName + "/"
 
         // Distinct part numbers, not rows: a zip and the folder extracted from
         // it sit in the same directory and are one part between them.
@@ -233,8 +232,7 @@ enum ExportSetLayout {
             guard archive.exportSetID == setID, archive.holdsBytes,
                   let partNumber = archive.partNumber,
                   archive.path.hasPrefix(prefix),
-                  !archive.path.hasPrefix(appFolder),
-                  !archive.path.hasPrefix(legacyPartsFolder)
+                  !archive.path.hasPrefix(appFolder)
             else { continue }
             let directory = (archive.path as NSString).deletingLastPathComponent
             partsByDirectory[directory, default: []].insert(partNumber)

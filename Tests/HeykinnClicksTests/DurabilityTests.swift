@@ -120,32 +120,6 @@ final class DurabilityTests: XCTestCase {
         )
     }
 
-    func testInterruptedBatchCanBeRecoveredFromItsAssets() throws {
-        // The recovery path used by reconcileAfterRestart for catalogs written
-        // by older builds, where the batch row was only written at the end.
-        let catalog = try makeCatalog()
-        let batchID = UUID()
-        let start = Date(timeIntervalSince1970: 1_000_000)
-        for offset in 0..<3 {
-            var asset = makeAsset(batchID: batchID)
-            asset.importDate = start.addingTimeInterval(Double(offset))
-            try catalog.upsertAsset(asset)
-        }
-        XCTAssertEqual(try catalog.fetchImportBatches().count, 0)
-
-        let assets = try catalog.fetchAssets()
-        let members = assets.filter { $0.importBatchID == batchID }
-        try catalog.upsertImportBatch(ImportBatch(
-            id: batchID, sourcePath: "Recovered import", startedAt: members.map(\.importDate).min()!,
-            completedAt: members.map(\.updatedDate).max(), importedCount: members.count,
-            duplicateCount: 0, failedCount: 0
-        ))
-
-        let recovered = try XCTUnwrap(try catalog.fetchImportBatches().first)
-        XCTAssertEqual(recovered.importedCount, 3)
-        XCTAssertEqual(recovered.startedAt.timeIntervalSince1970, start.timeIntervalSince1970, accuracy: 0.001)
-    }
-
     func testWALJournalKeepsCommittedDataAvailableToAReopen() throws {
         let path = try makeTempDirectory().appendingPathComponent("catalog.sqlite").path
         let hash = UUID().uuidString
