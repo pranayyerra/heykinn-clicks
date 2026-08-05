@@ -56,16 +56,20 @@ Shipped and tested; the pointers are where to look.
 - **Catalog authority and durability** — atomic chunk commits, resumable
   imports, startup reconciliation, verified per-target snapshots:
   `Persistence/`, `Services/CatalogBackupService.swift`,
-  `AppStore.reconcileAfterRestart`. The store takes an `AppEnvironment`, so a
-  test builds a whole one over a temporary archive rather than the user's:
-  `App/AppEnvironment.swift`.
+  `AppStore.reconcileAfterRestart`. The schema is one declaration in
+  `CatalogStore.createSchema` — there are no incremental migrations to replay,
+  because the one catalog that needed them has had them. The store takes an
+  `AppEnvironment`, so a test builds a whole one over a temporary archive
+  rather than the user's: `App/AppEnvironment.swift`.
 - **Targets** — host-device or external-volume, marker-file identity (never
   path), capped at `desiredCopies`, forgettable without deleting anything, one
   device = one copy: `Domain/Target.swift`.
 - **Replication** — per-file for loose assets, per-export-part for archives;
   archive-backed replicas; the host-staging corridor for targets never
-  reachable together: `Domain/ArchiveReplication.swift`,
-  `Services/ExportPartRelay.swift`.
+  reachable together; a drive arriving with the same export already on it
+  claims those bytes as its replicas, hash-verified at claim time, rather than
+  being sent a copy of what it holds: `Domain/ArchiveReplication.swift`,
+  `Services/ExportPartRelay.swift`, `Services/TakeoutReconciler.swift`.
 - **On-drive layout** — the drive belongs to the user, so the app reads their
   layout rather than imposing one. A restored file goes back to the path it
   was recorded at; a delivered export part goes in beside the rest of its set
@@ -125,8 +129,8 @@ Shipped and tested; the pointers are where to look.
   escapes in menus, photos leading over files, and every screen written for
   somebody who has not read this document.
 
-Stack: SwiftUI · Swift concurrency · raw `sqlite3` (WAL, `VACUUM INTO`,
-additive migrations) · Apple frameworks only — zero third-party dependencies.
+Stack: SwiftUI · Swift concurrency · raw `sqlite3` (WAL, `VACUUM INTO`) ·
+Apple frameworks only — zero third-party dependencies.
 
 ---
 
@@ -149,8 +153,10 @@ additive migrations) · Apple frameworks only — zero third-party dependencies.
 6. No destructive cleanup without explicit job state and confirmation — or,
    for future reclamation, the listed proof, which is stronger than a prompt.
 7. Interrupted work resumes; a crash or an unplug never corrupts the catalog.
-8. Defects are fixed in the import path or startup reconciliation, so every
-   install benefits — never by hand against one catalog.
+8. Defects are fixed in the code path that produces them — the import path,
+   the scan, startup reconciliation — so every install benefits, and so the
+   fix runs before the wrong answer is shown rather than a launch after it.
+   Never by hand against one catalog.
 
 ---
 
@@ -174,12 +180,13 @@ verification of a pre-existing Google library cannot be built honestly.
 Google verification stays manual (a fresh Takeout diffed against the catalog),
 and reclamation from Google stays a manual act the app can only guide.
 
-3. **Verified presence at scale (Apple).** Budgeted whole-library scans on the
+2. **Verified presence at scale (Apple).** Budgeted whole-library scans on the
    shipped connector, so Violations reports real cross-domain coexistence
-   rather than 25 assets at a time.
-4. **Migrations end to end (Apple).** The existing state machine drives
+   rather than 25 assets at a time (`AppStore.checkApplePhotosPresence` takes a
+   `limit` of 25 today).
+3. **Migrations end to end (Apple).** The existing state machine drives
    PhotoKit execution instead of stopping at user-confirmed manual steps.
-5. **Reclamation (Apple).** Proven local redundancy automatically releases the
+4. **Reclamation (Apple).** Proven local redundancy automatically releases the
    cloud copy — no prompt, no per-asset confirmation. The preconditions *are*
    the safety mechanism: Local residency; `desiredCopies` copies on targets
    (not staging); every copy read back and matched at least once; target trees
@@ -189,13 +196,13 @@ and reclamation from Google stays a manual act the app can only guide.
    nothing — every precondition but the last, which is a check made at the
    moment of release and cannot honestly be asserted in advance
    (`Services/ReclamationPlanner.swift`). What remains is the release itself.
-6. **Google, within its limits.** A guided fresh-Takeout diff — "what does
+5. **Google, within its limits.** A guided fresh-Takeout diff — "what does
    Google still hold that this archive already protects?" — with a manual
    deletion checklist the app tracks but never performs.
 
 ### Later
 
-7. Perceptual duplicates, faces, semantic search, map view.
+6. Perceptual duplicates, faces, semantic search, map view.
 
 ---
 
@@ -244,3 +251,12 @@ Earned against a real 248 GB archive; the stories are in git history.
     belongs beside that export, wherever the user keeps it. What the app
     writes that has nowhere of its own goes in one folder with the app's name
     on it, so the user can see at a glance what is theirs.
+24. A migration that has run everywhere it will ever run is weight, not
+    safety. With one install, "everywhere" is checkable: confirm against the
+    catalog that each one applied, then delete it — and report what has not
+    applied rather than deleting the code that would have done it.
+25. A repair belongs where the damage is made. The same function called at
+    startup arrives a launch late, after the wrong total has already been
+    shown; called where the row is written, it prevents. Ask what can create
+    the bad state before deciding a repair is one-time — the fix that closed
+    the obvious cause may not have closed the only one.
