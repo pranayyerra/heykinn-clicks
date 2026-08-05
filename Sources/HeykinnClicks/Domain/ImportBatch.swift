@@ -31,3 +31,32 @@ struct ImportBatch: Identifiable, Hashable {
     /// "folders you have added" means.
     var isFolderImport: Bool { origin?.isFolderLike == true }
 }
+
+/// What one file looked like the last time a sweep read it, and what it hashed
+/// to.
+///
+/// Pointing the app at a folder again is a thing people do — to check it took,
+/// to pick up what has been added since, or because the drive is being swept to
+/// find content it already holds. Every one of those re-reads every byte of
+/// every file to arrive at hashes it worked out before, on a folder that may be
+/// hundreds of gigabytes.
+///
+/// Size and modification date are the same evidence `ReplicaStatGate` uses to
+/// decide whether a replica needs re-reading, applied to the other side of the
+/// archive. Neither proves the bytes are unchanged — a file rewritten with the
+/// same length inside the timestamp's resolution would slip through — so the
+/// memo is only ever allowed to skip work for content the catalog *already
+/// has*. Nothing new enters the archive on the strength of a `stat`.
+struct ScanMemoEntry: Hashable {
+    var path: String
+    var size: Int64
+    var modifiedAt: Date
+    var contentHash: String
+    var seenAt: Date
+
+    func matches(_ observation: ReplicaStatGate.Observation) -> Bool {
+        size == observation.size
+            && abs(modifiedAt.timeIntervalSince(observation.modifiedAt))
+                < ReplicaStatGate.modificationTolerance
+    }
+}

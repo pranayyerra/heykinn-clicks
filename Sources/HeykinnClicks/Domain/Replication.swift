@@ -55,6 +55,129 @@ struct TargetReplicaState: Hashable, Identifiable {
     var id: String { "\(assetID.uuidString)/\(targetID.uuidString)" }
 }
 
+/// Which managed targets a file being read might already be sitting on.
+///
+/// Every import path has to answer one question per file: are these bytes
+/// already on a drive the app manages? If they are, that file *is* that drive's
+/// copy and staging a second one duplicates the archive for nothing.
+///
+/// The answer used to be computed once per batch, before the loop, from a
+/// single candidate target — and the folder importer picked that candidate by
+/// looking at whichever file the sweep happened to return first. So a batch
+/// spanning two mounted drives could only ever recognise one of them, and which
+/// one depended on the order the file picker returned the roots in. Selecting
+/// the same two folders in the other order gave a different archive. Holding
+/// every reachable target and resolving per file removes the ordering from the
+/// answer entirely.
+struct TargetPlacement {
+    struct Mount: Hashable {
+        var targetID: UUID
+        /// Standardised, without a trailing slash.
+        var path: String
+    }
+
+    /// One entry per target, as registered.
+    private(set) var mounts: [Mount]
+
+    /// What `resolve` actually matches against: longest path first, so the
+    /// most specific target wins when one is nested inside another, and with
+    /// every spelling of each mount that the rest of the system might hand us.
+    ///
+    /// One directory has more than one name. A target records where it lives
+    /// as `/var/…`, and `FileManager`'s enumerator hands back files under it
+    /// as `/private/var/…` — the same place through the same symlink, spelled
+    /// two ways, and a prefix test cannot see through the difference. Worse,
+    /// the obvious fix is backwards: `resolvingSymlinksInPath` *removes* a
+    /// leading `/private`, so normalising both sides with it leaves the file
+    /// paths untouched and the mismatch intact.
+    ///
+    /// So the spellings are worked out once, here, from at most a couple of
+    /// targets. Normalising each *file* instead would put a filesystem call in
+    /// a loop that runs once per photo, to answer a question that does not
+    /// change between them.
+    private let matchPaths: [(targetID: UUID, path: String)]
+
+    init(mounts: [Mount] = []) {
+        self.mounts = mounts
+        var candidates: [(targetID: UUID, path: String)] = []
+        for mount in mounts {
+            for spelling in Self.spellings(of: mount.path) {
+                candidates.append((mount.targetID, spelling))
+            }
+        }
+        matchPaths = candidates.sorted { $0.path.count > $1.path.count }
+    }
+
+    /// Every name this directory answers to, deduplicated.
+    private static func spellings(of path: String) -> [String] {
+        var forms = [path]
+        let url = URL(fileURLWithPath: path, isDirectory: true)
+        for variant in [url.resolvingSymlinksInPath().path, url.standardizedFileURL.path] {
+            if !forms.contains(variant) { forms.append(variant) }
+        }
+        // The fully resolved form: what the enumerator reports, and the one
+        // neither URL API produces.
+        if let raw = realpath(path, nil) {
+            let resolved = String(cString: raw)
+            free(raw)
+            if !forms.contains(resolved) { forms.append(resolved) }
+        }
+        return forms
+    }
+
+    init(reachablePaths: [UUID: URL]) {
+        self.init(mounts: reachablePaths.map {
+            Mount(targetID: $0.key, path: $0.value.path)
+        })
+    }
+
+    /// One target, for callers that genuinely have only one — a Takeout
+    /// workspace lives on exactly the drive that holds the export.
+    init(targetID: UUID, mountPath: String) {
+        self.init(mounts: [Mount(targetID: targetID, path: mountPath)])
+    }
+
+    var isEmpty: Bool { mounts.isEmpty }
+
+    /// Whether this path is one of the targets' own roots, or sits inside one.
+    /// Unlike `resolve`, true for the root itself — a folder somebody imported
+    /// from can be the whole drive.
+    func contains(_ url: URL) -> Bool {
+        let path = url.path
+        return matchPaths.contains { path == $0.path || path.hasPrefix($0.path + "/") }
+    }
+
+    /// The target holding this file, and where the file sits relative to that
+    /// target's root — the form a `volume:` replica records.
+    func resolve(_ url: URL) -> (targetID: UUID, volumeRelativePath: String)? {
+        let path = url.path
+        for candidate in matchPaths where path.hasPrefix(candidate.path + "/") {
+            return (candidate.targetID, String(path.dropFirst(candidate.path.count + 1)))
+        }
+        return nil
+    }
+
+    /// The replica a file resolved onto this placement stands for.
+    ///
+    /// `present` and verified now is what the caller actually knows: it has
+    /// just read this file end to end to hash it, so the claim is no weaker
+    /// than the one a fresh copy makes about itself.
+    func archiveBackedReplica(
+        for assetID: UUID,
+        at url: URL,
+        now: Date = Date()
+    ) -> TargetReplicaState? {
+        guard let resolved = resolve(url) else { return nil }
+        return TargetReplicaState(
+            assetID: assetID,
+            targetID: resolved.targetID,
+            state: .present,
+            relativePath: ReplicationService.volumeBackedPrefix + resolved.volumeRelativePath,
+            lastVerifiedAt: now
+        )
+    }
+}
+
 /// What one drive actually holds, tallied in a single pass over replica state.
 /// The UI draws a drive's share of the archive on every redraw; recomputing it
 /// by filtering the whole replica table each time does not survive a catalog

@@ -78,7 +78,7 @@ enum TakeoutImporter {
     }
 
     /// `batchID` lets a multi-part export set share one import batch across
-    /// all its parts. When `replicaContext` is set (the workspace lives on a
+    /// all its parts. When `placement` is non-empty (the workspace lives on a
     /// managed drive, i.e. an extracted folder — never a Mac temp workspace),
     /// each imported file is recorded as that drive's replica in place: the
     /// drive already holds the bytes, so no duplicate copy is queued for it.
@@ -95,7 +95,7 @@ enum TakeoutImporter {
         staging: StagingStore,
         policyRules: [PolicyRule] = [],
         batchID: UUID = UUID(),
-        replicaContext: (targetID: UUID, mountPath: String)? = nil,
+        placement: TargetPlacement = TargetPlacement(),
         fileURLs: [URL]? = nil
     ) async -> ImportResult {
         var batch = ImportBatch(
@@ -179,17 +179,10 @@ enum TakeoutImporter {
                 // no benefit. Only content with no drive-resident copy is
                 // staged.
                 var stagingPath: String?
-                if let context = replicaContext, fileURL.path.hasPrefix(context.mountPath + "/") {
-                    // The hash above was computed from this very file, so the
-                    // replica is genuinely verified as of now.
-                    let volumeRelative = String(fileURL.path.dropFirst(context.mountPath.count + 1))
-                    archiveBacked[assetID] = TargetReplicaState(
-                        assetID: assetID,
-                        targetID: context.targetID,
-                        state: .present,
-                        relativePath: ReplicationService.volumeBackedPrefix + volumeRelative,
-                        lastVerifiedAt: now
-                    )
+                // The hash above was computed from this very file, so a
+                // replica recorded here is genuinely verified as of now.
+                if let replica = placement.archiveBackedReplica(for: assetID, at: fileURL, now: now) {
+                    archiveBacked[assetID] = replica
                 } else {
                     stagingPath = try staging.stage(
                         fileAt: fileURL,

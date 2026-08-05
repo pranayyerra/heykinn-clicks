@@ -110,6 +110,31 @@ enum TakeoutScanner {
         nameLooksLikeTakeout(name) || TakeoutArchive.parseExportComponents(filename: name) != nil
     }
 
+    /// Whether this one directory is an unpacked Google export, by name or by
+    /// what it contains — the question `scan` answers as it walks, asked about
+    /// a single directory somebody has just chosen.
+    ///
+    /// Both halves of the rule live here so the scanner and anything guarding
+    /// against a Takeout arriving down the wrong path agree on what one is. A
+    /// folder import that swallows an export is not a small mistake: the export
+    /// machinery keeps thousands of replicas backed by a handful of files, and
+    /// importing the tree loose throws that away and copies every photo
+    /// individually instead.
+    static func looksLikeTakeoutRoot(_ url: URL) -> Bool {
+        if isUnpackedTakeoutFolderName(url.lastPathComponent) { return true }
+        // Renamed roots are caught structurally, the same way `scan` catches
+        // them: a "Google Photos" directory marks its parent as a root, and a
+        // folder that *is* one is a root itself.
+        if url.lastPathComponent.caseInsensitiveCompare("Google Photos") == .orderedSame { return true }
+        let children = (try? FileManager.default.contentsOfDirectory(
+            at: url, includingPropertiesForKeys: [.isDirectoryKey], options: [.skipsHiddenFiles]
+        )) ?? []
+        return children.contains { child in
+            (try? child.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory == true
+                && child.lastPathComponent.caseInsensitiveCompare("Google Photos") == .orderedSame
+        }
+    }
+
     /// The collision-variant half: after dropping the separators macOS uses,
     /// what follows "takeout" must be empty or a number.
     static func nameLooksLikeTakeout(_ name: String) -> Bool {

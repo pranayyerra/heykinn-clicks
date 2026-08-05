@@ -39,6 +39,12 @@ private struct AutomationSettings: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
+            Section {
+                Toggle("Free up space once your drives hold a photo", isOn: $store.reclaimStagingWhenSafe)
+                Text("Photos added from anywhere the app does not manage are copied onto this Mac first, so they are safe before any drive is plugged in. With this on, that working copy is released once your own drives hold the photo and have read it back to confirm it — the same standard the app uses to call a photo safe anywhere else. Your originals are never touched, and nothing is released while a photo is short of the copies you asked for.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
         }
         .formStyle(.grouped)
     }

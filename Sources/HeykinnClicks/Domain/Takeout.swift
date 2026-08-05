@@ -179,6 +179,20 @@ struct TakeoutExportSet: Identifiable {
 
 /// What the Takeout pipeline is doing right now. Phases are distinct so the
 /// UI never reports extraction or import as "scanning".
+/// A folder chosen for import that turned out to be a Google export.
+///
+/// Held rather than imported, because the two ways in are not interchangeable:
+/// the export path keeps the download whole and lets a handful of files stand
+/// for everything inside them, and the folder path would copy every photo
+/// separately onto every drive. Somebody picking the wrong menu item should be
+/// told, not quietly given the expensive one.
+struct TakeoutRedirect: Identifiable {
+    let id = UUID()
+    var url: URL
+
+    var name: String { url.lastPathComponent }
+}
+
 enum TakeoutPhase: String, Hashable {
     case scanning
     case reconciling

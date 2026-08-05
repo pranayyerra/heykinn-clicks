@@ -311,7 +311,7 @@ final class TakeoutTests: XCTestCase {
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            replicaContext: (targetID: targetID, mountPath: mount.path)
+            placement: TargetPlacement(targetID: targetID, mountPath: mount.path)
         )
 
         XCTAssertEqual(result.importedAssets.count, 2)
@@ -344,7 +344,7 @@ final class TakeoutTests: XCTestCase {
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            replicaContext: (targetID: targetID, mountPath: mount.path)
+            placement: TargetPlacement(targetID: targetID, mountPath: mount.path)
         )
         let asset = result.importedAssets[0]
         let replica = try XCTUnwrap(result.archiveBackedReplicas[asset.id])
@@ -387,7 +387,7 @@ final class TakeoutTests: XCTestCase {
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            replicaContext: (targetID: targetID, mountPath: mount.path)
+            placement: TargetPlacement(targetID: targetID, mountPath: mount.path)
         )
         let asset = result.importedAssets[0]
         let replica = try XCTUnwrap(result.archiveBackedReplicas[asset.id])
@@ -518,7 +518,7 @@ final class TakeoutTests: XCTestCase {
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            replicaContext: (targetID: targetID, mountPath: mount.path)
+            placement: TargetPlacement(targetID: targetID, mountPath: mount.path)
         )
 
         XCTAssertEqual(result.importedAssets.count, 2)
@@ -539,7 +539,7 @@ final class TakeoutTests: XCTestCase {
         let result = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: workspaceRoot),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            replicaContext: nil
+            placement: TargetPlacement()
         )
         for asset in result.importedAssets {
             XCTAssertNotNil(asset.stagingRelativePath)
@@ -557,7 +557,7 @@ final class TakeoutTests: XCTestCase {
         let imported = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: takeoutFolder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            replicaContext: (targetID: driveAID, mountPath: driveAMount.path)
+            placement: TargetPlacement(targetID: driveAID, mountPath: driveAMount.path)
         )
         let asset = imported.importedAssets[0]
         XCTAssertNil(asset.stagingRelativePath)
@@ -654,7 +654,7 @@ final class TakeoutTests: XCTestCase {
         let imported = await TakeoutImporter.importMedia(
             from: TakeoutImporter.Workspace(mediaRoot: folder, cleanupURL: nil),
             archiveName: "Takeout", existingAssets: [], staging: staging,
-            replicaContext: (targetID: targetID, mountPath: mount.path)
+            placement: TargetPlacement(targetID: targetID, mountPath: mount.path)
         )
         let assetIDsByHash = Dictionary(uniqueKeysWithValues: imported.importedAssets.map { ($0.contentHash, $0.id) })
 

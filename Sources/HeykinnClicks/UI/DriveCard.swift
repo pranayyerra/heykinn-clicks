@@ -232,6 +232,18 @@ struct DriveCard: View {
                         store.clearQueuedTasks(for: drive.id, action: .verify)
                     }
                 }
+                // The way out of an archive that was built in the wrong order.
+                // Photos imported before this drive was registered were copied
+                // here under the app's own names while the originals sat on it
+                // all along; reading the drive back finds them and credits the
+                // copy it already had.
+                if let mount = store.reachablePaths[drive.id] {
+                    Divider()
+                    Button("Look for copies this drive already has") {
+                        store.importFolders([mount])
+                    }
+                    .disabled(store.isImporting || store.isSyncing)
+                }
                 if let onForget {
                     Divider()
                     Button("Forget this target…", role: .destructive, action: onForget)

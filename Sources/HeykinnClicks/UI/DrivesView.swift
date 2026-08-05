@@ -317,14 +317,32 @@ struct DrivesView: View {
     /// any to wait for.
     private var stagingFooter: some View {
         let stagedOnly = store.protectionStates.values.filter { $0 == .stagedOnly }.count
-        return HStack(spacing: 6) {
-            Image(systemName: "tray")
-            Text("Staging · \(Formatters.bytes.string(fromByteCount: store.staging.totalBytes))")
-            if stagedOnly > 0 {
-                Text("· \(stagedOnly.formatted()) waiting for a target")
-                    .foregroundStyle(.orange)
+        let reclaimable = store.stagingReclaimPlan
+        return VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 6) {
+                Image(systemName: "tray")
+                Text("Staging · \(Formatters.bytes.string(fromByteCount: store.staging.totalBytes))")
+                if stagedOnly > 0 {
+                    Text("· \(stagedOnly.formatted()) waiting for a target")
+                        .foregroundStyle(.orange)
+                }
+                Spacer()
             }
-            Spacer()
+            // Said before it happens, not after. A copy disappearing from the
+            // Mac is alarming unless the reader already knows the rule, and
+            // the rule is the reassuring part: it goes because the drives have
+            // it, and only once they have been read back and matched.
+            if !reclaimable.isEmpty {
+                HStack(spacing: 6) {
+                    Text(store.reclaimStagingWhenSafe
+                         ? "\(Formatters.bytes.string(fromByteCount: reclaimable.bytes)) of this is content your drives already hold safely, and is released after the next sync."
+                         : "\(Formatters.bytes.string(fromByteCount: reclaimable.bytes)) of this is content your drives already hold safely.")
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Release now") { store.reclaimStaging(force: true) }
+                        .buttonStyle(.link)
+                    Spacer(minLength: 0)
+                }
+            }
         }
         .font(.caption)
         .foregroundStyle(.secondary)

@@ -15,13 +15,47 @@ struct ImportResult {
     /// content in a cloud — the caller opens a pending migration job per
     /// domain instead of writing an unsatisfiable residency.
     var cloudPlacements: [ResidencyDomain: [UUID]] = [:]
+    /// Copies the archive turned out to already have: assets the catalog
+    /// already held, whose bytes this sweep found sitting on a managed target.
+    ///
+    /// A repeat sighting of content the app knows is not nothing. Where the
+    /// file is matters as much as whether it is new, and the app only ever
+    /// asked the first question — so a drive registered after the import that
+    /// read its files could never be credited with the copy it was holding,
+    /// and got sent a second one instead. Keyed by asset ID; the caller
+    /// decides what to do about each, because only it can see what the catalog
+    /// already records for that target.
+    var adoptedReplicas: [UUID: TargetReplicaState] = [:]
+    /// What each file read this pass looked like, for the next sweep to skip.
+    var scanMemoEntries: [ScanMemoEntry] = []
 }
 
 /// Import pipeline: scan → hash → dedupe check → classify → stage → catalog.
 /// Runs with zero targets connected; Local-resident files land in staging and
 /// replication tasks are queued per registered drive for later.
 enum ImportService {
-    static func mediaFileURLs(under rootURLs: [URL]) -> [URL] {
+    /// Directories a sweep never descends into: the app's own structures on a
+    /// target, and its working areas.
+    ///
+    /// A source is somewhere the user keeps photos. The replica root is not —
+    /// it holds the app's own copies, under names the app invented, and
+    /// reading them back as if they were a source would credit the archive's
+    /// own output to the user as content found in place. It matters as soon as
+    /// a whole drive can be swept: the app's folder sits at the root of every
+    /// target. Same list as `TakeoutScanner.excludedDirectoryNames`, for the
+    /// same reason.
+    static let excludedDirectoryNames: Set<String> = [
+        ReplicationTarget.appFolderName,
+        "Staging", "TakeoutWork", ".Trashes", ".Spotlight-V100",
+    ]
+
+    /// `skippingExports` leaves Google exports found inside the tree alone.
+    /// A folder sweep sets it: an export is brought in by machinery that keeps
+    /// it whole, and reading one loose would turn a handful of files into tens
+    /// of thousands of separate replicas. The Takeout importer does not — the
+    /// tree it is pointed at *is* an export, and skipping it would import
+    /// nothing at all.
+    static func mediaFileURLs(under rootURLs: [URL], skippingExports: Bool = false) -> [URL] {
         var files: [URL] = []
         for root in rootURLs {
             var isDirectory: ObjCBool = false
@@ -34,11 +68,22 @@ enum ImportService {
             }
             let enumerator = FileManager.default.enumerator(
                 at: root,
-                includingPropertiesForKeys: [.isRegularFileKey],
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey],
                 options: [.skipsHiddenFiles, .skipsPackageDescendants]
             )
             while let item = enumerator?.nextObject() as? URL {
-                guard (try? item.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true else { continue }
+                let values = try? item.resourceValues(forKeys: [.isRegularFileKey, .isDirectoryKey])
+                if values?.isDirectory == true {
+                    if excludedDirectoryNames.contains(item.lastPathComponent) {
+                        enumerator?.skipDescendants()
+                        continue
+                    }
+                    if skippingExports, TakeoutScanner.looksLikeTakeoutRoot(item) {
+                        enumerator?.skipDescendants()
+                    }
+                    continue
+                }
+                guard values?.isRegularFile == true else { continue }
                 if MetadataExtractor.kind(forFileExtension: item.pathExtension) != .unknown {
                     files.append(item)
                 }
@@ -60,9 +105,11 @@ enum ImportService {
         existingAssets: [Asset],
         policyRules: [PolicyRule],
         staging: StagingStore,
-        replicaContext: (targetID: UUID, mountPath: String)? = nil
+        placement: TargetPlacement = TargetPlacement(),
+        scanMemo: [String: ScanMemoEntry] = [:]
     ) async -> ImportResult {
         var cloudPlacements: [ResidencyDomain: [UUID]] = [:]
+        let sweptAt = Date()
         var batch = ImportBatch(
             id: UUID(),
             sourcePath: sourceDescription,
@@ -77,14 +124,59 @@ enum ImportService {
         var duplicates: [String] = []
         var failures: [(String, String)] = []
         var archiveBacked: [UUID: TargetReplicaState] = [:]
-        var knownHashes = Set(existingAssets.map(\.contentHash))
+        var adopted: [UUID: TargetReplicaState] = [:]
+        // The asset, not just its hash: a file whose content the catalog
+        // already knows still has a location worth recording, and that needs
+        // the identity of the asset it duplicates.
+        var knownByHash = Dictionary(
+            existingAssets.map { ($0.contentHash, $0) },
+            uniquingKeysWith: { first, _ in first }
+        )
 
-        let scanned = TakeoutImporter.scanFilesInParallel(fileURLs)
+        // What can be answered without opening the file.
+        //
+        // Only for content the catalog already holds: a `stat` says a file has
+        // not changed, which is enough to trust a hash the app worked out
+        // itself, and nowhere near enough to admit something new to the
+        // archive on. So a remembered hash that matches nothing known still
+        // gets read in full.
+        var recalledHashes: [URL: String] = [:]
+        var needsReading: [URL] = []
+        for url in fileURLs {
+            if let entry = scanMemo[url.path],
+               knownByHash[entry.contentHash] != nil,
+               let observation = ReplicaStatGate.observe(url),
+               entry.matches(observation) {
+                recalledHashes[url] = entry.contentHash
+            } else {
+                needsReading.append(url)
+            }
+        }
+
+        let scanned = TakeoutImporter.scanFilesInParallel(needsReading)
         let movieDates = await TakeoutImporter.movieCreationDates(for: scanned)
+        let scannedByURL = Dictionary(scanned.map { ($0.fileURL, $0) }, uniquingKeysWith: { first, _ in first })
+        var memoEntries: [ScanMemoEntry] = []
 
-        for scan in scanned {
-            let fileURL = scan.fileURL
+        // Walked in the order the sweep found them, whether or not each file
+        // had to be read, so which of two identical files wins does not depend
+        // on what happened to be remembered.
+        for fileURL in fileURLs {
             let filename = fileURL.lastPathComponent
+
+            if let hash = recalledHashes[fileURL], let existing = knownByHash[hash] {
+                duplicates.append(filename)
+                if let replica = placement.archiveBackedReplica(for: existing.id, at: fileURL) {
+                    adopted[existing.id] = replica
+                }
+                if var entry = scanMemo[fileURL.path] {
+                    entry.seenAt = sweptAt
+                    memoEntries.append(entry)
+                }
+                continue
+            }
+
+            guard let scan = scannedByURL[fileURL] else { continue }
             do {
                 let hash: String
                 let fileSize: Int64
@@ -98,8 +190,28 @@ enum ImportService {
                     fileSize = scannedSize
                     metadata = scannedMetadata
                 }
-                if knownHashes.contains(hash) {
+                // Written whichever way this file goes from here. A duplicate
+                // is precisely the case the next sweep wants to skip, and it
+                // is the one a re-import is mostly made of.
+                if let observation = ReplicaStatGate.observe(fileURL) {
+                    memoEntries.append(ScanMemoEntry(
+                        path: fileURL.path,
+                        size: observation.size,
+                        modifiedAt: observation.modifiedAt,
+                        contentHash: hash,
+                        seenAt: sweptAt
+                    ))
+                }
+                if let existing = knownByHash[hash] {
                     duplicates.append(filename)
+                    // Nothing new arrives, but something may still be learned:
+                    // if these bytes are sitting on a managed target, that
+                    // file is the target's copy and the app can stop planning
+                    // to send it one. Emitted unconditionally — only the
+                    // caller can see what the catalog already records here.
+                    if let replica = placement.archiveBackedReplica(for: existing.id, at: fileURL) {
+                        adopted[existing.id] = replica
+                    }
                     continue
                 }
 
@@ -131,15 +243,8 @@ enum ImportService {
                 // replica; staging a second copy would duplicate the source
                 // onto the Mac for no benefit.
                 var stagingPath: String?
-                if let context = replicaContext, fileURL.path.hasPrefix(context.mountPath + "/") {
-                    archiveBacked[assetID] = TargetReplicaState(
-                        assetID: assetID,
-                        targetID: context.targetID,
-                        state: .present,
-                        relativePath: ReplicationService.volumeBackedPrefix
-                            + String(fileURL.path.dropFirst(context.mountPath.count + 1)),
-                        lastVerifiedAt: now
-                    )
+                if let replica = placement.archiveBackedReplica(for: assetID, at: fileURL, now: now) {
+                    archiveBacked[assetID] = replica
                 } else {
                     stagingPath = try staging.stage(
                         fileAt: fileURL,
@@ -171,7 +276,7 @@ enum ImportService {
                 if let target = decision.pendingCloudTarget {
                     cloudPlacements[target, default: []].append(assetID)
                 }
-                knownHashes.insert(hash)
+                knownByHash[hash] = asset
             } catch {
                 failures.append((filename, error.localizedDescription))
             }
@@ -187,7 +292,9 @@ enum ImportService {
             duplicateFilenames: duplicates,
             failures: failures.map { (filename: $0.0, error: $0.1) },
             archiveBackedReplicas: archiveBacked,
-            cloudPlacements: cloudPlacements
+            cloudPlacements: cloudPlacements,
+            adoptedReplicas: adopted,
+            scanMemoEntries: memoEntries
         )
     }
 }

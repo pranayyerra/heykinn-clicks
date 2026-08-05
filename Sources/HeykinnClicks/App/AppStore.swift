@@ -40,6 +40,14 @@ final class AppStore: ObservableObject {
     @Published var isImporting = false
     @Published private(set) var takeoutActivity: TakeoutActivity?
     @Published var lastError: String?
+    /// Whether a staged copy is released once the archive's own drives hold
+    /// the content safely. On, because staging is transit and the alternative
+    /// is a permanent second copy of everything on the boot disk that nothing
+    /// ever counted as protection.
+    @Published var reclaimStagingWhenSafe: Bool = true {
+        didSet { defaults.set(reclaimStagingWhenSafe, forKey: "reclaimStagingWhenSafe") }
+    }
+
     @Published var autoSyncOnConnect: Bool = true {
         didSet { defaults.set(autoSyncOnConnect, forKey: "autoSyncOnConnect") }
     }
@@ -109,6 +117,14 @@ final class AppStore: ObservableObject {
     /// An unmanaged external volume just appeared; the UI asks whether to use
     /// it as managed local storage (and/or scan it for Takeout).
     @Published var connectPrompt: VolumeInfo?
+
+    /// A folder somebody chose that is really a Google export, held back so
+    /// the app can offer to bring it in the way that keeps it whole.
+    @Published var takeoutRedirect: TakeoutRedirect?
+
+    /// A folder somebody chose that sits on a drive the app does not manage,
+    /// held back long enough to offer the version of this that costs nothing.
+    @Published var unmanagedSourceOffer: UnmanagedSourceOffer?
 
     private var syncCancelRequested = false
     /// Drives waiting their turn while another drive syncs (syncs are serial).
@@ -255,6 +271,7 @@ final class AppStore: ObservableObject {
         // `didSet`, so nothing is written back on the way in.
         let stored = environment.defaults
         autoSyncOnConnect = stored.object(forKey: "autoSyncOnConnect") as? Bool ?? true
+        reclaimStagingWhenSafe = stored.object(forKey: "reclaimStagingWhenSafe") as? Bool ?? true
         autoManageTakeout = stored.object(forKey: "autoManageTakeout") as? Bool ?? true
         backgroundRotPatrol = stored.object(forKey: "backgroundRotPatrol") as? Bool ?? true
         importFromApplePhotos = stored.object(forKey: "importFromApplePhotos") as? Bool ?? true
@@ -1375,6 +1392,14 @@ final class AppStore: ObservableObject {
                 audit(.system, "Startup reconciliation: " + repairs.joined(separator: "; ") + ".")
                 loadAll()
             }
+            // Catches what an interrupted run left behind: content that
+            // reached both drives before the app was quit, and staged files a
+            // half-finished release stopped naming.
+            reclaimStaging()
+            // The sweep memo is keyed by path, so it accumulates notes about
+            // folders on drives long since put away, and about files that no
+            // longer exist. Nothing else would ever remove them.
+            try catalog.pruneScanMemo(before: Date().addingTimeInterval(-Self.scanMemoLifetime))
         } catch {
             lastError = "Startup reconciliation failed: \(error.localizedDescription)"
         }
@@ -1531,11 +1556,13 @@ final class AppStore: ObservableObject {
             // the repair so a moved file is stat-ed where it actually is.
             checkReplicaStats(for: targetID)
             // Reconcile before syncing. A drive that already holds this
-            // content — the same Takeout export, say — should claim it in
-            // place; starting the backlog first would copy over the top of
+            // content — the same Takeout export, say, or the folder somebody
+            // imported from before this drive was registered — should claim it
+            // in place; starting the backlog first would copy over the top of
             // files that are already there.
             Task {
                 await autoTakeoutPipeline(targetID: targetID)
+                await adoptContentAlreadyOnTarget(targetID)
                 if autoSyncOnConnect && backlogCount(for: targetID) > 0 {
                     syncDrive(targetID)
                 }
@@ -1585,32 +1612,242 @@ final class AppStore: ObservableObject {
 
     // MARK: - Import
 
-    func importFolders(_ urls: [URL]) {
-        guard !urls.isEmpty else { return }
+    /// `offeringRegistration` is cleared by the prompt itself, so answering it
+    /// does not walk back into it.
+    func importFolders(_ urls: [URL], offeringRegistration: Bool = true) {
+        guard beginFolderImport(urls, offeringRegistration: offeringRegistration) else { return }
+        Task { await runFolderImport(urls) }
+    }
+
+    /// The awaitable form, for callers that have to know the sweep finished
+    /// before they do the next thing — connect-time adoption has to settle the
+    /// backlog before the sync it precedes starts draining it.
+    func performFolderImport(_ urls: [URL], offeringRegistration: Bool = true) async {
+        guard beginFolderImport(urls, offeringRegistration: offeringRegistration) else { return }
+        await runFolderImport(urls)
+    }
+
+    /// The decisions that must happen before the caller returns: whether this
+    /// import runs at all, and claiming `isImporting`.
+    ///
+    /// Synchronous on purpose. `isImporting` is what stops a sync starting on
+    /// top of an import and what greys the button that started it, and a flag
+    /// raised one hop later is a flag that is wrong for a hop.
+    private func beginFolderImport(_ urls: [URL], offeringRegistration: Bool) -> Bool {
+        guard !urls.isEmpty else { return false }
+
+        // A Google export is not a folder of photos, whatever it looks like in
+        // Finder. Brought in through the export machinery, one 10 GB zip backs
+        // thousands of replicas and one read checks them all; brought in as a
+        // folder, every photo becomes a replica of its own and the drive gets
+        // tens of thousands of copies it did not need. The difference is too
+        // large to let somebody walk into by picking the wrong menu item.
+        if let export = urls.first(where: { TakeoutScanner.looksLikeTakeoutRoot($0) }) {
+            takeoutRedirect = TakeoutRedirect(url: export)
+            return false
+        }
+
+        // Reading from a drive the app does not manage means copying every
+        // file onto the Mac, and the placement cannot be revised afterwards
+        // without hashing all of it again. Registering the drive first makes
+        // the same import free. Asked here because here is the only point at
+        // which the cheaper answer is still available.
+        if offeringRegistration, targets.count < 2, let volume = unmanagedVolume(holding: urls) {
+            unmanagedSourceOffer = UnmanagedSourceOffer(volume: volume, urls: urls)
+            return false
+        }
+
         isImporting = true
+        return true
+    }
+
+    private func runFolderImport(_ urls: [URL]) async {
         let existing = assets
         let rules = policyRules
         let stagingStore = staging
-        let sourceDescription = urls.map(\.lastPathComponent).joined(separator: ", ")
+        // The path, not the name. `sourcePath` promised one and got "Photos",
+        // so the screen listing folders somebody added could not show where
+        // any of them were, or offer to open one — and two folders called
+        // Photos on two drives read as the same folder. A multi-root pick has
+        // no single path to give, so it stays a label and says so by not
+        // looking like one.
+        let sourceDescription = urls.count == 1
+            ? urls[0].path
+            : urls.map(\.lastPathComponent).joined(separator: ", ")
 
-        Task {
-            let files = ImportService.mediaFileURLs(under: urls)
-            // A folder chosen from a managed drive counts as that drive's copy.
-            let replicaContext = files.first
-                .flatMap { file in
-                    reachablePaths.first { file.path.hasPrefix($0.value.path + "/") }
-                }
-                .map { (targetID: $0.key, mountPath: $0.value.path) }
-            let result = await ImportService.importFiles(
-                files,
-                sourceDescription: sourceDescription,
-                existingAssets: existing,
-                policyRules: rules,
-                staging: stagingStore,
-                replicaContext: replicaContext
-            )
-            applyImportResult(result)
+        // Every reachable target, resolved per file. Deciding this once from
+        // whichever file the sweep returned first made a batch's placement
+        // depend on the order the picker handed back the roots.
+        let placement = TargetPlacement(reachablePaths: reachablePaths)
+        // Read once, off the catalog, so a re-sweep of a folder the app has
+        // seen before costs a stat per file instead of a full read.
+        let memo = (try? catalog.fetchScanMemo()) ?? [:]
+
+        // Exports nested inside the swept tree are skipped for the same
+        // reason: sweeping a whole drive must not explode an export that
+        // happens to be sitting on it.
+        let files = ImportService.mediaFileURLs(under: urls, skippingExports: true)
+        let result = await ImportService.importFiles(
+            files,
+            sourceDescription: sourceDescription,
+            existingAssets: existing,
+            policyRules: rules,
+            staging: stagingStore,
+            placement: placement,
+            scanMemo: memo
+        )
+        applyImportResult(result)
+    }
+
+    /// Folders somebody imported from that turn out to live on this target.
+    ///
+    /// Registering a drive seeds a copy of everything Local onto it — and in
+    /// the order people actually do things, import from the drive and *then*
+    /// register it, a good part of that content is already sitting on the drive
+    /// under their own names. Nothing would notice, because registering does
+    /// not read the drive: the backlog would copy the drive's own files back
+    /// onto it and only a later sweep would take them off again.
+    ///
+    /// Which folders to look at is already recorded. Every folder import writes
+    /// down where it came from, so the ones that resolve onto this target are
+    /// exactly the places worth re-reading — rather than hashing a whole volume
+    /// on the chance that something on it is familiar.
+    private func priorImportRoots(on targetID: UUID) -> [URL] {
+        guard let mount = reachablePaths[targetID] else { return [] }
+        let placement = TargetPlacement(targetID: targetID, mountPath: mount.path)
+        var seen = Set<String>()
+        var roots: [URL] = []
+        for batch in importBatches where batch.isFolderImport && batch.isFilesystemPath {
+            let url = URL(fileURLWithPath: batch.sourcePath, isDirectory: true)
+            guard placement.contains(url) else { continue }
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory),
+                  isDirectory.boolValue else { continue }
+            if seen.insert(url.standardizedFileURL.path).inserted { roots.append(url) }
         }
+        return roots
+    }
+
+    /// Credits a target with content it already holds, before the backlog gets
+    /// a chance to copy that content onto it.
+    ///
+    /// The connect sequence already did this for exports, with the reasoning
+    /// spelled out where it is called: a drive that already holds the content
+    /// should claim it in place, and starting the backlog first would copy over
+    /// the top of files that are already there. That was true of every source,
+    /// not only of Takeout, and this is the general form.
+    private func adoptContentAlreadyOnTarget(_ targetID: UUID) async {
+        guard !isImporting, !isSyncing else { return }
+        // Nothing staged means nothing that could be copied redundantly: every
+        // Local asset is either already credited in place or has no copy to
+        // duplicate.
+        guard assets.contains(where: { $0.stagingRelativePath != nil }) else { return }
+        let roots = priorImportRoots(on: targetID)
+        guard !roots.isEmpty else { return }
+
+        let name = targetsByID[targetID]?.name ?? "drive"
+        audit(
+            .drive,
+            "Re-reading \(Formatters.count(roots.count, "folder")) on \(name) that photos were imported from, to credit copies it already holds before sending it any.",
+            targetID: targetID
+        )
+        await performFolderImport(roots, offeringRegistration: false)
+    }
+
+    /// How long a note about a path is worth keeping. Long enough that a drive
+    /// swept every few months still benefits; short enough that the table does
+    /// not grow forever on paths nothing will look at again.
+    static let scanMemoLifetime: TimeInterval = 180 * 24 * 3600
+
+    /// Whether every copy this archive holds of an asset is a file the user
+    /// manages — adopted where it sat, under their own name, with nothing
+    /// staged on the Mac behind it.
+    ///
+    /// Adoption is what stops the app duplicating a drive's own content, and
+    /// its cost is this: the copy is in a folder somebody may reorganise or
+    /// clear out. A rename is repaired automatically; a deletion is not, and
+    /// the app will not have written a copy of its own to fall back on.
+    func hasOnlyArchiveBackedCopies(_ assetID: UUID) -> Bool {
+        guard let asset = assetsByID[assetID], asset.stagingRelativePath == nil else { return false }
+        let present = (replicasByAssetID[assetID] ?? []).filter { $0.state == .present }
+        guard !present.isEmpty else { return false }
+        return present.allSatisfy { ReplicationService.isArchiveBacked($0) }
+    }
+
+    // MARK: - Staging reclamation
+
+    /// What could be released from staging right now, for the UI to state
+    /// before it happens rather than after.
+    var stagingReclaimPlan: StagingReclaimer.Plan {
+        StagingReclaimer.plan(assets: assets, protectionStates: protectionStates)
+    }
+
+    /// Releases staged copies of content the archive's own drives now hold
+    /// safely, and sweeps up staged files nothing claims.
+    ///
+    /// The catalog is updated after each file goes, not before: a path
+    /// recorded with no file behind it is a state the app already handles
+    /// everywhere it matters — `localFileURL` checks before trusting it — and
+    /// the reverse, a file nobody names, is invisible waste. Neither is
+    /// avoidable in general, because a file deletion and a database write are
+    /// not one operation; the orphan sweep is what makes the unavoidable one
+    /// recoverable.
+    @discardableResult
+    func reclaimStaging(force: Bool = false) -> Int64 {
+        guard force || reclaimStagingWhenSafe else { return 0 }
+        let plan = stagingReclaimPlan
+        var freed: Int64 = 0
+        var released = 0
+
+        for (assetID, relativePath) in plan.releasable {
+            guard var asset = assetsByID[assetID] else { continue }
+            do {
+                try staging.remove(relativePath: relativePath)
+                asset.stagingRelativePath = nil
+                try catalog.upsertAsset(asset)
+                freed += asset.fileSize
+                released += 1
+            } catch {
+                // Leaving it costs space and nothing else; the next pass sees
+                // the same asset and tries again.
+                continue
+            }
+        }
+
+        for orphan in StagingReclaimer.orphans(in: staging, claimedBy: assets) {
+            if (try? staging.remove(relativePath: orphan)) != nil { released += 1 }
+        }
+
+        if released > 0 {
+            audit(.replication, "Released \(released) staged file(s) — \(Formatters.bytes.string(fromByteCount: freed)) — now that your own drives hold them safely.")
+            loadAll()
+        }
+        return freed
+    }
+
+    /// The drive a chosen folder sits on, when that drive is one the app could
+    /// manage but does not. Nil for anything on this Mac's own disk, for a
+    /// drive already registered, and for one the user has said not to ask
+    /// about again.
+    private func unmanagedVolume(holding urls: [URL]) -> VolumeInfo? {
+        guard let first = urls.first else { return nil }
+        let spellings = [first.path, first.resolvingSymlinksInPath().path]
+        return availableVolumes.first { volume in
+            guard volume.isRemovable, volume.url.path != "/" else { return false }
+            guard TargetMonitor.match(volume: volume, against: targets) == nil else { return false }
+            guard !ignoredVolumeKeys.contains(volume.volumeUUID ?? volume.url.path) else { return false }
+            return spellings.contains { $0.hasPrefix(volume.url.path + "/") }
+        }
+    }
+
+    /// Registers the drive a chosen folder sits on, then imports from it — in
+    /// that order, so the sweep finds the target already there and credits the
+    /// files where they are instead of copying them.
+    func registerAndImport(_ offer: UnmanagedSourceOffer) {
+        unmanagedSourceOffer = nil
+        registerVolumeTarget(volume: offer.volume, name: offer.volume.name)
+        guard lastError == nil else { return }
+        importFolders(offer.urls, offeringRegistration: false)
     }
 
     /// Persists imported assets and queues their replication backlog.
@@ -1671,11 +1908,116 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// What a sweep discovered the archive already had.
+    private struct AdoptionOutcome {
+        var adopted = 0
+        var withdrawn = 0
+        var reclaimedFiles = 0
+        var reclaimedBytes: Int64 = 0
+
+        var isEmpty: Bool { adopted == 0 && reclaimedFiles == 0 }
+    }
+
+    /// Records copies the app has just found out it already had, and withdraws
+    /// the work it had queued to make them again.
+    ///
+    /// This is where a placement decision stops being final. An import used to
+    /// settle where an asset's bytes live the first time it saw them and never
+    /// revisit it, so registering a drive after importing from it left the app
+    /// copying that drive's own files back onto it under different names. What
+    /// the sweep proved is simple and worth writing down whenever it is
+    /// learned: these exact bytes are on this target, read and hashed just now.
+    private func applyAdoptedReplicas(_ adopted: [UUID: TargetReplicaState]) throws -> AdoptionOutcome {
+        var outcome = AdoptionOutcome()
+        var settleByTarget: [UUID: Set<UUID>] = [:]
+        // Deleted only after the catalog commits to the user's own file, so an
+        // interruption can strand bytes but never lose the last copy.
+        var redundant: [(url: URL, size: Int64)] = []
+
+        for (assetID, replica) in adopted {
+            guard let asset = assetsByID[assetID] else { continue }
+            let existing = replicasByAssetID[assetID]?.first { $0.targetID == replica.targetID }
+
+            if let existing, existing.state == .present {
+                if ReplicationService.isArchiveBacked(existing) {
+                    // Already credited to content in place. If the recorded
+                    // path differs this is the user's own second copy, which is
+                    // theirs to keep and not ours to adjudicate.
+                    continue
+                }
+                // The app's own copy under the replica root, and the user's
+                // file holding the same bytes on the same drive: the
+                // duplication this path exists to prevent, arrived at one step
+                // late. Repoint to their file and take back ours.
+                guard let mount = reachablePaths[replica.targetID],
+                      let drive = targetsByID[replica.targetID],
+                      let relative = existing.relativePath
+                else {
+                    // Not mounted, or nothing recorded to find. Repointing
+                    // without being able to see the old file would strand bytes
+                    // nobody can name; leave it for a pass with the drive there.
+                    continue
+                }
+                let root = mount
+                    .appendingPathComponent(drive.replicaRootComponent, isDirectory: true)
+                    .standardizedFileURL
+                let managed = root.appendingPathComponent(relative).standardizedFileURL
+                // Only ever inside the app's own folder on that target.
+                guard managed.path.hasPrefix(root.path + "/"),
+                      FileManager.default.fileExists(atPath: managed.path)
+                else { continue }
+                redundant.append((managed, asset.fileSize))
+            }
+
+            try catalog.upsertReplicaState(replica)
+            outcome.adopted += 1
+            settleByTarget[replica.targetID, default: []].insert(assetID)
+        }
+
+        for (targetID, assetIDs) in settleByTarget {
+            outcome.withdrawn += replicationTasks.filter {
+                $0.targetID == targetID && $0.action == .copy
+                    && $0.state == .queued && assetIDs.contains($0.assetID)
+            }.count
+            try settleQueuedCopyTasks(assetIDs: assetIDs, targetID: targetID)
+        }
+
+        for item in redundant {
+            do {
+                try FileManager.default.removeItem(at: item.url)
+                outcome.reclaimedFiles += 1
+                outcome.reclaimedBytes += item.size
+            } catch {
+                // An orphan under the replica root costs space and nothing
+                // else — the catalog already points at the durable file, and
+                // the next sweep of this drive sees it again.
+            }
+        }
+        return outcome
+    }
+
     private func applyImportResult(_ result: ImportResult) {
         do {
             try catalog.upsertImportBatch(result.batch)
             try persistImportedAssets(result.importedAssets, archiveBacked: result.archiveBackedReplicas)
+            let adoption = try applyAdoptedReplicas(result.adoptedReplicas)
+            // A cache, so a failure to write it must not fail the import.
+            do {
+                try catalog.upsertScanMemo(result.scanMemoEntries)
+            } catch {
+                audit(.importEvent, "Could not record what this sweep read; the next one will re-read it.")
+            }
             audit(.importEvent, "Imported \(result.importedAssets.count) asset(s) from \(result.batch.sourcePath) (\(result.duplicateFilenames.count) exact duplicate(s) skipped, \(result.failures.count) failure(s)).")
+            if !adoption.isEmpty {
+                var line = "\(adoption.adopted) file(s) already in the archive were found in place and recorded as that drive's copy"
+                if adoption.withdrawn > 0 {
+                    line += "; \(adoption.withdrawn) queued copy(s) withdrawn"
+                }
+                if adoption.reclaimedFiles > 0 {
+                    line += "; removed \(adoption.reclaimedFiles) duplicate(s) the app had written alongside them, freeing \(Formatters.bytes.string(fromByteCount: adoption.reclaimedBytes))"
+                }
+                audit(.replication, line + ".")
+            }
             openPolicyMigrations(result.cloudPlacements)
             if !result.importedAssets.isEmpty {
                 reopenLivePhotoChecks(forNewlyImported: result.importedAssets)
@@ -1872,10 +2214,14 @@ final class AppStore: ObservableObject {
                 }.value
                 // An extracted folder on a connected managed drive doubles as
                 // that drive's replica — the disk already holds the bytes.
-                let replicaContext: (targetID: UUID, mountPath: String)? = archive.kind == .folder
+                // An extracted export sits on the drive that holds it, so its
+                // workspace resolves against that one target; a zip unpacked
+                // into a Mac temp workspace resolves against none.
+                let placement = archive.kind == .folder
                     ? reachablePaths.first { archive.path.hasPrefix($0.value.path + "/") }
-                        .map { (targetID: $0.key, mountPath: $0.value.path) }
-                    : nil
+                        .map { TargetPlacement(targetID: $0.key, mountPath: $0.value.path) }
+                        ?? TargetPlacement()
+                    : TargetPlacement()
                 // Import the part in chunks so assets reach the catalog — and
                 // the Library — while the rest of the part is still hashing.
                 // A part can hold tens of thousands of files; waiting for the
@@ -1926,7 +2272,7 @@ final class AppStore: ObservableObject {
                             staging: stagingStore,
                             policyRules: rulesSnapshot,
                             batchID: batchID,
-                            replicaContext: replicaContext,
+                            placement: placement,
                             fileURLs: chunk
                         )
                     }.value
@@ -1989,9 +2335,9 @@ final class AppStore: ObservableObject {
                 archive.importedAssetCount = partImported
                 archive.skippedDuplicateCount = partDuplicates
                 try catalog.upsertTakeoutArchive(archive)
-                if partArchiveBackedCount > 0, let context = replicaContext {
-                    let targetName = targetsByID[context.targetID]?.name ?? "drive"
-                    audit(.replication, "\(partArchiveBackedCount) asset(s) from \(archive.displayName) use their Takeout files as the \(targetName) replica — no duplicate copy queued for that drive.", targetID: context.targetID)
+                if partArchiveBackedCount > 0, let mount = placement.mounts.first {
+                    let targetName = targetsByID[mount.targetID]?.name ?? "drive"
+                    audit(.replication, "\(partArchiveBackedCount) asset(s) from \(archive.displayName) use their Takeout files as the \(targetName) replica — no duplicate copy queued for that drive.", targetID: mount.targetID)
                 }
                 audit(.importEvent, "\(archive.displayName): imported \(partImported) asset(s), \(partDuplicates) duplicate(s) skipped.")
             } catch {
@@ -3362,9 +3708,19 @@ final class AppStore: ObservableObject {
             startNextPendingSync()
             return
         }
+        // Oldest first, except that content whose every copy is a file the user
+        // manages goes to the front. Such an asset is one tidy-up away from
+        // having no copy at all — the app will never delete an adopted file,
+        // and cannot get it back either — so the copy that makes it
+        // independent is the most valuable work in the queue.
         let queued = replicationTasks
             .filter { $0.targetID == targetID && $0.state == .queued }
-            .sorted { $0.queuedAt < $1.queuedAt }
+            .sorted { lhs, rhs in
+                let left = hasOnlyArchiveBackedCopies(lhs.assetID)
+                let right = hasOnlyArchiveBackedCopies(rhs.assetID)
+                if left != right { return left }
+                return lhs.queuedAt < rhs.queuedAt
+            }
         guard !queued.isEmpty else {
             startNextPendingSync()
             return
@@ -3446,6 +3802,9 @@ final class AppStore: ObservableObject {
             audit(.replication, summary + ".", targetID: targetID)
             syncProgress = nil
             loadAll()
+            // After the reload, so the verdicts this reads are the ones the
+            // sync just established rather than the ones it started with.
+            reclaimStaging()
             startNextPendingSync()
         }
     }

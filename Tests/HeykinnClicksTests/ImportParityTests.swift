@@ -77,7 +77,7 @@ final class ImportParityTests: XCTestCase {
 
         let result = await ImportService.importFiles(
             [file], sourceDescription: "drive folder", existingAssets: [], policyRules: [],
-            staging: staging, replicaContext: (targetID: targetID, mountPath: mount.path)
+            staging: staging, placement: TargetPlacement(targetID: targetID, mountPath: mount.path)
         )
         let asset = try XCTUnwrap(result.importedAssets.first)
         XCTAssertNil(asset.stagingRelativePath, "The drive already holds the bytes")
@@ -114,6 +114,183 @@ final class ImportParityTests: XCTestCase {
         )
         XCTAssertEqual(second.importedAssets.count, 0)
         XCTAssertEqual(second.duplicateFilenames, ["photo.jpg"])
+    }
+
+    /// The placement decision has to survive being made in the wrong order.
+    /// Importing from a drive before registering it used to settle the
+    /// question forever: the second sweep saw a hash it knew and stopped
+    /// there, so the drive holding the file could never be credited with it.
+    func testASweepCreditsADriveWithContentTheArchiveAlreadyHad() async throws {
+        let mount = try makeTempDirectory()
+        let file = mount.appendingPathComponent("photo.jpg")
+        try Data("bytes".utf8).write(to: file)
+        let staging = StagingStore(rootURL: try makeTempDirectory())
+        let targetID = UUID()
+
+        // Imported while the drive was just a folder: staged, nothing adopted.
+        let first = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: [], policyRules: [], staging: staging
+        )
+        let asset = try XCTUnwrap(first.importedAssets.first)
+        XCTAssertNotNil(asset.stagingRelativePath)
+        XCTAssertTrue(first.adoptedReplicas.isEmpty)
+
+        // Registered, then swept again.
+        let second = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: first.importedAssets,
+            policyRules: [], staging: staging,
+            placement: TargetPlacement(targetID: targetID, mountPath: mount.path)
+        )
+        XCTAssertEqual(second.importedAssets.count, 0, "Nothing new arrives")
+        let adopted = try XCTUnwrap(second.adoptedReplicas[asset.id])
+        XCTAssertEqual(adopted.targetID, targetID)
+        XCTAssertEqual(adopted.state, .present)
+        XCTAssertEqual(adopted.relativePath, ReplicationService.volumeBackedPrefix + "photo.jpg")
+        XCTAssertNotNil(adopted.lastVerifiedAt, "The sweep just read these bytes")
+    }
+
+    func testADuplicateThatIsNotOnATargetAdoptsNothing() async throws {
+        let root = try makeTempDirectory()
+        let file = root.appendingPathComponent("photo.jpg")
+        try Data("bytes".utf8).write(to: file)
+        let staging = StagingStore(rootURL: try makeTempDirectory())
+
+        let first = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: [], policyRules: [], staging: staging
+        )
+        let second = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: first.importedAssets,
+            policyRules: [], staging: staging,
+            placement: TargetPlacement(targetID: UUID(), mountPath: try makeTempDirectory().path)
+        )
+        XCTAssertEqual(second.duplicateFilenames, ["photo.jpg"])
+        XCTAssertTrue(second.adoptedReplicas.isEmpty, "Nowhere the app manages")
+    }
+
+    /// Which root the picker happened to hand back first is not a fact about
+    /// where content belongs. It used to be: the whole batch took its placement
+    /// from the first file found, so selecting the same two folders in the
+    /// other order produced a different archive.
+    func testPlacementDoesNotDependOnWhichRootCameFirst() async throws {
+        let loose = try makeTempDirectory()
+        let looseFile = loose.appendingPathComponent("loose.jpg")
+        try Data("loose bytes".utf8).write(to: looseFile)
+
+        let mount = try makeTempDirectory()
+        let driveFile = mount.appendingPathComponent("ondrive.jpg")
+        try Data("drive bytes".utf8).write(to: driveFile)
+
+        let targetID = UUID()
+        let staging = StagingStore(rootURL: try makeTempDirectory())
+        let result = await ImportService.importFiles(
+            [looseFile, driveFile], sourceDescription: "two folders",
+            existingAssets: [], policyRules: [], staging: staging,
+            placement: TargetPlacement(targetID: targetID, mountPath: mount.path)
+        )
+
+        let onDrive = try XCTUnwrap(result.importedAssets.first { $0.originalFilename == "ondrive.jpg" })
+        let staged = try XCTUnwrap(result.importedAssets.first { $0.originalFilename == "loose.jpg" })
+        XCTAssertNil(onDrive.stagingRelativePath, "On the target even though it was swept second")
+        XCTAssertEqual(result.archiveBackedReplicas[onDrive.id]?.targetID, targetID)
+        XCTAssertNotNil(staged.stagingRelativePath, "Not on any target, so it is staged")
+        XCTAssertNil(result.archiveBackedReplicas[staged.id])
+    }
+
+    /// Pointing the app at the same folder again should cost a stat per file,
+    /// not a full read of every byte to arrive at hashes it already has.
+    func testASecondSweepOfUnchangedFilesReadsNothing() async throws {
+        let root = try makeTempDirectory()
+        let file = root.appendingPathComponent("photo.jpg")
+        try Data("bytes".utf8).write(to: file)
+        let staging = StagingStore(rootURL: try makeTempDirectory())
+
+        let first = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: [], policyRules: [], staging: staging
+        )
+        let memo = Dictionary(
+            first.scanMemoEntries.map { ($0.path, $0) }, uniquingKeysWith: { a, _ in a }
+        )
+        XCTAssertEqual(memo.count, 1, "The first sweep wrote down what it read")
+
+        // Swap the contents for different bytes of the same length and put the
+        // modification date back. Anything that opens this file now gets a
+        // different hash and imports it as new; only an answer taken from the
+        // memo still calls it the file it already has.
+        let entry = try XCTUnwrap(memo[file.path])
+        try Data("BYTES".utf8).write(to: file)
+        try FileManager.default.setAttributes(
+            [.modificationDate: entry.modifiedAt], ofItemAtPath: file.path
+        )
+
+        let second = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: first.importedAssets,
+            policyRules: [], staging: staging, scanMemo: [entry.path: entry]
+        )
+        XCTAssertEqual(second.duplicateFilenames, ["photo.jpg"])
+        XCTAssertEqual(second.importedAssets.count, 0, "Never opened, so never re-hashed")
+        XCTAssertTrue(second.failures.isEmpty)
+    }
+
+    /// A `stat` is enough to trust a hash the app worked out itself. It is not
+    /// enough to admit something new to the archive, so a remembered hash that
+    /// matches nothing known still gets read in full.
+    func testARememberedHashForUnknownContentIsStillRead() async throws {
+        let root = try makeTempDirectory()
+        let file = root.appendingPathComponent("photo.jpg")
+        try Data("bytes".utf8).write(to: file)
+        let staging = StagingStore(rootURL: try makeTempDirectory())
+
+        let observation = try XCTUnwrap(ReplicaStatGate.observe(file))
+        let stale = ScanMemoEntry(
+            path: file.path, size: observation.size, modifiedAt: observation.modifiedAt,
+            contentHash: "a-hash-no-asset-has", seenAt: Date()
+        )
+
+        let result = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: [], policyRules: [],
+            staging: staging, scanMemo: [stale.path: stale]
+        )
+        let asset = try XCTUnwrap(result.importedAssets.first)
+        XCTAssertNotEqual(asset.contentHash, stale.contentHash, "Hashed for real, not taken on trust")
+    }
+
+    /// A file edited in place is a different file. Size and modification date
+    /// are what say so.
+    func testAChangedFileIsReadAgain() async throws {
+        let root = try makeTempDirectory()
+        let file = root.appendingPathComponent("photo.jpg")
+        try Data("bytes".utf8).write(to: file)
+        let staging = StagingStore(rootURL: try makeTempDirectory())
+
+        let first = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: [], policyRules: [], staging: staging
+        )
+        let entry = try XCTUnwrap(first.scanMemoEntries.first)
+        try Data("entirely different bytes".utf8).write(to: file)
+
+        let second = await ImportService.importFiles(
+            [file], sourceDescription: "folder", existingAssets: first.importedAssets,
+            policyRules: [], staging: staging, scanMemo: [entry.path: entry]
+        )
+        XCTAssertEqual(second.importedAssets.count, 1, "Different content is new content")
+        XCTAssertTrue(second.duplicateFilenames.isEmpty)
+    }
+
+    /// A target's replica root holds the app's own copies under names the app
+    /// invented. Sweeping a whole drive must not read them back as though the
+    /// user had put them there.
+    func testASweepSkipsTheAppsOwnFolderOnATarget() throws {
+        let mount = try makeTempDirectory()
+        let replicaRoot = mount
+            .appendingPathComponent(ReplicationTarget.appFolderName, isDirectory: true)
+            .appendingPathComponent("Replicas/ab", isDirectory: true)
+        try FileManager.default.createDirectory(at: replicaRoot, withIntermediateDirectories: true)
+        try Data("app copy".utf8).write(to: replicaRoot.appendingPathComponent("\(UUID().uuidString).jpg"))
+        let userFile = mount.appendingPathComponent("mine.jpg")
+        try Data("user file".utf8).write(to: userFile)
+
+        let found = ImportService.mediaFileURLs(under: [mount])
+        XCTAssertEqual(found.map(\.lastPathComponent), ["mine.jpg"])
     }
 }
 

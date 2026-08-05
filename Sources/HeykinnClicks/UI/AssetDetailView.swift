@@ -276,7 +276,23 @@ struct AssetDetailView: View {
                 guard let drive = store.targetsByID[replica.targetID] else { return nil }
                 let connected = store.reachablePaths[drive.id] != nil ? "connected" : "offline"
                 let checked = replica.lastVerifiedAt.map { "checked \(Formatters.relative($0))" } ?? "never checked"
-                return (replica.id, "\(drive.name) (\(connected)): \(replica.state.displayName), \(checked)")
+                var line = "\(drive.name) (\(connected)): \(replica.state.displayName), \(checked)"
+                // Which copy this is matters to the reader in one specific
+                // way: a copy that is their own file, at their own path, is
+                // one they can delete while tidying up. The app will never
+                // remove it — and will never get it back either.
+                if let path = archiveBackedPath(replica) {
+                    line += " — this copy is your own file at \(path)"
+                }
+                return (replica.id, line)
             }
+    }
+
+    /// Where a replica backed by the user's own content sits on its drive.
+    /// Nil for copies the app wrote and manages under its own folder.
+    private func archiveBackedPath(_ replica: TargetReplicaState) -> String? {
+        guard ReplicationService.isVolumeBacked(replica), let relative = replica.relativePath
+        else { return nil }
+        return String(relative.dropFirst(ReplicationService.volumeBackedPrefix.count))
     }
 }

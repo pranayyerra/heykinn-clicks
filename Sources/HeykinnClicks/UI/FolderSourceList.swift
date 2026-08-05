@@ -183,6 +183,23 @@ struct FolderSourceList: View {
                 }
             }
 
+            // A folder on one of the archive's own drives is not only a source.
+            // Its files were counted as that drive's copy rather than being
+            // duplicated onto it, which is the right thing to do and makes the
+            // folder load-bearing: emptying it later takes a copy with it.
+            let loadBearing = assets.filter { store.hasOnlyArchiveBackedCopies($0.id) }.count
+            if loadBearing > 0 {
+                Label(
+                    loadBearing == assets.count
+                        ? "These photos are kept where they are — this folder holds the archive's copy of them, so moving it is fine but emptying it is not."
+                        : "\(Formatters.count(loadBearing, "photo")) here are kept where they are rather than copied, so this folder holds the archive's copy of them.",
+                    systemImage: "pin"
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
             if assets.isEmpty {
                 Text("Nothing from this folder is in the archive — every photo in it was already here.")
                     .font(.caption)

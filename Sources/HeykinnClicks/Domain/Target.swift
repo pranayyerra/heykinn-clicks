@@ -120,6 +120,22 @@ struct TargetMarker: Codable, Hashable {
     var appName: String
 }
 
+/// A folder chosen for import that sits on a drive the app could manage but
+/// does not.
+///
+/// Worth stopping for, because the two outcomes differ by a whole copy of the
+/// content. Registering first costs nothing and the files are credited where
+/// they already are; importing first copies all of them onto the Mac, and the
+/// decision cannot be revisited later without reading every byte again. The
+/// moment to ask is the only moment the answer is free.
+struct UnmanagedSourceOffer: Identifiable {
+    let id = UUID()
+    var volume: VolumeInfo
+    var urls: [URL]
+
+    var name: String { volume.name }
+}
+
 /// Runtime-only description of a mounted volume, used for registration UI and
 /// for matching mounts to removable targets.
 struct VolumeInfo: Identifiable, Hashable {

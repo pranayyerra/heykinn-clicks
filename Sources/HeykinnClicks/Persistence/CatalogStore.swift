@@ -173,6 +173,19 @@ final class CatalogStore {
             asset_id TEXT,
             drive_id TEXT
         );
+
+        -- What a sweep last saw at a path, so pointing the app at the same
+        -- folder again does not re-hash every byte of it to arrive at answers
+        -- it already has. Keyed by path: this is a note about a place on disk,
+        -- not about an asset, and the same bytes at a new path are new work.
+        -- Cache, not record — losing it costs time and nothing else.
+        CREATE TABLE IF NOT EXISTS import_scan_memo (
+            path TEXT PRIMARY KEY,
+            size INTEGER NOT NULL,
+            modified_at REAL NOT NULL,
+            content_hash TEXT NOT NULL,
+            seen_at REAL NOT NULL
+        );
         """)
     }
 

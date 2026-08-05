@@ -223,6 +223,12 @@ struct ContentView: View {
         .sheet(item: $store.connectPrompt) { volume in
             DriveConnectPrompt(volume: volume)
         }
+        .sheet(item: $store.takeoutRedirect) { redirect in
+            TakeoutRedirectPrompt(redirect: redirect)
+        }
+        .sheet(item: $store.unmanagedSourceOffer) { offer in
+            UnmanagedSourcePrompt(offer: offer)
+        }
         .alert(
             "Something went wrong",
             isPresented: Binding(
