@@ -584,3 +584,19 @@ Earned against a real 248 GB archive; the stories are in git history.
     rather than a second grid — which would have duplicated the thumbnails, the
     hover previews, the protection marks and the selection mode, and given them
     somewhere to drift apart.
+
+47. A provider's day is the provider's day. Google timestamps an album in UTC
+    and prints the UTC day beside it; rendering that instant in the viewer's
+    timezone moved it, so an album titled "Wednesday night in Northgate" came
+    out as Thursday, and would have read differently again on a machine
+    elsewhere. Showing a recorded date in local time is a reinterpretation, and
+    this archive does not reinterpret dates — see the timeline banner, which
+    promises the same thing about capture dates it knows to be wrong.
+
+48. Unknown kinds are skipped, never guessed at. Google's `enrichments` is a
+    list of single-key objects and `locationEnrichment` was the only kind the
+    first cut knew; the real archive also had `mapEnrichment`, a trip rather
+    than a pin. Reading it as two more places would have said a weekend was
+    spent in both its endpoints. What is not understood stays in the payload
+    for a projection that understands it, which is the whole reason payloads
+    are kept verbatim.
