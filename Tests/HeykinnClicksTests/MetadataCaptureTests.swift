@@ -8,6 +8,7 @@ import XCTest
 /// the fields an actual export carries.
 final class MetadataCaptureTests: XCTestCase {
 
+
     private var roots: [URL] = []
 
     override func tearDown() {
@@ -292,6 +293,70 @@ final class MetadataCaptureTests: XCTestCase {
         XCTAssertEqual(try catalog.metadataRecordCount(), 1)
         let schema = try XCTUnwrap(try catalog.fetchMetadataSchemas().first)
         XCTAssertEqual(schema.recordCount, 1, "counted from the records themselves")
+    }
+
+    // MARK: - Through a real import
+
+    /// The wiring: importing a folder that carries Google sidecars stores each
+    /// one whole, not just the four fields the importer reads.
+    @MainActor
+    func testImportingAFolderWithSidecarsCapturesThem() async throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-cap-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        roots.append(directory)
+        let suite = "heykinn-cap-\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let store = AppStore(environment: AppEnvironment(
+            appDirectory: directory,
+            defaults: UserDefaults(suiteName: suite)!,
+            runsBackgroundWork: false
+        ))
+
+        let mount = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-cap-target-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: mount, withIntermediateDirectories: true)
+        roots.append(mount)
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        // A photo with the sidecar Google writes beside it.
+        let folder = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-cap-photos-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        roots.append(folder)
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("IMG_0001.jpg"))
+        try assetPayload.write(
+            to: folder.appendingPathComponent("IMG_0001.jpg.supplemental-metadata.json"),
+            atomically: true, encoding: .utf8
+        )
+
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "An unpacked export",
+            desiredCopies: 1, destinationTargetIDs: [driveID]
+        ))
+        let deadline = Date().addingTimeInterval(15)
+        while store.isImporting || store.assets.isEmpty {
+            if Date() > deadline { break }
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        let asset = try XCTUnwrap(store.assets.first)
+        let captured = try store.catalogForMetadataTests.fetchMetadataRecords(forAsset: asset.id)
+        XCTAssertEqual(captured.count, 1, "the sidecar was kept")
+
+        let payload = try XCTUnwrap(captured.first?.payload)
+        XCTAssertTrue(payload.contains("googlePhotosOrigin"), "including what nothing reads")
+        XCTAssertTrue(payload.contains("\"imageViews\":\"10\""))
+        XCTAssertEqual(
+            captured.first?.sourceID,
+            store.sourceIDByAsset[asset.id],
+            "filed under the source that claimed the import"
+        )
+        XCTAssertEqual(
+            try store.catalogForMetadataTests.metadataRecordsAwaitingProjection(), 1,
+            "and queued for whatever reads it"
+        )
     }
 
     // MARK: - Staying out of the way

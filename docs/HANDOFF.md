@@ -191,14 +191,29 @@ ran on real data.
 
 **What is left, in order:**
 
-1. **Import-path writes.** `TakeoutImporter` already locates each sidecar
-   (`CaptureDateResolver.sidecar(for:)` → `TakeoutImporter.findSidecar`) and
-   decodes it; nothing yet hands the raw bytes to `upsertMetadataRecord`. This
-   is the wiring, and it is small.
-2. **The backfill from the 12 zips.** The step that actually buys
-   zip-independence for the 24,639 photos already imported.
-   `TakeoutReconciler` streams zip members without extracting, so the machinery
-   exists.
+1. ~~Import-path writes.~~ **Done.** `TakeoutImporter.locateSidecar` returns
+   the raw text beside the decoded struct, the scan carries it out on
+   `FileScan.Outcome.success`, `ImportResult.capturedMetadata` brings it back,
+   and `persistImportedAssets` writes it under the source that claimed the
+   import — in the same transaction as the assets it describes. Both import
+   paths do it, since a folder somebody points at may be an unpacked export.
+   Covered end to end by
+   `MetadataCaptureTests.testImportingAFolderWithSidecarsCapturesThem`.
+2. **The backfill from the 12 zips — the next thing to build.** The step that
+   buys metadata independence for the 24,639 photos imported before capture
+   existed. Nothing captures for them today; only new imports do.
+
+   `TakeoutReconciler` already streams zip members without extracting, which is
+   the hard part. The shape: for each `takeout_archives` row of the set, stream
+   its members, and for every `*.json` sidecar write a `MetadataRecord` keyed by
+   `(source_id, origin_path)` — matching each to its asset by the media file
+   the sidecar names. Album `metadata.json` files land as `scope: .album` with
+   no asset.
+
+   Two things to get right. It reads ~127 GB across two drives, so it must be
+   resumable — `capturedOriginPaths(forSource:)` exists so a re-run skips what
+   it already has. And the media file a sidecar names is matched by filename
+   within the export, not by hash, since the zips are not being extracted.
 3. **Surfacing the census** — a screen or a diagnostics section over
    `fetchMetadataSchemas()`, so an unfamiliar shape is something a person sees.
 4. **Projections and tags** (layers 2 and 3), including album membership

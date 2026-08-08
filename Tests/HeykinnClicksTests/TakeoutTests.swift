@@ -715,7 +715,7 @@ final class TakeoutTests: XCTestCase {
 
         func hashes(_ scans: [TakeoutImporter.FileScan]) -> [String] {
             scans.map { scan in
-                if case .success(let hash, _, _) = scan.outcome { return hash }
+                if case .success(let hash, _, _, _, _) = scan.outcome { return hash }
                 return "FAILED"
             }
         }

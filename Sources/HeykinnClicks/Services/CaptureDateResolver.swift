@@ -57,6 +57,24 @@ enum CaptureDateResolver {
     /// Sidecar lookup for a file, including the original's sidecar when this
     /// is an edited derivative. Google names the companion `.json` after the
     /// *original*, so `pic2-edited.jpg` has none of its own.
+    /// The same search, keeping the sidecar as it was written.
+    static func locatedSidecar(
+        for fileURL: URL,
+        directoryListings: [String: [String]] = [:]
+    ) -> (TakeoutImporter.LocatedSidecar, CaptureDateSource)? {
+        if let own = TakeoutImporter.locateSidecar(for: fileURL, directoryListings: directoryListings) {
+            return (own, .sidecar)
+        }
+        // An edited derivative gets no sidecar of its own, so it inherits the
+        // original's — the same rule the decoded lookup follows.
+        guard let originalURL = originalURL(forEdited: fileURL),
+              let inherited = TakeoutImporter.locateSidecar(
+                  for: originalURL, directoryListings: directoryListings
+              )
+        else { return nil }
+        return (inherited, .originalSidecar)
+    }
+
     static func sidecar(
         for fileURL: URL,
         directoryListings: [String: [String]] = [:]

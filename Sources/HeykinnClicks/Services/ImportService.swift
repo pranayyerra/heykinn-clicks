@@ -1,9 +1,25 @@
 import Foundation
 import UniformTypeIdentifiers
 
+/// A provider's metadata for one imported file, kept as it was written.
+///
+/// Carried out of the importer rather than written there: the importer runs
+/// detached and knows nothing about which source claimed this import, and a
+/// payload with no source is a payload nobody can explain later.
+struct CapturedMetadata {
+    var assetID: UUID
+    /// Where the sidecar sat, relative to the export root — the only record of
+    /// album membership, which Google expresses as directory placement.
+    var originPath: String
+    var payload: String
+}
+
 struct ImportResult {
     var batch: ImportBatch
     var importedAssets: [Asset]
+    /// Provider metadata found beside the imported files. Empty for sources
+    /// that carry none.
+    var capturedMetadata: [CapturedMetadata] = []
     var duplicateFilenames: [String]
     var failures: [(filename: String, error: String)]
     /// Replicas already satisfied by the import source itself — assets whose
@@ -109,6 +125,7 @@ enum ImportService {
         scanMemo: [String: ScanMemoEntry] = [:]
     ) async -> ImportResult {
         var cloudPlacements: [ResidencyDomain: [UUID]] = [:]
+        var capturedMetadata: [CapturedMetadata] = []
         let sweptAt = Date()
         var batch = ImportBatch(
             id: UUID(),
@@ -181,14 +198,16 @@ enum ImportService {
                 let hash: String
                 let fileSize: Int64
                 var metadata: ExtractedMetadata
+                let sidecarPayload: String?
                 switch scan.outcome {
                 case .failure(let message):
                     failures.append((filename, message))
                     continue
-                case .success(let scannedHash, let scannedSize, let scannedMetadata):
+                case .success(let scannedHash, let scannedSize, let scannedMetadata, _, let scannedPayload):
                     hash = scannedHash
                     fileSize = scannedSize
                     metadata = scannedMetadata
+                    sidecarPayload = scannedPayload
                 }
                 // Written whichever way this file goes from here. A duplicate
                 // is precisely the case the next sweep wants to skip, and it
@@ -273,6 +292,13 @@ enum ImportService {
                     captureDateSource: metadata.captureDateSource
                 )
                 imported.append(asset)
+                if let sidecarPayload, !sidecarPayload.isEmpty {
+                    capturedMetadata.append(CapturedMetadata(
+                        assetID: assetID,
+                        originPath: fileURL.lastPathComponent,
+                        payload: sidecarPayload
+                    ))
+                }
                 if let target = decision.pendingCloudTarget {
                     cloudPlacements[target, default: []].append(assetID)
                 }
@@ -289,6 +315,7 @@ enum ImportService {
         return ImportResult(
             batch: batch,
             importedAssets: imported,
+            capturedMetadata: capturedMetadata,
             duplicateFilenames: duplicates,
             failures: failures.map { (filename: $0.0, error: $0.1) },
             archiveBackedReplicas: archiveBacked,

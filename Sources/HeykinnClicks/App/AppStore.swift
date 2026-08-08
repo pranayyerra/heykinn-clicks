@@ -197,6 +197,10 @@ final class AppStore: ObservableObject {
     let targetMonitor: TargetMonitor
     let thumbnails: ThumbnailCache
     private let catalog: CatalogStore
+    /// The catalog, for tests that assert on tables the store deliberately
+    /// never loads — metadata payloads are off every hot path by design, so
+    /// there is no published property to read them from.
+    var catalogForMetadataTests: CatalogStore { catalog }
     /// Thumbnail work already running, keyed by asset. Fast scrolling asks for
     /// the same image repeatedly; without this each ask would start its own
     /// read of the original off the drive.
@@ -2337,7 +2341,8 @@ final class AppStore: ObservableObject {
     @discardableResult
     private func persistImportedAssets(
         _ imported: [Asset],
-        archiveBacked: [UUID: TargetReplicaState] = [:]
+        archiveBacked: [UUID: TargetReplicaState] = [:],
+        capturedMetadata: [CapturedMetadata] = []
     ) throws -> [TargetReplicaState] {
         var written: [TargetReplicaState] = []
 
@@ -2414,6 +2419,25 @@ final class AppStore: ObservableObject {
         // Now that the rows are there for the UPDATE to find.
         if let claimedSourceID {
             try catalog.assignSource(claimedSourceID, toAssets: imported.map(\.id))
+
+            // The provider's own metadata, kept whole. Written here rather than
+            // in the importer because the importer runs detached and knows
+            // nothing about which source claimed this import — and a payload
+            // with no source is one nobody can explain later.
+            for captured in capturedMetadata {
+                let payload = captured.payload
+                try catalog.upsertMetadataRecord(MetadataRecord(
+                    id: UUID(),
+                    assetID: captured.assetID,
+                    sourceID: claimedSourceID,
+                    scope: .asset,
+                    provider: "google",
+                    originPath: captured.originPath,
+                    capturedAt: Date(),
+                    schemaFingerprint: MetadataRecord.fingerprint(of: payload),
+                    payload: payload
+                ))
+            }
         }
         if let claimedGroupID {
             try catalog.assignStorageGroup(claimedGroupID, toAssets: imported.map(\.id))
@@ -3489,7 +3513,11 @@ final class AppStore: ObservableObject {
     private func applyImportResult(_ result: ImportResult) {
         do {
             try catalog.upsertImportBatch(result.batch)
-            try persistImportedAssets(result.importedAssets, archiveBacked: result.archiveBackedReplicas)
+            try persistImportedAssets(
+                result.importedAssets,
+                archiveBacked: result.archiveBackedReplicas,
+                capturedMetadata: result.capturedMetadata
+            )
             let adoption = try applyAdoptedReplicas(result.adoptedReplicas)
             // A cache, so a failure to write it must not fail the import.
             do {
@@ -3806,7 +3834,8 @@ final class AppStore: ObservableObject {
                     let replicas = try catalog.transaction { () -> [TargetReplicaState] in
                         let written = try persistImportedAssets(
                             result.importedAssets,
-                            archiveBacked: result.archiveBackedReplicas
+                            archiveBacked: result.archiveBackedReplicas,
+                            capturedMetadata: result.capturedMetadata
                         )
                         try catalog.upsertImportBatch(batchSnapshot)
                         try catalog.upsertTakeoutArchive(checkpoint)

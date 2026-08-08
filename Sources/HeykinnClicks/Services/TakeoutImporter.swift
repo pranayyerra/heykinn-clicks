@@ -112,6 +112,7 @@ enum TakeoutImporter {
         var failures: [(String, String)] = []
         var archiveBacked: [UUID: TargetReplicaState] = [:]
         var cloudPlacements: [ResidencyDomain: [UUID]] = [:]
+        var capturedMetadata: [CapturedMetadata] = []
         var knownHashes = knownContentHashes ?? Set(existingAssets.map(\.contentHash))
 
         // Phase 1 (parallel): hash + read metadata/sidecar for every file.
@@ -134,7 +135,7 @@ enum TakeoutImporter {
                 case .failure(let message):
                     failures.append((filename, message))
                     continue
-                case .success(let hash, let fileSize, var metadata):
+                case .success(let hash, let fileSize, var metadata, let sidecarURL, let sidecarPayload):
                     if metadata.captureDate == nil, let movieDate = movieDates[fileURL] {
                         metadata.captureDate = movieDate
                         metadata.captureDateSource = .fileMetadata
@@ -190,6 +191,19 @@ enum TakeoutImporter {
                         fileExtension: fileURL.pathExtension.lowercased()
                     )
                 }
+                // The path within the export, which is where album membership
+                // lives — Google writes no album field, only a directory.
+                if let sidecarPayload, !sidecarPayload.isEmpty {
+                    let relative = sidecarURL.map {
+                        $0.path.hasPrefix(workspace.mediaRoot.path)
+                            ? String($0.path.dropFirst(workspace.mediaRoot.path.count))
+                                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                            : $0.lastPathComponent
+                    } ?? filename
+                    capturedMetadata.append(CapturedMetadata(
+                        assetID: assetID, originPath: relative, payload: sidecarPayload
+                    ))
+                }
                 imported.append(Asset(
                     id: assetID,
                     kind: metadata.kind,
@@ -229,6 +243,7 @@ enum TakeoutImporter {
         return ImportResult(
             batch: batch,
             importedAssets: imported,
+            capturedMetadata: capturedMetadata,
             duplicateFilenames: duplicates,
             failures: failures.map { (filename: $0.0, error: $0.1) },
             archiveBackedReplicas: archiveBacked,
@@ -242,7 +257,13 @@ enum TakeoutImporter {
     /// bytes, reading EXIF, and pairing the Google sidecar.
     struct FileScan {
         enum Outcome {
-            case success(hash: String, fileSize: Int64, metadata: ExtractedMetadata)
+            /// `sidecarPayload` is the provider's JSON exactly as written,
+            /// carried out of the scan so the capture layer can keep what
+            /// decoding throws away.
+            case success(
+                hash: String, fileSize: Int64, metadata: ExtractedMetadata,
+                sidecarURL: URL? = nil, sidecarPayload: String? = nil
+            )
             case failure(String)
         }
         var fileURL: URL
@@ -302,7 +323,7 @@ enum TakeoutImporter {
     /// so a large chunk does not open hundreds of assets at once.
     static func movieCreationDates(for scans: [FileScan], concurrency: Int = 6) async -> [URL: Date] {
         let movies = scans.compactMap { scan -> URL? in
-            guard case .success(_, _, let metadata) = scan.outcome else { return nil }
+            guard case .success(_, _, let metadata, _, _) = scan.outcome else { return nil }
             guard metadata.kind == .video, metadata.captureDate == nil else { return nil }
             return scan.fileURL
         }
@@ -333,8 +354,10 @@ enum TakeoutImporter {
             var metadata = MetadataExtractor.extract(from: fileURL)
             // Includes the original's sidecar for an edited derivative, which
             // Google gives no sidecar of its own.
-            let located = CaptureDateResolver.sidecar(for: fileURL, directoryListings: directoryListings)
-            let sidecar = located?.0
+            let located = CaptureDateResolver.locatedSidecar(
+                for: fileURL, directoryListings: directoryListings
+            )
+            let sidecar = located?.0.sidecar
 
             if let description = sidecar?.description, !description.isEmpty {
                 metadata.exifSummary["GoogleDescription"] = description
@@ -357,7 +380,10 @@ enum TakeoutImporter {
             )
             metadata.captureDate = resolved.date
             metadata.captureDateSource = sidecar?.takenDate != nil ? (located?.1 ?? .sidecar) : resolved.source
-            return .success(hash: hash, fileSize: fileSize, metadata: metadata)
+            return .success(
+                hash: hash, fileSize: fileSize, metadata: metadata,
+                sidecarURL: located?.0.url, sidecarPayload: located?.0.raw
+            )
         } catch {
             return .failure(error.localizedDescription)
         }
@@ -369,7 +395,25 @@ enum TakeoutImporter {
     /// `IMG.jpg.json`, `IMG.jpg.supplemental-metadata.json` (possibly
     /// truncated), or `IMG.json`. Tries exact candidates first, then a prefix
     /// match for the truncated supplemental-metadata form.
+    /// A sidecar found on disk, decoded *and* kept as it was written.
+    ///
+    /// The raw text is what the capture layer stores. Decoding throws away
+    /// every key `TakeoutSidecar` does not declare, which is most of them, and
+    /// those are exactly what the archive is meant to stop depending on the
+    /// zips for.
+    struct LocatedSidecar {
+        var url: URL
+        var raw: String
+        var sidecar: TakeoutSidecar
+    }
+
     static func findSidecar(for mediaURL: URL, directoryListings: [String: [String]] = [:]) -> TakeoutSidecar? {
+        locateSidecar(for: mediaURL, directoryListings: directoryListings)?.sidecar
+    }
+
+    static func locateSidecar(
+        for mediaURL: URL, directoryListings: [String: [String]] = [:]
+    ) -> LocatedSidecar? {
         let directory = mediaURL.deletingLastPathComponent()
         let filename = mediaURL.lastPathComponent
         let stem = mediaURL.deletingPathExtension().lastPathComponent
@@ -395,7 +439,11 @@ enum TakeoutImporter {
             let url = directory.appendingPathComponent(candidate)
             guard let data = try? Data(contentsOf: url) else { continue }
             if let sidecar = try? JSONDecoder().decode(TakeoutSidecar.self, from: data) {
-                return sidecar
+                return LocatedSidecar(
+                    url: url,
+                    raw: String(data: data, encoding: .utf8) ?? "",
+                    sidecar: sidecar
+                )
             }
         }
         return nil

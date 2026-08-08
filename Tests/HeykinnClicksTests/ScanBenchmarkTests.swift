@@ -84,7 +84,7 @@ final class ScanBenchmarkTests: XCTestCase {
             return Double(bytes) / 1_048_576
         }
         func hashes(_ scans: [TakeoutImporter.FileScan]) -> [String] {
-            scans.map { if case .success(let h, _, _) = $0.outcome { return h } else { return "FAIL" } }
+            scans.map { if case .success(let h, _, _, _, _) = $0.outcome { return h } else { return "FAIL" } }
         }
 
         var report = """
