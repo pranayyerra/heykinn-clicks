@@ -387,6 +387,26 @@ import did happen, and a record of what the app did to itself is worth keeping
 even when it is not worth showing). The Policies wording went with the copies
 stepper it belonged to.
 
+## Run against the real archive, 8 Aug 2026
+
+Both drives, one cable, done in two sessions — which is the point of invariant
+12.
+
+- **Spot check:** all 12 export parts verified across both drives. Copies read
+  back went from 10,238 to **49,290 of 49,290** — the whole archive, where the
+  background patrol would have taken about 20 days.
+- **Metadata backfill:** **24,417 descriptions captured, matching the 24,417
+  JSON entries in the zips exactly.** 29 albums. 15,012 linked to a photo by
+  name; the remaining 9,376 held with their folder path for a projection to
+  settle.
+- **Resumability proved** on the second drive: 0 captured, 24,417 already held.
+
+The census found **28 distinct payload shapes**, including every field this
+brief listed as "did not appear in the sampled file" — `people` (3,839 photos),
+`geoDataExif` (7,030), `archived` (188), `favorited` (22), `trashed` (20), plus
+`appSource`, `enrichments` and `sharedAlbumComments`. A fixed schema would have
+dropped all of it.
+
 ## Two questions left open with the user
 
 1. **Snapshot weight.** Raw payloads ride in every VACUUM snapshot (5 per drive

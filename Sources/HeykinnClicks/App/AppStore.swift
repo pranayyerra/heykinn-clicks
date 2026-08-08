@@ -872,13 +872,24 @@ final class AppStore: ObservableObject {
                 linked += result.captured.filter { $0.assetID != nil }.count
             }
 
-            var message = "Read what Google wrote beside your photos: \(Formatters.count(captured, "description")) kept whole, from \(Formatters.count(readable.count, "download file")) on the drives connected."
-            if albums > 0 {
-                message += " \(Formatters.count(albums, "album")) among them."
-            }
-            message += " \(Formatters.count(linked, "description")) could be matched to a photo by name; the rest are held with the folder they came from, which is what a later pass matches on."
-            if alreadyHeld > 0 {
-                message += " \(Formatters.count(alreadyHeld, "was", "were")) already held and left alone."
+            // A run that found nothing new is the ordinary outcome of the
+            // second drive, and saying "0 could be matched to a photo; the
+            // rest are held with the folder they came from" over nothing at
+            // all describes an empty set at length.
+            var message: String
+            if captured == 0 {
+                message = alreadyHeld > 0
+                    ? "Nothing new to read: all \(alreadyHeld.formatted()) descriptions in \(Formatters.count(readable.count, "download file")) are already held."
+                    : "Nothing to read: \(Formatters.count(readable.count, "download file")) held no metadata."
+            } else {
+                message = "Read what Google wrote beside your photos: \(Formatters.count(captured, "description")) kept whole, from \(Formatters.count(readable.count, "download file")) on the drives connected."
+                if albums > 0 {
+                    message += " \(Formatters.count(albums, "album")) among them."
+                }
+                message += " \(Formatters.count(linked, "description")) could be matched to a photo by name; the rest are held with the folder they came from, which is what a later pass matches on."
+                if alreadyHeld > 0 {
+                    message += " \(Formatters.count(alreadyHeld, "description")) \(alreadyHeld == 1 ? "was" : "were") already held and left alone."
+                }
             }
             if unreadable > 0 {
                 message += " \(Formatters.count(unreadable, "file")) could not be read."
