@@ -491,3 +491,9 @@ Earned against a real 248 GB archive; the stories are in git history.
     read "Complete copy" while the card beneath it said "Nothing to hold yet" —
     the same screen contradicting itself, in the voice of the model that was
     replaced two revisions ago.
+37. A source does not own a group; its photos merely happen to be in one. The
+    source's card offered "change where these are kept" whenever a group could
+    be found, so once photos had moved, editing one export's settings reached a
+    group holding a different export's photos and changed those too. Membership
+    moves and ids do not, so resolving a group by the id it was created with
+    goes wrong exactly when it matters.

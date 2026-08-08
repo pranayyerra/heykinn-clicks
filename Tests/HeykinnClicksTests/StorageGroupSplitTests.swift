@@ -350,6 +350,110 @@ final class StorageGroupSplitTests: XCTestCase {
         XCTAssertEqual(renamed.destinationTargetIDs, [driveID])
     }
 
+    // MARK: - A source does not own its group
+
+    /// The situation the source's card must not offer to edit: every photo of
+    /// one export sits in a group that also holds another export's.
+    ///
+    /// It did offer it. Both exports' cards resolved to the shared group, so
+    /// "change where export A is kept" set export B's photos to 9 copies.
+    func testASourceWhoseGroupHoldsOthersPhotosIsNotEditableFromItsCard() throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let side = try catalog(at: directory)
+
+        let a = try XCTUnwrap(store.sourceForExportSet("A", label: "Export A"))
+        let b = try XCTUnwrap(store.sourceForExportSet("B", label: "Export B"))
+        let shared = try XCTUnwrap(store.createStorageGroup(label: "Cold storage"))
+
+        let fromA = UUID(), fromB = UUID()
+        for (assetID, sourceID) in [(fromA, a.source.id), (fromB, b.source.id)] {
+            try side.upsertAsset(asset(id: assetID))
+            try side.assignSource(sourceID, toAssets: [assetID])
+        }
+        store.loadAll()
+        _ = store.moveToStorageGroup(shared.id, assetIDs: [fromA, fromB])
+
+        // Neither card may offer the shortcut, and each says whose company its
+        // photos are in.
+        for setID in ["A", "B"] {
+            guard case .shared(let group, let otherPhotos) = store.groupPlacement(forExportSet: setID) else {
+                return XCTFail("\(setID) should report a shared group, got \(store.groupPlacement(forExportSet: setID))")
+            }
+            XCTAssertEqual(group.id, shared.id)
+            XCTAssertEqual(otherPhotos, 1, "one photo in the group is not this export's")
+            XCTAssertNil(store.groupPlacement(forExportSet: setID).exclusiveGroup)
+        }
+    }
+
+    /// A source whose photos are split across groups has no single setting, so
+    /// its card must not present one.
+    func testASourceSplitAcrossGroupsReportsTheSplit() throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let side = try catalog(at: directory)
+        let source = try XCTUnwrap(store.sourceForExportSet("SET", label: "Export"))
+        let cold = try XCTUnwrap(store.createStorageGroup(label: "Cold storage"))
+
+        let staying = UUID(), leaving = UUID()
+        for assetID in [staying, leaving] {
+            try side.upsertAsset(asset(id: assetID))
+            try side.assignSource(source.source.id, toAssets: [assetID])
+            try side.assignStorageGroup(source.group.id, toAssets: [assetID])
+        }
+        store.loadAll()
+        _ = store.moveToStorageGroup(cold.id, assetIDs: [leaving])
+
+        guard case .split(let groups, let photoCount) = store.groupPlacement(forExportSet: "SET") else {
+            return XCTFail("expected a split, got \(store.groupPlacement(forExportSet: "SET"))")
+        }
+        XCTAssertEqual(groups.count, 2)
+        XCTAssertEqual(photoCount, 2)
+        XCTAssertNil(store.groupPlacement(forExportSet: "SET").exclusiveGroup)
+    }
+
+    /// The ordinary case keeps the shortcut: one group, nothing else in it.
+    func testASourceWithAGroupOfItsOwnIsStillEditableFromItsCard() throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let side = try catalog(at: directory)
+        let source = try XCTUnwrap(store.sourceForExportSet("SET", label: "Export"))
+
+        let assetID = UUID()
+        try side.upsertAsset(asset(id: assetID))
+        try side.assignSource(source.source.id, toAssets: [assetID])
+        try side.assignStorageGroup(source.group.id, toAssets: [assetID])
+        store.loadAll()
+
+        let editable = try XCTUnwrap(store.groupPlacement(forExportSet: "SET").exclusiveGroup)
+        XCTAssertEqual(editable.id, source.group.id)
+    }
+
+    /// And editing the group the source's photos are in never reaches photos
+    /// that belong to another source — the guarantee under all of the above.
+    func testEditingAGroupOnlyChangesThePhotosInIt() throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let side = try catalog(at: directory)
+        let driveID = UUID()
+
+        let staying = UUID(), leaving = UUID()
+        let source = try XCTUnwrap(store.sourceForExportSet("SET", label: "Export"))
+        for assetID in [staying, leaving] {
+            try side.upsertAsset(asset(id: assetID))
+            try side.assignSource(source.source.id, toAssets: [assetID])
+            try side.assignStorageGroup(source.group.id, toAssets: [assetID])
+        }
+        store.loadAll()
+        let cold = try XCTUnwrap(store.createStorageGroup(
+            label: "Cold storage",
+            from: StorageGroup.Defaults(desiredCopies: 1, destinationTargetIDs: [driveID])
+        ))
+        _ = store.moveToStorageGroup(cold.id, assetIDs: [leaving])
+
+        let origin = try XCTUnwrap(store.storageGroupsByID[source.group.id])
+        store.applyStorageGroupSettings(origin, desiredCopies: 3, destinations: [driveID])
+
+        XCTAssertEqual(store.desiredCopies(forAsset: staying), 3)
+        XCTAssertEqual(store.desiredCopies(forAsset: leaving), 1, "the photo that left is untouched")
+    }
+
     // MARK: - Fixtures
 
     private func asset(id: UUID) -> Asset {

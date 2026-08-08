@@ -66,10 +66,28 @@ struct FolderSourceList: View {
     /// The source a batch's photos belong to, so its settings can be edited
     /// from where its photos are shown. Nil for photos imported before sources
     /// existed and not yet backfilled.
-    private func group(for batch: ImportBatch) -> StorageGroup? {
-        guard let assetID = store.assets.first(where: { $0.importBatchID == batch.id })?.id
+    /// Only offered when changing it affects this folder's photos and nothing
+    /// else — a folder does not own its group any more than an export does.
+    private func editableGroup(for batch: ImportBatch) -> StorageGroup? {
+        guard let assetID = store.assets.first(where: { $0.importBatchID == batch.id })?.id,
+              let sourceID = store.sourceIDByAsset[assetID]
         else { return nil }
-        return store.storageGroup(forAsset: assetID)
+        return store.groupPlacement(forSource: sourceID).exclusiveGroup
+    }
+
+    /// What to say when it is not offered.
+    private func sharedGroupNote(for batch: ImportBatch) -> String? {
+        guard let assetID = store.assets.first(where: { $0.importBatchID == batch.id })?.id,
+              let sourceID = store.sourceIDByAsset[assetID]
+        else { return nil }
+        switch store.groupPlacement(forSource: sourceID) {
+        case .exclusive, .none:
+            return nil
+        case .shared(let group, let otherPhotos):
+            return "Kept in the group \(group.label), which also holds \(Formatters.count(otherPhotos, "photo")) from elsewhere. Change it under Policies."
+        case .split(let groups, _):
+            return "These photos are kept in \(Formatters.count(groups.count, "different group")). Each is under Policies."
+        }
     }
 
     @ViewBuilder
@@ -211,7 +229,14 @@ struct FolderSourceList: View {
                 // Changing where these photos live belongs next to the report
                 // of where they are, not in a settings screen the reader would
                 // have to go looking for.
-                if let group = group(for: batch) {
+                if let note = sharedGroupNote(for: batch) {
+                    Text(note)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .padding(.top, 2)
+                }
+                if let group = editableGroup(for: batch) {
                     Button {
                         editing = group
                     } label: {

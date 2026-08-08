@@ -2994,6 +2994,47 @@ final class AppStore: ObservableObject {
         return groupIDs.first.flatMap { storageGroupsByID[$0] }
     }
 
+    /// Where one source's photos actually sit, and whether its card may offer
+    /// to change that.
+    ///
+    /// Answered from membership rather than from the id a group happened to be
+    /// created with. A group created alongside a source shares its id, which
+    /// made it tempting to treat as "the source's group" — but membership moves
+    /// and ids do not, so that shortcut goes wrong exactly when it matters.
+    func groupPlacement(forSource sourceID: UUID) -> SourceGroupPlacement {
+        var countsByGroup: [UUID: Int] = [:]
+        var mine = 0
+        for asset in assets where sourceIDByAsset[asset.id] == sourceID {
+            guard let groupID = storageGroupIDByAsset[asset.id] else { continue }
+            countsByGroup[groupID, default: 0] += 1
+            mine += 1
+        }
+        guard let onlyGroupID = countsByGroup.keys.first, countsByGroup.count == 1 else {
+            guard !countsByGroup.isEmpty else { return .none }
+            let groups = countsByGroup.keys.compactMap { storageGroupsByID[$0] }
+                .sorted { $0.createdAt < $1.createdAt }
+            return .split(groups: groups, photoCount: mine)
+        }
+        guard let group = storageGroupsByID[onlyGroupID] else { return .none }
+        let total = photoCountByStorageGroup[onlyGroupID] ?? 0
+        let others = total - (countsByGroup[onlyGroupID] ?? 0)
+        return others > 0
+            ? .shared(group: group, otherPhotos: others)
+            : .exclusive(group)
+    }
+
+    /// The same, for an export, which is reached by its set id.
+    func groupPlacement(forExportSet setID: String) -> SourceGroupPlacement {
+        guard let source = sources.first(where: { $0.exportSetID == setID }) else { return .none }
+        let placement = groupPlacement(forSource: source.id)
+        if case .none = placement {
+            // Found but never imported: the group made with it is the only
+            // answer there is, and it holds nothing, so editing it is safe.
+            if let group = storageGroupsByID[source.id] { return .exclusive(group) }
+        }
+        return placement
+    }
+
     /// The group one export's photos are in, when they are all in one.
     ///
     /// Membership moved onto the group, so an export's photos *can* be split

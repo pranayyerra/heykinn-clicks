@@ -154,8 +154,8 @@ struct ExportCard: View {
     /// found on a drive has never been asked about, and inventing settings for
     /// it would put a decision in the user's mouth. The card offers the sheet
     /// as soon as there is something for it to govern.
-    private var group: StorageGroup? {
-        store.storageGroup(forExportSet: export.setID)
+    private var placement: SourceGroupPlacement {
+        store.groupPlacement(forExportSet: export.setID)
     }
 
     var body: some View {
@@ -219,21 +219,7 @@ struct ExportCard: View {
                 // export is a source like any other: it says how many copies of
                 // its photos to keep and which devices hold them, and the place
                 // to change that is next to the report of where they are.
-                if let group {
-                    HStack(spacing: 6) {
-                        Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))")
-                            .font(.caption)
-                            .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Button {
-                            editing = group
-                        } label: {
-                            Label("Change where these are kept", systemImage: "slider.horizontal.3")
-                                .font(.caption)
-                        }
-                        .buttonStyle(.link)
-                    }
-                }
+                storageLine
 
                 transferPlan
 
@@ -250,6 +236,59 @@ struct ExportCard: View {
             .padding(6)
         }
         .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
+    }
+
+    /// What keeps this export's photos, and whether this card may change it.
+    ///
+    /// A source does not own a group. Offering "change where these are kept"
+    /// whenever a group could be found reached, once photos had moved, a group
+    /// holding a *different* export's photos — and changed those too. The card
+    /// now says which of the four situations it is in and only offers the
+    /// shortcut when taking it affects nothing else.
+    @ViewBuilder
+    private var storageLine: some View {
+        switch placement {
+        case .exclusive(let group):
+            HStack(spacing: 6) {
+                Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))")
+                    .font(.caption)
+                    .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button {
+                    editing = group
+                } label: {
+                    Label("Change where these are kept", systemImage: "slider.horizontal.3")
+                        .font(.caption)
+                }
+                .buttonStyle(.link)
+            }
+
+        case .shared(let group, let otherPhotos):
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs)), in the group \(group.label)")
+                    .font(.caption)
+                    .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("That group also holds \(Formatters.count(otherPhotos, "photo")) from elsewhere, so changing it here would change those too. Change it under Policies → \(group.label).")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+        case .split(let groups, let photoCount):
+            VStack(alignment: .leading, spacing: 2) {
+                Text("These \(Formatters.count(photoCount, "photo")) are kept in \(Formatters.count(groups.count, "different group")): \(ExportSummary.list(groups.map(\.label))).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text("There is no single setting to show. Each group is under Policies.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+
+        case .none:
+            EmptyView()
+        }
     }
 
     /// What is actually going to happen about a shortfall, rather than only
