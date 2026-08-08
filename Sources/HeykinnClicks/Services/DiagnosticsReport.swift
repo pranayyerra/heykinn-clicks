@@ -153,6 +153,44 @@ extension AppStore {
         out.append("Export parts held in transit: \(heldExportParts.count.formatted())")
         out.append("Import batches recorded: \(importBatches.count.formatted())")
 
+        // MARK: What the provider sent
+
+        // The early-warning system for a format that changes on somebody
+        // else's schedule. Keys and counts only — the census also records an
+        // example path per shape, and this report promises no folder paths.
+        heading("Provider metadata")
+        let payloads = (try? catalog.metadataRecordCount()) ?? 0
+        out.append("Descriptions kept whole: \(payloads.formatted())")
+        if payloads > 0 {
+            let attached = (try? catalog.photosCarryingMetadata()) ?? 0
+            out.append("Photos carrying one: \(attached.formatted()) of \(assets.count.formatted())")
+            out.append("Read by projection version: \(CatalogStore.currentProjectionVersion)")
+            let awaiting = (try? catalog.metadataRecordsAwaitingProjection()) ?? 0
+            if awaiting > 0 {
+                out.append("Awaiting re-reading: \(awaiting.formatted())")
+            }
+
+            let shapes = (try? catalog.fetchMetadataSchemas()) ?? []
+            out.append("Distinct payload shapes seen: \(shapes.count.formatted())")
+            // Ordered by first sighting rather than by size: a shape that
+            // arrived recently and holds three payloads is the one worth
+            // looking at, and sorting by count buries it.
+            for shape in shapes.sorted(by: { $0.firstSeenAt > $1.firstSeenAt }).prefix(12) {
+                out.append("  \(shape.scope.rawValue) · \(shape.recordCount.formatted()) ·"
+                           + " first seen \(Formatters.dateOnly.string(from: shape.firstSeenAt))")
+                out.append("    \(shape.keys.joined(separator: ", "))")
+            }
+            if shapes.count > 12 {
+                out.append("  … and \(shapes.count - 12) more")
+            }
+
+            for kind in AssetTag.Kind.allCases {
+                let values = (try? catalog.fetchTagSummary(kind: kind)) ?? []
+                guard !values.isEmpty else { continue }
+                out.append("\(kind.displayName)s recovered: \(values.count.formatted())")
+            }
+        }
+
         // MARK: Catalog
 
         heading("Catalog")

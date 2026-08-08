@@ -342,7 +342,7 @@ final class MetadataCaptureTests: XCTestCase {
         }
 
         let asset = try XCTUnwrap(store.assets.first)
-        let captured = try store.catalogForMetadataTests.fetchMetadataRecords(forAsset: asset.id)
+        let captured = try store.catalog.fetchMetadataRecords(forAsset: asset.id)
         XCTAssertEqual(captured.count, 1, "the sidecar was kept")
 
         let payload = try XCTUnwrap(captured.first?.payload)
@@ -354,9 +354,45 @@ final class MetadataCaptureTests: XCTestCase {
             "filed under the source that claimed the import"
         )
         XCTAssertEqual(
-            try store.catalogForMetadataTests.metadataRecordsAwaitingProjection(), 1,
+            try store.catalog.metadataRecordsAwaitingProjection(), 1,
             "and queued for whatever reads it"
         )
+    }
+
+    // MARK: - What the report may say about it
+
+    /// The census is how a format change becomes visible without a SQL prompt,
+    /// so the diagnostics report carries it — but that report promises "no file
+    /// names, no folder paths", and the census records an example path per
+    /// shape. Keys and counts only.
+    @MainActor
+    func testTheDiagnosticsReportCarriesTheCensusWithoutLeakingPaths() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-diag-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        roots.append(directory)
+        let suite = "heykinn-diag-\(UUID().uuidString)"
+        defer { UserDefaults.standard.removePersistentDomain(forName: suite) }
+        let store = AppStore(environment: AppEnvironment(
+            appDirectory: directory, defaults: UserDefaults(suiteName: suite)!,
+            runsBackgroundWork: false
+        ))
+
+        let telltale = "Takeout/Google Photos/Kodaikanal/IMG_0001.jpg.supplemental-metadata.json"
+        try store.catalog.upsertMetadataRecord(MetadataRecord(
+            id: UUID(), assetID: nil, sourceID: UUID(), scope: .asset, provider: "google",
+            originPath: telltale, capturedAt: Date(),
+            schemaFingerprint: MetadataRecord.fingerprint(of: assetPayload),
+            payload: assetPayload
+        ))
+
+        let report = store.diagnosticsReport()
+
+        XCTAssertTrue(report.contains("Provider metadata"), "the census is reported")
+        XCTAssertTrue(report.contains("Distinct payload shapes seen: 1"))
+        XCTAssertTrue(report.contains("imageViews"), "by its keys, which is the useful part")
+        XCTAssertFalse(report.contains(telltale), "and never by its path")
+        XCTAssertFalse(report.contains("Kodaikanal"), "not even the album folder")
     }
 
     // MARK: - Staying out of the way

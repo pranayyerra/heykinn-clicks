@@ -218,11 +218,14 @@ final class AppStore: ObservableObject {
     let relay: ExportPartRelay
     let targetMonitor: TargetMonitor
     let thumbnails: ThumbnailCache
-    private let catalog: CatalogStore
-    /// The catalog, for tests that assert on tables the store deliberately
-    /// never loads — metadata payloads are off every hot path by design, so
-    /// there is no published property to read them from.
-    var catalogForMetadataTests: CatalogStore { catalog }
+    /// The catalog itself, for the tables the store deliberately never loads.
+    ///
+    /// Internal rather than private because provider payloads are off every hot
+    /// path by design — never joined into `fetchAssets`, never in `loadAll`,
+    /// never `@Published` — so there is no published property to read them
+    /// from, and the code that legitimately wants them (diagnostics, the
+    /// projection, asset detail) has to ask the catalog directly.
+    let catalog: CatalogStore
     /// Thumbnail work already running, keyed by asset. Fast scrolling asks for
     /// the same image repeatedly; without this each ask would start its own
     /// read of the original off the drive.

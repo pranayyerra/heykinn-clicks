@@ -242,6 +242,16 @@ extension CatalogStore {
         try database.query("SELECT count(*) FROM metadata_records;") { Int($0.int(0)) }.first ?? 0
     }
 
+    /// How many photos carry at least one description.
+    ///
+    /// One query. Asking per asset is 24,639 of them for a number nobody needs
+    /// that badly.
+    func photosCarryingMetadata() throws -> Int {
+        try database.query(
+            "SELECT count(DISTINCT asset_id) FROM metadata_records WHERE asset_id IS NOT NULL;"
+        ) { Int($0.int(0)) }.first ?? 0
+    }
+
     /// Origin paths already captured for a source, so a re-read can skip what
     /// it already has without pulling every payload into memory.
     func capturedOriginPaths(forSource sourceID: UUID) throws -> Set<String> {

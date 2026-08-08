@@ -263,7 +263,18 @@ ran on real data.
    real archive: 29 albums and one person, and selecting "Thimphu, Bhutan (36)"
    narrows the same month-grouped grid.
 
-5. **Surfacing the census** — a screen or a diagnostics section over
+5. ~~Surfacing the census.~~ **Built** — a *Provider metadata* section in the
+   diagnostics report: how many descriptions are held, how many photos carry
+   one, which projection version read them, how many shapes have been seen and
+   the keys of each, newest sighting first. Ordered by first sighting rather
+   than by size, because a shape that arrived recently holding three payloads
+   is the one worth looking at and sorting by count buries it.
+
+   Keys and counts only. The census records an example *path* per shape and the
+   report promises no folder paths, so a test asserts the report never contains
+   one.
+
+6. **Still open** — a screen or a diagnostics section over
    `fetchMetadataSchemas()`, so an unfamiliar shape is something a person sees.
 4. **Projections and tags** (layers 2 and 3), including album membership
    projected from `origin_path`.
