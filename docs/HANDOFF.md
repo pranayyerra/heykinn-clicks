@@ -283,20 +283,13 @@ single exception, a photo in no group following the add-sheet defaults, is a
 stop-gap kept only so nothing stops being protected, and it is surfaced on the
 Policies screen with a "Put them in a group…" action rather than left silent.
 
-### 7. Small things the UI check turned up
+### 7. Small things the UI check turned up — **done**
 
-- **A leftover import batch for the app's own folder.** The live catalog has an
-  `import_batches` row for
-  `~/Library/Application Support/HeykinnClicks/LocalCopy`, from before the
-  self-import guard existed. It imported 0 photos, so nothing is wrong with the
-  archive, but the Sources screen reads "2 folders · most recently LocalCopy",
-  which is exactly the confusion the guard was added to prevent. Deleting the
-  row is cosmetic and safe; it is history, so it was left for the user to
-  decide.
-- **"How many copies" on the Policies screen** still says the setting lives
-  "for each source under Sources". Since the split it is really per storage
-  group; the group is reached from the source's card, so the direction is right
-  and the noun is not.
+Both fixed. The app's own folders no longer appear under "Folders you have
+added" (filtered in `FolderSourceList`, not deleted from the catalog — the
+import did happen, and a record of what the app did to itself is worth keeping
+even when it is not worth showing). The Policies wording went with the copies
+stepper it belonged to.
 
 ## Two questions left open with the user
 

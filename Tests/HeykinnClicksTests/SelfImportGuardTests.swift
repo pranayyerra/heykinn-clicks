@@ -103,6 +103,23 @@ final class SelfImportGuardTests: XCTestCase {
         XCTAssertTrue(store.assets.isEmpty, "and nothing was catalogued")
     }
 
+    /// A batch written before the guard existed still sits in the catalog, and
+    /// the folder list must not present the app's own directory as somewhere
+    /// the user added photos from.
+    func testTheAppsOwnFolderIsRecognisedEvenFromAnOldBatchPath() throws {
+        let (store, directory) = try makeStore()
+        let localCopy = directory.appendingPathComponent("LocalCopy", isDirectory: true)
+
+        XCTAssertTrue(
+            store.isAppOwnedFolder(localCopy),
+            "the path an old batch recorded is still recognisably ours"
+        )
+        XCTAssertFalse(
+            store.isAppOwnedFolder(directory.deletingLastPathComponent()),
+            "and an ordinary folder is not"
+        )
+    }
+
     // MARK: - Registering a device
 
     /// Registering a device queues the copies the archive is short.

@@ -22,9 +22,29 @@ struct FolderSourceList: View {
     /// Takeout imports as folders they had picked, none of which they
     /// remembered doing, and with no paths under them because three of the
     /// four writers put a label in `sourcePath` rather than a path.
+    private var allFolderBatches: [ImportBatch] {
+        store.importBatches.filter(\.isFolderImport)
+    }
+
+    /// Folder imports worth showing, newest first.
+    ///
+    /// The app's own folders are left out. Before the self-import guard
+    /// existed, pointing "look for copies this drive already has" at a host
+    /// device swept the app's own replica root, which wrote a batch row for
+    /// `HeykinnClicks/LocalCopy` — so a screen headed "folders you have added"
+    /// listed a folder the user had never seen, let alone added.
+    ///
+    /// Filtered here rather than deleted from the catalog: the import did
+    /// happen, and a record of what the app did to itself is worth keeping even
+    /// when it is not worth showing.
     private var batches: [ImportBatch] {
-        store.importBatches
-            .filter(\.isFolderImport)
+        allFolderBatches
+            .filter { batch in
+                guard batch.isFilesystemPath else { return true }
+                return !store.isAppOwnedFolder(
+                    URL(fileURLWithPath: batch.sourcePath, isDirectory: true)
+                )
+            }
             .sorted { $0.startedAt > $1.startedAt }
     }
 
@@ -39,7 +59,9 @@ struct FolderSourceList: View {
     /// what is missing is the record of which folder they came from, and that
     /// is worth saying rather than hiding by counting the other way.
     private var unaccountedFor: [Asset] {
-        let folderBatchIDs = Set(batches.map(\.id))
+        // Every folder batch, including the ones not shown: a hidden batch's
+        // photos are accounted for, they are simply not listed.
+        let folderBatchIDs = Set(allFolderBatches.map(\.id))
         return store.assets.filter { asset in
             guard asset.importOrigin.isFolderLike, !asset.isLivePhotoMotion else { return false }
             guard let batchID = asset.importBatchID else { return true }
