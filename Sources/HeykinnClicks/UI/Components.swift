@@ -54,6 +54,24 @@ enum Formatters {
         return formatter
     }()
 
+    /// A day the provider recorded, printed as the provider recorded it.
+    ///
+    /// Google timestamps an album in UTC and prints the UTC day beside it
+    /// (`"Jul 15, 2015, 8:29:47 PM UTC"`). Rendering that instant in the
+    /// viewer's timezone moves the day: an album titled "Wednesday night in
+    /// Northgate" came out as Thursday 16 July, because 8:29 PM UTC is 2 AM in
+    /// India. Worse, the same album would read differently on two machines.
+    ///
+    /// So a provider's day is shown as the provider's day, in step with the
+    /// timeline's promise to show dates where the files claim, unchanged.
+    static let providerDateOnly: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .long
+        formatter.timeStyle = .none
+        formatter.timeZone = TimeZone(identifier: "UTC")
+        return formatter
+    }()
+
     static let monthYear: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "MMMM yyyy"

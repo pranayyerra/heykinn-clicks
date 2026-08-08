@@ -127,6 +127,70 @@ enum MetadataProjection {
         return title
     }
 
+    /// Everything an album says about itself.
+    ///
+    /// Google nests its places two levels deep inside `enrichments`, in a shape
+    /// that exists to be extended — `locationEnrichment` is one kind among
+    /// however many it grows. Anything that is not a location is skipped rather
+    /// than guessed at, and stays in the payload for a later projection.
+    static func albumDetail(in payload: String) -> AlbumDetail? {
+        guard let title = albumTitle(in: payload),
+              let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
+        else { return nil }
+
+        var date: Date?
+        if let stamp = (object["date"] as? [String: Any])?["timestamp"] as? String,
+           let seconds = TimeInterval(stamp) {
+            date = Date(timeIntervalSince1970: seconds)
+        }
+        let description = (object["description"] as? String)?
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var places: [AlbumDetail.Place] = []
+        var journeys: [AlbumDetail.Journey] = []
+        for enrichment in object["enrichments"] as? [[String: Any]] ?? [] {
+            if let locations = (enrichment["locationEnrichment"] as? [String: Any])?["location"] {
+                places.append(contentsOf: self.places(in: locations))
+            }
+            if let map = enrichment["mapEnrichment"] as? [String: Any],
+               let from = self.places(in: map["origin"] as Any).first,
+               let to = self.places(in: map["destination"] as Any).first {
+                journeys.append(AlbumDetail.Journey(from: from, to: to))
+            }
+        }
+
+        // A place named twice is one place. A real album listed "Fernwood,
+        // Northshire" and "Highvale, Northshire" twice each, which reads as a
+        // stutter rather than as a longer trip. Order is the order Google gave
+        // them, which is roughly the order they were visited.
+        var seen: Set<AlbumDetail.Place> = []
+
+        return AlbumDetail(
+            title: title,
+            date: date,
+            description: (description?.isEmpty ?? true) ? nil : description,
+            places: places.filter { seen.insert($0).inserted },
+            journeys: journeys
+        )
+    }
+
+    /// Google's location list, wherever it appears — an enrichment's
+    /// `location`, a map's `origin`, a map's `destination` all share the shape.
+    private static func places(in value: Any) -> [AlbumDetail.Place] {
+        guard let locations = value as? [[String: Any]] else { return [] }
+        return locations.compactMap { location in
+            guard let name = (location["name"] as? String)?
+                    .trimmingCharacters(in: .whitespacesAndNewlines), !name.isEmpty
+            else { return nil }
+            let locality = (location["description"] as? String)?
+                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return AlbumDetail.Place(
+                name: name, locality: (locality?.isEmpty ?? true) ? nil : locality
+            )
+        }
+    }
+
     /// What a payload is about, once it is clear it is about no photo.
     ///
     /// An export carries files that describe the export rather than anything in

@@ -90,6 +90,7 @@ struct LibraryView: View {
         NavigationStack {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
+                    albumHeader
                     ForEach(monthGroups, id: \.month) { group in
                         Section {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
@@ -215,6 +216,66 @@ struct LibraryView: View {
             }
             .buttonStyle(.plain)
         }
+    }
+
+    /// What the album says about itself, when the grid is narrowed to one.
+    ///
+    /// Its date and its places were captured with everything else and shown
+    /// nowhere. The places are the interesting part: Google recorded "Elm
+    /// Park, Northgate" against an album years ago, and this is the only
+    /// surviving record of it — no photo in the album carries it.
+    @ViewBuilder
+    private var albumHeader: some View {
+        if let tagFilter, tagFilter.kind == .album,
+           let detail = store.albumDetails[tagFilter.value] {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(detail.title)
+                    .font(.title2)
+                    .bold()
+                Text(
+                    [detail.date.map(Formatters.providerDateOnly.string(from:)),
+                     Formatters.count(filteredAssets.count, "photo")]
+                        .compactMap { $0 }
+                        .joined(separator: " · ")
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                if let description = detail.description {
+                    Text(description)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !detail.places.isEmpty {
+                    albumLine(
+                        detail.places.map(Self.described).joined(separator: " · "),
+                        icon: "mappin.and.ellipse"
+                    )
+                }
+                ForEach(detail.journeys, id: \.self) { journey in
+                    // A map rather than an arrow: the arrow is already doing the
+                    // work between the two places, and leading with a second one
+                    // reads as a three-stop trip whose first stop is missing.
+                    albumLine(
+                        "\(Self.described(journey.from)) → \(Self.described(journey.to))",
+                        icon: "map"
+                    )
+                }
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 4)
+        }
+    }
+
+    private func albumLine(_ text: String, icon: String) -> some View {
+        Label(text, systemImage: icon)
+            .font(.callout)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// "Elm Park, Northgate" — Google's own subtitle, kept when it has one.
+    private static func described(_ place: AlbumDetail.Place) -> String {
+        place.locality.map { "\(place.name), \($0)" } ?? place.name
     }
 
     /// Albums and people Google recorded, as one more way to narrow the grid.

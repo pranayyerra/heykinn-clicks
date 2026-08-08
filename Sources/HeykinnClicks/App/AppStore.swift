@@ -135,6 +135,12 @@ final class AppStore: ObservableObject {
     /// filters on while scrolling.
     @Published private(set) var assetIDsByTag: [TagKey: Set<UUID>] = [:]
 
+    /// What each album says about itself, by title.
+    ///
+    /// Twenty-nine small structs, so published like the tags rather than read
+    /// per redraw. The payloads they come from stay where they are.
+    @Published private(set) var albumDetails: [String: AlbumDetail] = [:]
+
     /// A tag as a dictionary key — its kind and its value.
     struct TagKey: Hashable {
         var kind: AssetTag.Kind
@@ -1861,6 +1867,12 @@ final class AppStore: ObservableObject {
             storageGroupIDByAsset = try catalog.fetchStorageGroupIDsByAsset()
             assetIDsByTag = try catalog.fetchAllTags().reduce(into: [TagKey: Set<UUID>]()) {
                 $0[TagKey(kind: $1.kind, value: $1.value), default: []].insert($1.assetID)
+            }
+            albumDetails = try sources.reduce(into: [String: AlbumDetail]()) { details, source in
+                for record in try catalog.fetchMetadataRecords(forSource: source.id, scope: .album) {
+                    guard let detail = MetadataProjection.albumDetail(in: record.payload) else { continue }
+                    details[detail.title] = detail
+                }
             }
             // Before `recomputeDerivedState`: every protection verdict is
             // judged against the copy count on the asset's own source, so the
