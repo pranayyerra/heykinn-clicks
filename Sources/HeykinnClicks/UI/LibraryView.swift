@@ -5,6 +5,13 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var residencyFilter: ResidencyDomain?
     @State private var holdingFilter: HoldingFilter = .everything
+    /// Selecting is a mode rather than a modifier chord. A thumbnail's ordinary
+    /// click opens the photo, and quietly turning that into "select" the moment
+    /// a key is held is how somebody loses their place in a 24,000-photo scroll
+    /// without knowing what they pressed.
+    @State private var isSelecting = false
+    @State private var selection: Set<UUID> = []
+    @State private var isMoving = false
     /// Importing is one code path with one file picker, owned by the window.
     /// This screen and the File menu were each carrying their own `fileImporter`
     /// with the same content types and the same call underneath — two ways to
@@ -77,10 +84,7 @@ struct LibraryView: View {
                         Section {
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
                                 ForEach(group.assets) { asset in
-                                    NavigationLink(value: asset.id) {
-                                        assetCell(asset)
-                                    }
-                                    .buttonStyle(.plain)
+                                    gridItem(asset)
                                 }
                             }
                             .padding(.horizontal)
@@ -121,8 +125,25 @@ struct LibraryView: View {
             .navigationDestination(for: UUID.self) { assetID in
                 AssetDetailView(assetID: assetID)
             }
+            .safeAreaInset(edge: .bottom) {
+                if isSelecting { selectionBar }
+            }
             .searchable(text: $searchText, prompt: "Filename")
+            .sheet(isPresented: $isMoving) {
+                MoveToStorageGroupSheet(assetIDs: Array(selection)) { moved in
+                    if moved > 0 {
+                        selection = []
+                        isSelecting = false
+                    }
+                }
+            }
             .toolbar {
+                ToolbarItem {
+                    Button(isSelecting ? "Done" : "Select") {
+                        isSelecting.toggle()
+                        if !isSelecting { selection = [] }
+                    }
+                }
                 ToolbarItem {
                     Picker("Residency", selection: $residencyFilter) {
                         Text("All domains").tag(ResidencyDomain?.none)
@@ -163,6 +184,68 @@ struct LibraryView: View {
     }
 
     /// How many photographs the archive holds regardless of what is on screen.
+    /// Extracted from the grid: as an inline `if` inside `LazyVGrid` inside
+    /// `Section` inside `LazyVStack`, the type-checker gave up on it.
+    @ViewBuilder
+    private func gridItem(_ asset: Asset) -> some View {
+        if isSelecting {
+            Button {
+                toggle(asset.id)
+            } label: {
+                assetCell(asset)
+                    .overlay(alignment: .topLeading) { selectionMark(for: asset.id) }
+            }
+            .buttonStyle(.plain)
+        } else {
+            NavigationLink(value: asset.id) {
+                assetCell(asset)
+            }
+            .buttonStyle(.plain)
+        }
+    }
+
+    private func toggle(_ assetID: UUID) {
+        if selection.contains(assetID) { selection.remove(assetID) } else { selection.insert(assetID) }
+    }
+
+    @ViewBuilder
+    private func selectionMark(for assetID: UUID) -> some View {
+        let chosen = selection.contains(assetID)
+        Image(systemName: chosen ? "checkmark.circle.fill" : "circle")
+            .font(.title3)
+            .symbolRenderingMode(.palette)
+            .foregroundStyle(chosen ? Color.white : Color.white.opacity(0.9),
+                             chosen ? Color.accentColor : Color.black.opacity(0.25))
+            .padding(6)
+    }
+
+    /// What is selected and the one thing worth doing with it.
+    ///
+    /// Kept to moving photos between groups: that is the action the storage
+    /// model needs and could not offer, and a bar that grows a dozen verbs is
+    /// how a destructive one ends up next to a harmless one.
+    private var selectionBar: some View {
+        HStack(spacing: 12) {
+            Text(selection.isEmpty
+                 ? "Select photos to move them into a group"
+                 : "\(Formatters.count(selection.count, "photo")) selected")
+                .font(.callout)
+            Spacer(minLength: 8)
+            Button("Select all shown") {
+                selection = Set(filteredAssets.map(\.id))
+            }
+            .disabled(filteredAssets.isEmpty)
+            Button("Clear") { selection = [] }
+                .disabled(selection.isEmpty)
+            Button("Move to group…") { isMoving = true }
+                .buttonStyle(.borderedProminent)
+                .disabled(selection.isEmpty)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
+    }
+
     private var countedAssetTotal: Int {
         store.assets.count { !$0.isLivePhotoMotion }
     }

@@ -241,10 +241,20 @@ somewhere for them to go rather than dropping them to the defaults. The store
 side is `createStorageGroup`, `renameStorageGroup`, `moveToStorageGroup` and
 `deleteStorageGroup(_:movingPhotosTo:)`.
 
-Still to do: **a Library action to move a selection into a group.**
-`moveToStorageGroup` already takes arbitrary asset ids and is tested, so this
-is UI only — but the Library has no multi-select at all today, so it needs
-selection state before it can have the action.
+The Library has selection now — a `Select` mode rather than a modifier chord,
+so an ordinary click still opens the photo — with `Move to group…`, which can
+also make the group on the spot.
+
+**The split is no longer notional.** Exercised against a copy of the real
+archive: two photos moved out of the 21,117-photo Takeout group into a new
+`Cold storage` group, leaving 21,115 behind. Their source is still
+`Recovered import (Google Takeout)`, kind `takeoutExport`. That row —
+
+    GH011458.MP4 | group: Cold storage | source: Recovered import (Google Takeout)
+
+— is the whole argument for two tables. One row would have to claim either that
+these photos came from Cold storage, or that the Takeout export is kept as Cold
+storage. Both are false.
 
 ### 7. Small things the UI check turned up
 
