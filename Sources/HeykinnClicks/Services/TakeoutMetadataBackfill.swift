@@ -23,11 +23,6 @@ enum TakeoutMetadataBackfill {
         var unreadable = 0
     }
 
-    /// Everything Google writes as JSON. Album `metadata.json`, per-photo
-    /// sidecars in either naming, and whatever else a future export carries —
-    /// the point is to take it all rather than to guess which ones matter.
-    static let sidecarPattern = "*.json"
-
     /// Reads one part's sidecars without extracting the media.
     ///
     /// - Parameters:
@@ -58,9 +53,10 @@ enum TakeoutMetadataBackfill {
             return result
         }
 
-        let entries = ZipTools.extractEntries(
-            matching: sidecarPattern, inZip: zipURL, to: scratch
-        )
+        // Only the JSON. One process for the whole part: a part holds ~2,000
+        // sidecars of a few hundred bytes, so a process each would be 24,000
+        // spawns and a re-seek of a 10 GB archive every time.
+        let entries = ZipTools.extractEntries(matching: "*.json", inZip: zipURL, to: scratch)
 
         for entry in entries {
             // The path inside the archive, which is the only record of album
@@ -69,8 +65,9 @@ enum TakeoutMetadataBackfill {
                 result.alreadyHeld += 1
                 continue
             }
-            let fileURL = scratch.appendingPathComponent(entry)
-            guard let payload = try? String(contentsOf: fileURL, encoding: .utf8) else {
+            guard let payload = try? String(
+                contentsOf: scratch.appendingPathComponent(entry), encoding: .utf8
+            ) else {
                 result.unreadable += 1
                 continue
             }

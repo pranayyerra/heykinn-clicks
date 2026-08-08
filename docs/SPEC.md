@@ -559,3 +559,16 @@ Earned against a real 248 GB archive; the stories are in git history.
     user with 24,639 photos that 49,236 had been checked — twice their whole
     archive. Nothing false was claimed about the checking; the label was simply
     on the wrong noun, which under invariant 2 is the same defect.
+43. `unzip` cannot read a real Google export. It mangles every non-ASCII byte
+    to a literal `?` — in its listing as well as on disk — then aborts
+    mid-archive with a "disk full" error that has nothing to do with the disk,
+    taking every entry after it. One Mac screenshot exported with a narrow
+    no-break space in its name cost 4,673 of 6,660 sidecars from a single part,
+    silently, down a code path that returned success. `tar` (libarchive) reads
+    the same archive correctly. Reading entries to stdout does not rescue it:
+    the only name to ask for comes from the same mangled listing, and the `?`
+    it contains is unzip's own wildcard.
+44. A partial read is worth more than no read. The extraction discarded
+    everything it had already written whenever the tool exited non-zero, so a
+    failure two thirds of the way through a part produced nothing at all — the
+    status was treated as the answer, when the answer was on disk.

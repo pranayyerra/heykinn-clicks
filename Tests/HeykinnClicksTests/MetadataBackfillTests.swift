@@ -106,6 +106,53 @@ final class MetadataBackfillTests: XCTestCase {
         XCTAssertTrue(albumRecord.originPath.contains("Kodaikanal"), "which the path is the only record of")
     }
 
+    /// The failure that lost two thirds of a real archive's metadata.
+    ///
+    /// A Google export of a Mac screenshot carries a narrow no-break space in
+    /// its name — `Image 10-10-24 at 4.54 PM.jpg`. Extracting to a directory
+    /// has to *create* that file, and unzip aborts on it mid-archive with a
+    /// "disk full" error that has nothing to do with the disk. Reading to
+    /// stdout never names a file, so nothing about the name can fail.
+    func testASidecarNamedWithANarrowNoBreakSpaceIsStillRead() throws {
+        let staging = try makeDirectory()
+        let tree = staging.appendingPathComponent("Takeout/Google Photos/Photos from 2024", isDirectory: true)
+        try FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+
+        // U+202F, exactly as macOS writes it in a screenshot name.
+        let awkward = "Image 10-10-24 at 4.54\u{202F}PM.jpg.supplemental-metadata.json"
+        try #"{"title":"Image 10-10-24.jpg","imageViews":"3"}"#
+            .write(to: tree.appendingPathComponent(awkward), atomically: true, encoding: .utf8)
+        // A plain one after it, to prove the run does not stop at the awkward
+        // name — the original failure took everything downstream with it.
+        try #"{"title":"IMG_0002.jpg"}"#
+            .write(to: tree.appendingPathComponent("IMG_0002.jpg.json"),
+                   atomically: true, encoding: .utf8)
+
+        let zipURL = try makeDirectory().appendingPathComponent("part.zip")
+        let zip = Process()
+        zip.executableURL = URL(fileURLWithPath: "/usr/bin/zip")
+        zip.arguments = ["-q", "-r", zipURL.path, "Takeout"]
+        zip.currentDirectoryURL = staging
+        try zip.run()
+        zip.waitUntilExit()
+        XCTAssertEqual(zip.terminationStatus, 0)
+
+        let result = TakeoutMetadataBackfill.capture(
+            fromZip: zipURL, sourceID: UUID(), workspace: try makeDirectory()
+        )
+
+        XCTAssertEqual(result.captured.count, 2, "both, including the one with the odd name")
+        XCTAssertEqual(result.unreadable, 0)
+        XCTAssertTrue(
+            result.captured.contains { $0.payload.contains("\"imageViews\":\"3\"") },
+            "the awkward one was read, not skipped"
+        )
+        XCTAssertTrue(
+            result.captured.contains { $0.payload.contains("IMG_0002.jpg") },
+            "and it did not stop the ones after it"
+        )
+    }
+
     /// A re-run does the work it has not done. A 127 GB read is not something
     /// anybody can promise not to interrupt.
     func testARerunSkipsWhatIsAlreadyHeld() throws {
