@@ -127,6 +127,28 @@ final class AppStore: ObservableObject {
     /// because a policy needs one answer.
     @Published private(set) var storageGroupIDByAsset: [UUID: UUID] = [:]
 
+    /// Albums and people, by the photos carrying them.
+    ///
+    /// Published, unlike the payloads they are derived from. The distinction is
+    /// size and purpose: a payload is 600 bytes of provider JSON read when
+    /// somebody opens one photo, and a tag is two short strings the Library
+    /// filters on while scrolling.
+    @Published private(set) var assetIDsByTag: [TagKey: Set<UUID>] = [:]
+
+    /// A tag as a dictionary key — its kind and its value.
+    struct TagKey: Hashable {
+        var kind: AssetTag.Kind
+        var value: String
+    }
+
+    /// Every album, commonest first, for the filter that browses them.
+    func tagValues(ofKind kind: AssetTag.Kind) -> [(value: String, count: Int)] {
+        assetIDsByTag
+            .filter { $0.key.kind == kind }
+            .map { (value: $0.key.value, count: $0.value.count) }
+            .sorted { $0.count == $1.count ? $0.value < $1.value : $0.count > $1.count }
+    }
+
     var storageGroupsByID: [UUID: StorageGroup] {
         Dictionary(storageGroups.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
@@ -1834,6 +1856,9 @@ final class AppStore: ObservableObject {
             sources = try catalog.fetchSources()
             storageGroups = try catalog.fetchStorageGroups()
             storageGroupIDByAsset = try catalog.fetchStorageGroupIDsByAsset()
+            assetIDsByTag = try catalog.fetchAllTags().reduce(into: [TagKey: Set<UUID>]()) {
+                $0[TagKey(kind: $1.kind, value: $1.value), default: []].insert($1.assetID)
+            }
             // Before `recomputeDerivedState`: every protection verdict is
             // judged against the copy count on the asset's own source, so the
             // source map has to be current before anything derived from it is

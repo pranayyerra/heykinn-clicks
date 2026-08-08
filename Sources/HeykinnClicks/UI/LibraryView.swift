@@ -5,6 +5,13 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var residencyFilter: ResidencyDomain?
     @State private var holdingFilter: HoldingFilter = .everything
+    /// An album or a person, when the grid is narrowed to one.
+    ///
+    /// A filter rather than a screen of its own: the photos in an album are the
+    /// same photos, shown the same way. A second grid would duplicate the
+    /// thumbnails, the hover previews, the protection marks and the selection
+    /// mode, and give them somewhere to drift apart from these.
+    @State private var tagFilter: AppStore.TagKey?
     /// Selecting is a mode rather than a modifier chord. A thumbnail's ordinary
     /// click opens the photo, and quietly turning that into "select" the moment
     /// a key is held is how somebody loses their place in a 24,000-photo scroll
@@ -46,6 +53,9 @@ struct LibraryView: View {
             if let residencyFilter, asset.residency != residencyFilter { return false }
             if !searchText.isEmpty,
                !asset.originalFilename.localizedCaseInsensitiveContains(searchText) {
+                return false
+            }
+            if let tagFilter, !(store.assetIDsByTag[tagFilter]?.contains(asset.id) ?? false) {
                 return false
             }
             return true
@@ -145,6 +155,9 @@ struct LibraryView: View {
                     }
                 }
                 ToolbarItem {
+                    tagPicker
+                }
+                ToolbarItem {
                     Picker("Residency", selection: $residencyFilter) {
                         Text("All domains").tag(ResidencyDomain?.none)
                         ForEach(ResidencyDomain.allCases) { domain in
@@ -201,6 +214,41 @@ struct LibraryView: View {
                 assetCell(asset)
             }
             .buttonStyle(.plain)
+        }
+    }
+
+    /// Albums and people Google recorded, as one more way to narrow the grid.
+    ///
+    /// Empty until an export has been read and its descriptions worked out, so
+    /// it hides itself rather than offering a menu with nothing in it.
+    @ViewBuilder
+    private var tagPicker: some View {
+        let albums = store.tagValues(ofKind: .album)
+        let people = store.tagValues(ofKind: .person)
+        if !albums.isEmpty || !people.isEmpty {
+            Picker("Album or person", selection: $tagFilter) {
+                Text("Everything").tag(AppStore.TagKey?.none)
+                if !albums.isEmpty {
+                    Section("Albums") {
+                        ForEach(albums, id: \.value) { album in
+                            Text("\(album.value) (\(album.count))")
+                                .tag(AppStore.TagKey?.some(
+                                    AppStore.TagKey(kind: .album, value: album.value)
+                                ))
+                        }
+                    }
+                }
+                if !people.isEmpty {
+                    Section("People") {
+                        ForEach(people, id: \.value) { person in
+                            Text("\(person.value) (\(person.count))")
+                                .tag(AppStore.TagKey?.some(
+                                    AppStore.TagKey(kind: .person, value: person.value)
+                                ))
+                        }
+                    }
+                }
+            }
         }
     }
 

@@ -130,6 +130,21 @@ extension CatalogStore {
         try database.run("DELETE FROM asset_tags;", [])
     }
 
+    /// Every tag in the archive.
+    ///
+    /// Loaded whole, unlike the payloads they came from: 8,722 rows of two
+    /// short strings is nothing, and browsing needs all of them at once to
+    /// answer "which photos are in this album" without a query per redraw.
+    func fetchAllTags() throws -> [AssetTag] {
+        try database.query("SELECT asset_id, kind, value FROM asset_tags;") { row in
+            AssetTag(
+                assetID: row.uuid(0),
+                kind: AssetTag.Kind(rawValue: row.text(1)) ?? .album,
+                value: row.text(2)
+            )
+        }
+    }
+
     func fetchTags(forAsset assetID: UUID) throws -> [AssetTag] {
         try database.query("""
         SELECT asset_id, kind, value FROM asset_tags WHERE asset_id = ? ORDER BY kind, value;

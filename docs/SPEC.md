@@ -579,3 +579,8 @@ Earned against a real 248 GB archive; the stories are in git history.
     photo whose clock was not on UTC — on a real archive, most of them.
     Anything within fourteen hours is explicable as a timezone rather than as a
     different photograph.
+46. An album is a selection, not a screen. The photos in one are the same
+    photos shown the same way, so albums and people are filters on the Library
+    rather than a second grid — which would have duplicated the thumbnails, the
+    hover previews, the protection marks and the selection mode, and given them
+    somewhere to drift apart.

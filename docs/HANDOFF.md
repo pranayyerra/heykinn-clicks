@@ -257,7 +257,13 @@ ran on real data.
    photos of one name taken the same day — genuinely indistinguishable, and
    held rather than guessed at. No unexplained misses.
 
-4. **Surfacing the census** — a screen or a diagnostics section over
+4. ~~Album and people browsing.~~ **Built** — a filter on the Library, not a
+   screen of its own. `asset_tags` is published as `AppStore.assetIDsByTag` and
+   the picker sits beside the residency and holding filters. Verified on the
+   real archive: 29 albums and one person, and selecting "Thimphu, Bhutan (36)"
+   narrows the same month-grouped grid.
+
+5. **Surfacing the census** — a screen or a diagnostics section over
    `fetchMetadataSchemas()`, so an unfamiliar shape is something a person sees.
 4. **Projections and tags** (layers 2 and 3), including album membership
    projected from `origin_path`.
