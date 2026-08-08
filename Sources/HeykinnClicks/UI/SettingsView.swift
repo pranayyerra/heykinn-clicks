@@ -31,7 +31,7 @@ private struct AutomationSettings: View {
             }
             Section {
                 Toggle("Bring Photos-library originals into the archive", isOn: $store.importFromApplePhotos)
-                Text("Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your targets like anything else; ones already held byte-for-byte are merged rather than stored twice. Connect and watch progress under Sources.")
+                Text("Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your targets like anything else; ones already held byte-for-byte are merged rather than stored twice. Connect and watch progress under Add photos.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -177,7 +177,7 @@ private struct SafetySettings: View {
         Form {
             Section("How many copies") {
                 Label(
-                    "Each source says how many copies of its photos to keep and which devices hold them. Change that under Sources, next to the photos it governs — there is no single setting for the whole archive.",
+                    "Each source says how many copies of its photos to keep and which devices hold them. Change that under Keep safe, next to the photos it governs — there is no single setting for the whole archive.",
                     systemImage: "square.stack.3d.up"
                 )
                 .font(.callout)
@@ -189,7 +189,7 @@ private struct SafetySettings: View {
                     .foregroundStyle(.secondary)
             }
             Section("Checking for damage") {
-                Text("Checking re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It reads every byte, so it runs in batches rather than all at once, from Safety → Drives.")
+                Text("Checking re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It reads every byte, so it runs in batches rather than all at once, from Keep safe.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

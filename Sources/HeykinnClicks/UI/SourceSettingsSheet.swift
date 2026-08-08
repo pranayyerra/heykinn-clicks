@@ -44,7 +44,7 @@ struct SourceSettingsPicker: View {
 
             if store.targets.isEmpty {
                 Label(
-                    "No devices are set up yet. Add one under Safety → Drives, then come back.",
+                    "No devices are set up yet. Add one under Keep safe, then come back.",
                     systemImage: "externaldrive.badge.plus"
                 )
                 .font(.caption)

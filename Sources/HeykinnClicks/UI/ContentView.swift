@@ -23,7 +23,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .violations: return "Violations"
         case .policies: return "Policies"
         case .migrations: return "Migrations"
-        case .takeout: return "Sources"
+        case .takeout: return "Add photos"
         case .activity: return "Activity"
         }
     }
@@ -108,8 +108,8 @@ enum Question: String, CaseIterable, Identifiable {
         switch self {
         case .overview: return "Overview"
         case .have: return "Photos"
-        case .from: return "Sources"
-        case .safe: return "Safety"
+        case .from: return "Add photos"
+        case .safe: return "Keep safe"
         }
     }
 
@@ -119,8 +119,11 @@ enum Question: String, CaseIterable, Identifiable {
         switch self {
         case .overview: return "The short answer"
         case .have: return "The whole archive"
-        case .from: return "Add photos, see what came in"
-        case .safe: return "Copies, drives and checks"
+        case .from: return "From a folder, Google, or Photos"
+        // Short enough to survive a badge beside it. "Every place your
+        // photos are kept" was truer and ran into an ellipsis, which tells the
+        // reader nothing at all.
+        case .safe: return "Where your copies are"
         }
     }
 

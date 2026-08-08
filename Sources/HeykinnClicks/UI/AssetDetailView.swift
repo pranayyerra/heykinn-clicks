@@ -74,7 +74,7 @@ struct AssetDetailView: View {
 
                     GroupBox("Residency") {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Changing residency here only reassigns the logical domain. Safety will list the presence mismatch until a migration moves the actual content — prefer creating a migration for real moves.")
+                            Text("Changing residency here only reassigns the logical domain. Keep safe will list the presence mismatch until a migration moves the actual content — prefer creating a migration for real moves.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Picker("Residency domain", selection: Binding(
@@ -221,7 +221,7 @@ struct AssetDetailView: View {
                 }
                 Button("Cancel", role: .cancel) { pendingResidency = nil }
             } message: {
-                Text("This flips the logical domain only. Content is not moved; any presence mismatch is listed under Safety.")
+                Text("This flips the logical domain only. Content is not moved; any presence mismatch is listed under Keep safe.")
             }
         } else {
             ContentUnavailableView("Asset not found", systemImage: "questionmark.square")

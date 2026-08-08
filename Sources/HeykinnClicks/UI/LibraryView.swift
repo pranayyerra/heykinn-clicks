@@ -382,7 +382,7 @@ struct LibraryView: View {
             ContentUnavailableView(
                 "No photos yet",
                 systemImage: "photo.on.rectangle",
-                description: Text("Add a folder with ⌘I, or open Sources to connect your "
+                description: Text("Add a folder with ⌘I, or open Add photos to connect your "
                                   + "Photos library or a Google download.")
             )
         }

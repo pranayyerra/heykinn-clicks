@@ -171,7 +171,7 @@ struct MigrationsView: View {
         switch job.toDomain {
         case .appleCloud: return "Add these photos to Apple Photos so they reach iCloud, then confirm below."
         case .googleCloud: return "Upload these photos to Google Photos, then confirm below."
-        case .local: return "Bring these photos back in from the Sources screen; they will copy themselves onto your drives. Then confirm below."
+        case .local: return "Bring these photos back in from Add photos; they will copy themselves onto your drives. Then confirm below."
         }
     }
 

@@ -1711,7 +1711,7 @@ final class AppStore: ObservableObject {
 
     // MARK: - Catalog backup
 
-    /// Snapshots per drive, newest first — surfaced under Safety.
+    /// Snapshots per drive, newest first — surfaced under Keep safe.
     @Published private(set) var catalogSnapshots: [UUID: [CatalogSnapshot]] = [:]
 
     /// A drive is due a snapshot if it has none or its newest is older than this.
@@ -3260,7 +3260,7 @@ final class AppStore: ObservableObject {
 
         audit(
             .system,
-            "Recorded \(Formatters.count(created, "source")) for \(Formatters.count(unassigned.count, "photo")) added before the app tracked where they came from. Each is set to keep its photos on the devices already holding them — nothing was moved, and you can change any of it under Sources."
+            "Recorded \(Formatters.count(created, "source")) for \(Formatters.count(unassigned.count, "photo")) added before the app tracked where they came from. Each is set to keep its photos on the devices already holding them — nothing was moved, and you can change any of it under Keep safe."
         )
         loadAll()
     }
@@ -3680,7 +3680,7 @@ final class AppStore: ObservableObject {
             message += "\(Formatters.count(merged, "duplicate record")) of the same download were folded into one — they asked for the same copies on the same devices, so nothing changed about where anything is kept. "
         }
         if !leftSplit.isEmpty {
-            message += "\(Formatters.count(leftSplit.count, "download")) is recorded more than once with different settings; both were left alone, because choosing between them is yours to do under Sources. "
+            message += "\(Formatters.count(leftSplit.count, "download")) is recorded more than once with different settings; both were left alone, because choosing between them is yours to do under Keep safe. "
         }
         audit(.system, message + "Nothing was moved.")
         loadAll()
@@ -6908,7 +6908,7 @@ final class AppStore: ObservableObject {
             line = "Apple Photos check: none of \(requested) could be compared — their originals are not on this Mac (an optimised library with iCloud Photos off keeps previews, not originals)"
         }
         if found > 0 {
-            line += " — recorded as verified presence; the Local coexistence is listed under Safety until migrated or reclaimed"
+            line += " — recorded as verified presence; the Local coexistence is listed under Keep safe until migrated or reclaimed"
         }
         if unsearchable > 0 { line += "; \(unsearchable) had no capture date to search by" }
         audit(.system, line + ".")

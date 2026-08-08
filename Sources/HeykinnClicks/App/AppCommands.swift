@@ -75,16 +75,16 @@ struct HeykinnCommands: Commands {
                 .keyboardShortcut("1", modifiers: .command)
             Button("Photos") { bus.requestedPage = .library }
                 .keyboardShortcut("2", modifiers: .command)
-            Button("Sources") { bus.requestedPage = .takeout }
+            Button("Add photos") { bus.requestedPage = .takeout }
                 .keyboardShortcut("3", modifiers: .command)
-            Button("Safety") { bus.requestedPage = .targets }
+            Button("Keep safe") { bus.requestedPage = .targets }
                 .keyboardShortcut("4", modifiers: .command)
             Divider()
             Button("Look for Drives Again") {
                 store.rescanTargets()
                 // On demand means on demand: check the paths still resolve
                 // rather than only noticing at the next mount. Same work the
-                // Rescan button on Safety → Drives does.
+                // Rescan button on Keep safe does.
                 for target in store.targets where store.reachablePaths[target.id] != nil {
                     _ = store.repairReplicaPaths(for: target.id)
                 }

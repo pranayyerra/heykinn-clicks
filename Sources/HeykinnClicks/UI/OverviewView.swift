@@ -197,7 +197,7 @@ struct OverviewView: View {
                     + "they are.",
                 symbol: "tray.and.arrow.down",
                 isDone: false,
-                actionLabel: "Go to Sources"
+                actionLabel: "Go to Add photos"
             ) {
                 selection = .takeout
             }
@@ -356,7 +356,7 @@ struct OverviewView: View {
             let rest = unsatisfiableSources.count > 2
                 ? " and \(unsatisfiableSources.count - 2) more"
                 : ""
-            return "\(named)\(rest) \(Formatters.pluralise(unsatisfiableSources.count, "asks", "ask")) for more copies than \(Formatters.pluralise(unsatisfiableSources.count, "it names devices", "they name devices")) to hold them. Name another device, or lower what \(Formatters.pluralise(unsatisfiableSources.count, "it asks", "they ask")) for, under Sources."
+            return "\(named)\(rest) \(Formatters.pluralise(unsatisfiableSources.count, "asks", "ask")) for more copies than \(Formatters.pluralise(unsatisfiableSources.count, "it names devices", "they name devices")) to hold them. Name another device, or lower what \(Formatters.pluralise(unsatisfiableSources.count, "it asks", "they ask")) for, under Keep safe."
         }
         // One answer. What the app has and has not read back is reported under
         // it, not folded into it — the copies either satisfy what the source
@@ -366,7 +366,7 @@ struct OverviewView: View {
             // known to be good — and only the first is true here. Say the one
             // the ring is actually reporting; the line under it says how far
             // the checking has got.
-            return "All \(localCount.formatted()) photos are on the devices their sources name."
+            return "All \(localCount.formatted()) photos are on all the drives they are meant to be on."
         }
         let short = localCount - protectedCount
         // How many copies that is, not only how many photos. Under k-of-n a
@@ -377,7 +377,7 @@ struct OverviewView: View {
         let detail = copiesShort > short
             ? " That is \(Formatters.count(copiesShort, "copy", "copies")) still to make."
             : ""
-        return "\(short.formatted()) of \(localCount.formatted()) photos are not yet on all the devices their source names.\(detail)"
+        return "\(short.formatted()) of \(localCount.formatted()) photos are not yet on all the drives they are meant to be on.\(detail)"
     }
 
     // MARK: - Drives

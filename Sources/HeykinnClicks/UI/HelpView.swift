@@ -70,11 +70,11 @@ struct HelpView: View {
         ),
         Topic(
             symbol: "tray.and.arrow.down",
-            title: "Sources are only ever read",
+            title: "Your originals are only ever read",
             body: """
             Pointing the app at a folder, a Photos library or a Google download copies what \
             it finds into the archive and leaves the original exactly as it was. Nothing is \
-            moved, renamed or deleted at a source, ever.
+            moved, renamed or deleted where it came from, ever.
 
             Photos arriving from anywhere the app does not manage land on this Mac first, so \
             they are safe before any drive is plugged in. That working copy is released only \

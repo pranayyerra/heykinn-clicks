@@ -57,8 +57,8 @@ struct PoliciesView: View {
     // it were wrong once sources arrived. How many copies, and on which
     // devices, is a question about a particular set of photos — the answer for
     // a Google export has nothing to do with the answer for a folder of scans —
-    // and it is asked and answered under Sources, next to the photos it
-    // governs. A global number sitting above those could only contradict them.
+    // and it is asked and answered here, next to the photos it governs. A
+    // global number sitting above those could only contradict them.
     //
     // Deleted rather than kept as a default for new sources: `newSourceDefaults`
     // already does that job by remembering the last answer given, and a control

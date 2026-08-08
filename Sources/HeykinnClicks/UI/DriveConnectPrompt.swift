@@ -50,7 +50,7 @@ struct DriveConnectPrompt: View {
                 // Says what actually happens now: it becomes another place
                 // copies can land, and it takes a share rather than a
                 // duplicate of the whole archive.
-                Text("Makes it one of the devices your photos can be kept on. A marker file anchors its identity, so it is recognised wherever it is plugged in. Nothing is copied to it yet: each source names the devices its photos live on, and this one starts holding photos when you name it.")
+                Text("Makes it one of the devices your photos can be kept on. A marker file anchors its identity, so it is recognised wherever it is plugged in. Nothing is copied to it yet: a group that works out its own drives will use this one as soon as it asks for more copies than it has drives.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)

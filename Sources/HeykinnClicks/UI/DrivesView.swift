@@ -48,9 +48,9 @@ struct DrivesView: View {
             return "\(Formatters.count(damaged, "photo")) \(damaged == 1 ? "has" : "have") a copy that no longer matches."
         }
         if short > 0 {
-            return "\(short.formatted()) of \(store.protectionStates.count.formatted()) photos are not yet on all the devices their source names."
+            return "\(short.formatted()) of \(store.protectionStates.count.formatted()) photos are not yet on all the drives they are meant to be on."
         }
-        return "Yes — every photo is on the devices its source names."
+        return "Yes — every photo is on all the drives it is meant to be on."
     }
 
     private func verdictDetail(reachable: Int, holders: Int) -> String {
@@ -390,7 +390,7 @@ struct DrivesView: View {
             // whichever has the most room", which was the model before this
             // one — the app choosing destinations is precisely what SPEC
             // invariant 4 rules out.
-            Text("Registering a drive makes it available to name when you set up a source. Nothing moves on its own: a source's photos go to the devices you picked for it, so this drive stays empty until you name it under Sources.")
+            Text("Registering a drive moves nothing by itself. A group that works out its own devices will use this one as soon as it asks for more copies than it has drives; a group set to specific drives stays exactly where you put it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

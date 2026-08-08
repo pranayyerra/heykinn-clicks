@@ -53,7 +53,7 @@ it lies and nothing is transported. Only the difference is copied.
 on this Mac, so it is available as a destination before any drive is plugged
 in and there is always something reachable to copy from. It is a device like
 any other: it holds what the sources you pointed at it hold, and nothing else.
-To keep it out of the archive entirely, **forget** it under Safety → Drives —
+To keep it out of the archive entirely, **forget** it under Keep safe —
 that deletes nothing.
 
 A Takeout folder that already sits *inside* the host target's own folder is
@@ -107,7 +107,7 @@ like external volumes:
 hdiutil create -size 100m -fs APFS -volname HeykinnDriveA /tmp/HeykinnDriveA.dmg && hdiutil attach /tmp/HeykinnDriveA.dmg
 ```
 
-Mount it, register it under Safety → Drives, and the backlog syncs to it; detach
+Mount it, register it under Keep safe, and the backlog syncs to it; detach
 (`hdiutil detach /Volumes/HeykinnDriveA`) mid-sync to see interruption handling,
 re-attach to see reconnect + auto-sync resume.
 

@@ -182,7 +182,7 @@ struct SourcesView: View {
             }
             .padding(20)
         }
-        .navigationTitle("Sources")
+        .navigationTitle("Add photos")
         .toolbar {
             ToolbarItem {
                 Menu {
@@ -243,10 +243,14 @@ struct SourcesView: View {
     /// photos does not put those photos at risk.
     private var introduction: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Places your photos already live")
+            // Was "Places your photos already live" — present tense, on a
+            // screen whose whole job is arrival. The Google download reads as
+            // a place because it *is* one, which is why it belongs under Keep
+            // safe rather than being described in two tenses here.
+            Text("Where your photos come from")
                 .font(.title3)
             Label(
-                "Sources are only ever read. Nothing here moves or deletes your originals.",
+                "Your originals are only ever read. Nothing here moves or deletes them.",
                 systemImage: "lock.open.trianglebadge.exclamationmark"
             )
             .font(.callout)
