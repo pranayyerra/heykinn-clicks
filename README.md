@@ -115,6 +115,17 @@ First launch starts empty. Nothing is seeded: demo rows asserting cloud
 residency described a state the app has no connector to establish, and the rest
 was noise sitting alongside a real archive.
 
+Two compile errors recur often enough to be worth naming, both from SwiftUI's
+result builders and both reported far from their cause:
+
+- **A ternary mixing `HierarchicalShapeStyle` and `Color`.** `isOn ? .secondary
+  : .orange` does not compile — the two branches are different types and the
+  leading-dot syntax hides it. Spell both out: `isOn ? Color.secondary :
+  Color.orange`.
+- **A view body the type-checker gives up on.** A long `VStack` of conditionals
+  fails with something unrelated, or times out. Extracting part of it into its
+  own `@ViewBuilder` property fixes it and usually reads better anyway.
+
 ## Architecture
 
 ```
@@ -516,7 +527,8 @@ System Settings → Privacy & Security → Files and Folders.
    `FullyReplicated` → `VerificationOverdue` proactively.
 2. Duplicate review workflow (keep/supersede, storage reclaim via explicit jobs).
 3. Apple Photos export importer — Takeout is done; the Apple side needs its own
-   metadata reconciliation. Plus richer Takeout coverage: album JSON.
+   metadata reconciliation. Google's album JSON is read now: its title, date and
+   places, captured verbatim and projected into tags.
 4. Account integration behind `CloudDomainVerifier`, so cloud presence can be
    recorded as `verified` instead of only asserted, and migrations can confirm
    deletion rather than asking the user to.
