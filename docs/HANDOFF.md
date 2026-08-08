@@ -146,7 +146,48 @@ the wild. It imported 0 photos, so nothing needs undoing.
 Items 1–4 of the original list are done. What is left is below: item 5 is
 designed but unbuilt, item 6 needs a decision.
 
-### 5. Lossless Google metadata capture — designed, not built
+### 5. Lossless Google metadata capture — **layer 1 built**
+
+`metadata_records` and `metadata_schemas` exist, with `MetadataRecord`,
+`MetadataRecord.fingerprint(of:)` and the CRUD in
+`Persistence/CatalogStore+Metadata.swift`. Created at catalog open, so the two
+tables are already on the live archive (verified against a copy). 10 tests over
+real payload shapes from `takeout-20260710T081521Z-2-001`.
+
+Both open questions were answered the way this brief leaned, and are now
+decisions:
+
+- **Payloads are TEXT and uncompressed.** ~24,600 sidecars is about 15 MB and
+  rides in every snapshot; the readability is worth more than the bytes, and
+  `sqlite3 catalog.sqlite 'select payload …'` shows a person their own data
+  with no decoder. The archive is meant to outlive the app.
+- **`archived` / `trashed` are recorded, never behavioural.** Nothing in the
+  capture layer reads them. An export is a snapshot of one moment, and
+  declining to protect something on the strength of a flag is irreversible in
+  the direction that loses photos.
+
+Uniqueness is `(source_id, origin_path)`, so re-reading an export you already
+have replaces payloads rather than doubling them, and two exports may hold the
+same relative path.
+
+**What is left, in order:**
+
+1. **Import-path writes.** `TakeoutImporter` already locates each sidecar
+   (`CaptureDateResolver.sidecar(for:)` → `TakeoutImporter.findSidecar`) and
+   decodes it; nothing yet hands the raw bytes to `upsertMetadataRecord`. This
+   is the wiring, and it is small.
+2. **The backfill from the 12 zips.** The step that actually buys
+   zip-independence for the 24,639 photos already imported.
+   `TakeoutReconciler` streams zip members without extracting, so the machinery
+   exists.
+3. **Surfacing the census** — a screen or a diagnostics section over
+   `fetchMetadataSchemas()`, so an unfamiliar shape is something a person sees.
+4. **Projections and tags** (layers 2 and 3), including album membership
+   projected from `origin_path`.
+
+The original design notes follow.
+
+### 5a. Original design notes
 Requirement from the user: keep everything so the zips become disposable; the
 model must absorb Google changing its fields; data the app does not use must not
 be carried through hot paths.

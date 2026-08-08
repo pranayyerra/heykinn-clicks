@@ -1,0 +1,191 @@
+import Foundation
+
+extension CatalogStore {
+
+    // MARK: - Schema
+
+    /// The capture layer: provider metadata kept verbatim, and a census of the
+    /// shapes it has arrived in.
+    ///
+    /// Two tables rather than one. `metadata_records` is bulk — one row per
+    /// sidecar, ~24,600 of them on a real archive — and is read only when
+    /// somebody looks at a photo. `metadata_schemas` is a handful of rows that
+    /// answer "has the format changed?" without scanning the bulk.
+    func createMetadataSchema() throws {
+        try database.exec("""
+        CREATE TABLE IF NOT EXISTS metadata_records (
+            id TEXT PRIMARY KEY,
+            asset_id TEXT,
+            source_id TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            origin_path TEXT NOT NULL,
+            captured_at REAL NOT NULL,
+            schema_fingerprint TEXT NOT NULL,
+            payload TEXT NOT NULL
+        );
+        """)
+        // The lookup that happens on every asset detail. Without it, opening
+        // one photo scans every payload in the archive.
+        try database.exec(
+            "CREATE INDEX IF NOT EXISTS idx_metadata_asset ON metadata_records(asset_id);"
+        )
+        try database.exec(
+            "CREATE INDEX IF NOT EXISTS idx_metadata_source ON metadata_records(source_id);"
+        )
+        // One payload per path per source: re-reading an export must update
+        // what is there rather than pile a second copy beside it.
+        try database.exec("""
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_origin
+        ON metadata_records(source_id, origin_path);
+        """)
+        try database.exec("""
+        CREATE TABLE IF NOT EXISTS metadata_schemas (
+            fingerprint TEXT PRIMARY KEY,
+            provider TEXT NOT NULL,
+            scope TEXT NOT NULL,
+            keys_json TEXT NOT NULL,
+            record_count INTEGER NOT NULL,
+            example_path TEXT NOT NULL,
+            first_seen_at REAL NOT NULL
+        );
+        """)
+    }
+
+    // MARK: - Records
+
+    /// Stores one payload, and counts its shape.
+    ///
+    /// Keyed on `(source_id, origin_path)` rather than on the record's own id,
+    /// so re-reading an export you already have replaces each payload instead
+    /// of doubling it. The census is kept in the same transaction as the row it
+    /// describes — a count that can drift from the thing it counts is worse
+    /// than no count.
+    func upsertMetadataRecord(_ record: MetadataRecord) throws {
+        try database.run("""
+        INSERT INTO metadata_records
+            (id, asset_id, source_id, scope, provider, origin_path, captured_at,
+             schema_fingerprint, payload)
+        VALUES (?,?,?,?,?,?,?,?,?)
+        ON CONFLICT(source_id, origin_path) DO UPDATE SET
+            asset_id = excluded.asset_id,
+            scope = excluded.scope,
+            provider = excluded.provider,
+            captured_at = excluded.captured_at,
+            schema_fingerprint = excluded.schema_fingerprint,
+            payload = excluded.payload;
+        """, [
+            .text(record.id.uuidString),
+            record.assetID.map { SQLValue.text($0.uuidString) } ?? .null,
+            .text(record.sourceID.uuidString),
+            .text(record.scope.rawValue),
+            .text(record.provider),
+            .text(record.originPath),
+            .real(record.capturedAt.timeIntervalSince1970),
+            .text(record.schemaFingerprint),
+            .text(record.payload),
+        ])
+        try noteSchema(of: record)
+    }
+
+    /// Everything recorded about one photo.
+    func fetchMetadataRecords(forAsset assetID: UUID) throws -> [MetadataRecord] {
+        try database.query("""
+        SELECT id, asset_id, source_id, scope, provider, origin_path, captured_at,
+               schema_fingerprint, payload
+        FROM metadata_records WHERE asset_id = ?;
+        """, [.text(assetID.uuidString)], row: decodeMetadataRecord)
+    }
+
+    /// Everything recorded for one source — albums and export-level payloads
+    /// included, which belong to no single photo.
+    func fetchMetadataRecords(forSource sourceID: UUID, scope: MetadataRecord.Scope? = nil) throws -> [MetadataRecord] {
+        var sql = """
+        SELECT id, asset_id, source_id, scope, provider, origin_path, captured_at,
+               schema_fingerprint, payload
+        FROM metadata_records WHERE source_id = ?
+        """
+        var bindings: [SQLValue] = [.text(sourceID.uuidString)]
+        if let scope {
+            sql += " AND scope = ?"
+            bindings.append(.text(scope.rawValue))
+        }
+        return try database.query(sql + ";", bindings, row: decodeMetadataRecord)
+    }
+
+    /// How many payloads are held, without loading any of them.
+    func metadataRecordCount() throws -> Int {
+        try database.query("SELECT count(*) FROM metadata_records;") { Int($0.int(0)) }.first ?? 0
+    }
+
+    /// Origin paths already captured for a source, so a re-read can skip what
+    /// it already has without pulling every payload into memory.
+    func capturedOriginPaths(forSource sourceID: UUID) throws -> Set<String> {
+        let paths = try database.query(
+            "SELECT origin_path FROM metadata_records WHERE source_id = ?;",
+            [.text(sourceID.uuidString)]
+        ) { $0.text(0) }
+        return Set(paths)
+    }
+
+    private func decodeMetadataRecord(_ row: SQLiteDatabase.Row) -> MetadataRecord {
+        MetadataRecord(
+            id: row.uuid(0),
+            assetID: row.optionalUUID(1),
+            sourceID: row.uuid(2),
+            scope: MetadataRecord.Scope(rawValue: row.text(3)) ?? .asset,
+            provider: row.text(4),
+            originPath: row.text(5),
+            capturedAt: Date(timeIntervalSince1970: row.real(6)),
+            schemaFingerprint: row.text(7),
+            payload: row.text(8)
+        )
+    }
+
+    // MARK: - The census
+
+    /// Records a payload's shape, or bumps the count for one already seen.
+    private func noteSchema(of record: MetadataRecord) throws {
+        let keys = record.payload.data(using: .utf8)
+            .flatMap { try? JSONSerialization.jsonObject(with: $0) }
+            .flatMap { $0 as? [String: Any] }
+            .map { $0.keys.sorted() } ?? []
+
+        try database.run("""
+        INSERT INTO metadata_schemas
+            (fingerprint, provider, scope, keys_json, record_count, example_path, first_seen_at)
+        VALUES (?,?,?,?,1,?,?)
+        ON CONFLICT(fingerprint) DO UPDATE SET
+            record_count = record_count + 1;
+        """, [
+            .text(record.schemaFingerprint),
+            .text(record.provider),
+            .text(record.scope.rawValue),
+            .text(Self.encodeJSON(keys)),
+            .text(record.originPath),
+            .real(record.capturedAt.timeIntervalSince1970),
+        ])
+    }
+
+    /// Every payload shape seen, commonest first.
+    ///
+    /// The report that turns "Google changed the format" from silent loss into
+    /// something a person can look at: an unfamiliar fingerprint with a small
+    /// count and one example path to go and read.
+    func fetchMetadataSchemas() throws -> [MetadataSchema] {
+        try database.query("""
+        SELECT fingerprint, provider, scope, keys_json, record_count, example_path, first_seen_at
+        FROM metadata_schemas ORDER BY record_count DESC;
+        """) { row in
+            MetadataSchema(
+                fingerprint: row.text(0),
+                provider: row.text(1),
+                scope: MetadataRecord.Scope(rawValue: row.text(2)) ?? .asset,
+                keys: Self.decodeJSON([String].self, from: row.text(3)) ?? [],
+                recordCount: Int(row.int(4)),
+                examplePath: row.text(5),
+                firstSeenAt: Date(timeIntervalSince1970: row.real(6))
+            )
+        }
+    }
+}

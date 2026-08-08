@@ -17,6 +17,7 @@ final class CatalogStore {
         // already there, so anything introduced after the first release has to
         // come through here — see `CatalogStore+Sources.swift`.
         try createSourceSchema()
+        try createMetadataSchema()
     }
 
     private func createSchema() throws {
