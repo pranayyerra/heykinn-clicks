@@ -112,7 +112,14 @@ struct SourcesView: View {
         // folder on a disk" describes what this kind of source *is*, which the
         // reader worked out from the word "folder" — and leaves out the only
         // thing they cannot know without being told: which folders.
-        let folderBatches = store.importBatches.filter(\.isFolderImport)
+        // The app's own folders are not folders somebody added — same filter
+        // `FolderSourceList` applies to the list this summarises, or the card
+        // and the list underneath it disagree about what is in the archive.
+        let folderBatches = store.importBatches.filter {
+            guard $0.isFolderImport else { return false }
+            guard $0.isFilesystemPath else { return true }
+            return !store.isAppOwnedFolder(URL(fileURLWithPath: $0.sourcePath, isDirectory: true))
+        }
         let newest = folderBatches.max { $0.startedAt < $1.startedAt }
         let detail: String
         if let newest {
