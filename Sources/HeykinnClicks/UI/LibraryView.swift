@@ -5,7 +5,11 @@ struct LibraryView: View {
     @State private var searchText = ""
     @State private var residencyFilter: ResidencyDomain?
     @State private var holdingFilter: HoldingFilter = .everything
-    @State private var isImporterPresented = false
+    /// Importing is one code path with one file picker, owned by the window.
+    /// This screen and the File menu were each carrying their own `fileImporter`
+    /// with the same content types and the same call underneath — two ways to
+    /// do one thing, which is two places for it to drift.
+    @EnvironmentObject private var commands: AppCommandBus
 
     /// Whether the archive holds a photograph or merely knows it exists.
     ///
@@ -106,13 +110,9 @@ struct LibraryView: View {
                         }
                     }
                     if filteredAssets.isEmpty {
-                        ContentUnavailableView(
-                            "No assets",
-                            systemImage: "photo.on.rectangle",
-                            description: Text("Import a folder to get started.")
-                        )
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 80)
+                        emptyState
+                            .frame(maxWidth: .infinity)
+                            .padding(.top, 80)
                     }
                 }
                 .padding(.vertical)
@@ -147,26 +147,52 @@ struct LibraryView: View {
                 }
                 ToolbarItem {
                     Button {
-                        isImporterPresented = true
+                        commands.isImportPickerPresented = true
                     } label: {
                         if store.isImporting {
                             ProgressView().controlSize(.small)
                         } else {
-                            Label("Import…", systemImage: "square.and.arrow.down")
+                            Label("Add Photos…", systemImage: "square.and.arrow.down")
                         }
                     }
                     .disabled(store.isImporting)
+                    .help(store.isImporting ? "Reading photos in…" : "Add photos from a folder (⌘I)")
                 }
             }
-            .fileImporter(
-                isPresented: $isImporterPresented,
-                allowedContentTypes: [.folder, .image, .movie],
-                allowsMultipleSelection: true
-            ) { result in
-                if case .success(let urls) = result {
-                    store.importFolders(urls)
-                }
-            }
+        }
+    }
+
+    /// How many photographs the archive holds regardless of what is on screen.
+    private var countedAssetTotal: Int {
+        store.assets.count { !$0.isLivePhotoMotion }
+    }
+
+    /// Whether the reader has narrowed the view themselves.
+    private var isNarrowed: Bool {
+        !searchText.isEmpty || residencyFilter != nil || holdingFilter != .everything
+    }
+
+    /// Two different nothings, and they want different sentences: an archive
+    /// with no photos in it needs telling how to get some, and a filter that
+    /// matched none needs telling that the photos are still there. "No assets"
+    /// told neither, in the app's own word for a photograph.
+    @ViewBuilder
+    private var emptyState: some View {
+        if isNarrowed {
+            ContentUnavailableView(
+                "Nothing matches",
+                systemImage: "magnifyingglass",
+                description: Text("The archive still holds "
+                                  + "\(Formatters.count(countedAssetTotal, "photo")). "
+                                  + "Clear the search or the filters to see them.")
+            )
+        } else {
+            ContentUnavailableView(
+                "No photos yet",
+                systemImage: "photo.on.rectangle",
+                description: Text("Add a folder with ⌘I, or open Sources to connect your "
+                                  + "Photos library or a Google download.")
+            )
         }
     }
 
@@ -216,6 +242,7 @@ struct LibraryView: View {
                         .font(.caption)
                         .foregroundStyle(.orange)
                         .help("In the Photos library · the archive holds no copy here yet")
+                        .accessibilityLabel("In the Photos library. The archive holds no copy here yet.")
                 }
                 // Only assets that fail the policy are marked. A badge on every
                 // cell is a field of icons the eye has to decode one by one;
@@ -226,7 +253,8 @@ struct LibraryView: View {
                     Image(systemName: verdict.symbolName)
                         .font(.caption)
                         .foregroundStyle(verdict.tint)
-                        .help(verdict.displayName(policy: store.redundancyPolicy))
+                        .help(verdict.displayName(copies: store.desiredCopies(forAsset: asset.id)))
+                        .accessibilityLabel(verdict.displayName(copies: store.desiredCopies(forAsset: asset.id)))
                 }
             }
         }

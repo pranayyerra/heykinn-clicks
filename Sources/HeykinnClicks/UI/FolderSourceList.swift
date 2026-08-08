@@ -12,6 +12,8 @@ import SwiftUI
 struct FolderSourceList: View {
     @EnvironmentObject private var store: AppStore
     @State private var opened: UUID?
+    /// The source whose settings are being changed, if any.
+    @State private var editing: StorageGroup?
 
     /// Folder imports, newest first.
     ///
@@ -58,6 +60,16 @@ struct FolderSourceList: View {
                 unaccountedRow
             }
         }
+        .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
+    }
+
+    /// The source a batch's photos belong to, so its settings can be edited
+    /// from where its photos are shown. Nil for photos imported before sources
+    /// existed and not yet backfilled.
+    private func group(for batch: ImportBatch) -> StorageGroup? {
+        guard let assetID = store.assets.first(where: { $0.importBatchID == batch.id })?.id
+        else { return nil }
+        return store.storageGroup(forAsset: assetID)
     }
 
     @ViewBuilder
@@ -87,6 +99,15 @@ struct FolderSourceList: View {
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
+
+            // The folder these came from was never written down, but where
+            // they are *now* is known perfectly well — and that is the part
+            // that matters for whether they are safe.
+            let status = store.copyStatus(forAssetIDs: assets.map(\.id))
+            if status.total > 0 {
+                SourceCopyStatusView(status: status, showsLoadBearingWarning: false)
+                    .padding(.leading, 28)
+            }
 
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
@@ -170,34 +191,36 @@ struct FolderSourceList: View {
                     stat(batch.failedCount, "could not be read", .orange)
                 }
             }
+            // The path whether or not its disk is attached. It used to vanish
+            // with the drive, which hid the answer at exactly the moment the
+            // question gets asked: an unreachable folder is the one somebody
+            // needs to be told the location of.
             if batch.isFilesystemPath {
-                HStack(spacing: 10) {
-                    Text(batch.sourcePath)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
-                    RevealButton(path: batch.sourcePath)
-                    Spacer(minLength: 0)
-                }
+                PathRow(path: batch.sourcePath)
             }
 
-            // A folder on one of the archive's own drives is not only a source.
-            // Its files were counted as that drive's copy rather than being
-            // duplicated onto it, which is the right thing to do and makes the
-            // folder load-bearing: emptying it later takes a copy with it.
-            let loadBearing = assets.filter { store.hasOnlyArchiveBackedCopies($0.id) }.count
-            if loadBearing > 0 {
-                Label(
-                    loadBearing == assets.count
-                        ? "These photos are kept where they are — this folder holds the archive's copy of them, so moving it is fine but emptying it is not."
-                        : "\(Formatters.count(loadBearing, "photo")) here are kept where they are rather than copied, so this folder holds the archive's copy of them.",
-                    systemImage: "pin"
-                )
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            // Where this folder's photos are now — the same reading the Google
+            // export cards do, off the same replica states. A folder on one of
+            // the archive's own devices is not only a source: its files were
+            // counted as that device's copy rather than duplicated onto it,
+            // which makes the folder load-bearing, and the status says so.
+            let status = store.copyStatus(forBatch: batch.id)
+            if status.total > 0 {
+                Divider()
+                SourceCopyStatusView(status: status)
+                // Changing where these photos live belongs next to the report
+                // of where they are, not in a settings screen the reader would
+                // have to go looking for.
+                if let group = group(for: batch) {
+                    Button {
+                        editing = group
+                    } label: {
+                        Label("Change where these are kept", systemImage: "slider.horizontal.3")
+                            .font(.caption)
+                    }
+                    .buttonStyle(.link)
+                    .padding(.top, 2)
+                }
             }
 
             if assets.isEmpty {

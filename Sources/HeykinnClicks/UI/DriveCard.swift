@@ -156,32 +156,29 @@ struct DriveCard: View {
         return "\(breakdown.presentPhotos.formatted()) of \(breakdown.expectedPhotos.formatted()) photos\(size)\(files)"
     }
 
-    /// Whether this target records the same content as the others. Free to
-    /// compute — it is a root comparison, not a read — and deliberately worded
-    /// as agreement rather than proof: matching roots mean the two catalogs
-    /// agree, not that the bytes on either are undamaged.
+    /// What share of the archive this device carries.
+    ///
+    /// This line used to report whether the device held the same content as
+    /// every other one, which under k-of-n is neither true nor a problem:
+    /// devices are *supposed* to hold different subsets, so "differs from
+    /// Field Drive on 12,000 files" was about to become a permanent orange
+    /// warning describing a healthy archive.
+    ///
+    /// The honest replacement is what this device contributes, and whether the
+    /// archive as a whole is short — which is a fact about photos, not about
+    /// how two drives compare.
     @ViewBuilder
     private var agreementLine: some View {
-        let comparisons = store.agreement(for: drive.id)
-        if !comparisons.isEmpty {
-            VStack(alignment: .leading, spacing: 2) {
-                ForEach(comparisons, id: \.other.id) { comparison in
-                    if comparison.agrees {
-                        Label("Holds the same as \(comparison.other.name)", systemImage: "equal.circle")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .help("Their recorded contents match. Confirming the bytes themselves still needs a read.")
-                    } else {
-                        Label(
-                            "Differs from \(comparison.other.name) on \(Formatters.count(comparison.divergentCount, "file"))",
-                            systemImage: "arrow.triangle.branch"
-                        )
-                        .font(.caption2)
-                        .foregroundStyle(.orange)
-                        .help("Found by comparing trees, without reading either target. Only the differing files need re-reading.")
-                    }
-                }
-            }
+        let breakdown = store.driveBreakdowns[drive.id]
+        let held = breakdown?.presentPhotos ?? 0
+        if held > 0 {
+            Label(
+                "Carries \(Formatters.count(held, "photo")) of the archive's \(store.localPhotoCount.formatted())",
+                systemImage: "chart.pie"
+            )
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+            .help("Your devices are meant to hold different photos. What matters is that every photo is on enough of them, which the Overview reports.")
         }
     }
 
@@ -223,10 +220,21 @@ struct DriveCard: View {
             Menu {
                 Button("Check a batch now") { store.queueVerificationSweep(drive.id) }
                     .disabled(store.isSyncing)
-                if store.agreement(for: drive.id).contains(where: { !$0.agrees }) {
-                    Button("Re-read only what differs") { store.queueDivergenceCheck(drive.id) }
-                        .disabled(store.isSyncing)
-                }
+                // "Re-read only what differs" lived here, driven by the tree
+                // comparison. It is gone with the tree: under k-of-n a
+                // difference between two devices is the placement, not damage,
+                // so the action would have aimed expensive reads at healthy
+                // files. Finding copies the archive is short is now the
+                // placement audit, which queues copies rather than reads.
+                Button("Check the archive is fully placed") { store.auditPlacement() }
+                    .disabled(store.isSyncing)
+                // Removing a replica used to delete the file and leave its
+                // folder, so a drained drive kept up to 256 empty directories.
+                // Removal prunes as it goes now; this clears what earlier
+                // versions left, which is a folder the user can see and the
+                // app otherwise would not revisit.
+                Button("Tidy up empty folders") { store.tidyEmptyReplicaFolders(drive.id) }
+                    .disabled(store.isSyncing || store.reachablePaths[drive.id] == nil)
                 if summary.verifyCount > 0 {
                     Button("Clear \(Formatters.count(summary.verifyCount, "queued check"))", role: .destructive) {
                         store.clearQueuedTasks(for: drive.id, action: .verify)
@@ -237,7 +245,13 @@ struct DriveCard: View {
                 // here under the app's own names while the originals sat on it
                 // all along; reading the drive back finds them and credits the
                 // copy it already had.
-                if let mount = store.reachablePaths[drive.id] {
+                // External volumes only. A host device's mount *is* the app's
+                // own copy folder, so this would sweep the archive's own
+                // replicas back in as a user folder — the store refuses that
+                // now, but offering an action whose only outcome is an error is
+                // its own bug. There is nothing to find either way: the user
+                // never put anything there.
+                if drive.kind == .externalVolume, let mount = store.reachablePaths[drive.id] {
                     Divider()
                     Button("Look for copies this drive already has") {
                         store.importFolders([mount])

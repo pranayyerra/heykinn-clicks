@@ -91,6 +91,19 @@ extension CatalogStore {
         ])
     }
 
+    /// Forgets one device's claim on one asset.
+    ///
+    /// Only for claims that were never made good — an intention to copy onto a
+    /// device the asset's source no longer names. A row describing bytes that
+    /// exist is never dropped this way: losing the record of a copy is how the
+    /// app ends up unable to find, check, or reclaim it.
+    func deleteReplicaState(assetID: UUID, targetID: UUID) throws {
+        try database.run(
+            "DELETE FROM replica_states WHERE asset_id = ? AND drive_id = ?;",
+            [.text(assetID.uuidString), .text(targetID.uuidString)]
+        )
+    }
+
     func fetchReplicaStates() throws -> [TargetReplicaState] {
         try database.query("""
         SELECT asset_id, drive_id, state, relative_path, last_verified_at,

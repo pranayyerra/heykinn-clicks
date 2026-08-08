@@ -49,6 +49,53 @@ struct StagingStore {
         if FileManager.default.fileExists(atPath: target.path) {
             try FileManager.default.removeItem(at: target)
         }
+        // The file is gone; its bucket usually is too. Staging buckets are the
+        // same two-hex-character layout as replica buckets and were left behind
+        // by the same oversight — a reclaimed staging area kept up to 256 empty
+        // directories, which is what the user sees when they open the folder.
+        pruneEmptyBucket(target.deletingLastPathComponent())
+    }
+
+    /// Removes a staging bucket directory that has nothing left in it.
+    ///
+    /// The same narrow contract as `ReplicationService.pruneEmptyBucket`:
+    /// refuses anything that is not *strictly inside* the staging root, so a
+    /// caller passing the wrong directory cannot reach a path the user owns,
+    /// and never removes the root itself — `stage` recreates buckets on demand
+    /// but relies on the root being there.
+    ///
+    /// Failure is silent. An empty directory left behind is untidy; nothing
+    /// about the archive is wrong because of it.
+    private func pruneEmptyBucket(_ directory: URL) {
+        let root = rootURL.standardizedFileURL.path
+        let target = directory.standardizedFileURL.path
+        guard target != root, target.hasPrefix(root + "/") else { return }
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil, options: []
+        ) else { return }
+        guard contents.isEmpty else { return }
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// Removes every empty bucket under the staging root.
+    ///
+    /// The sweep for buckets earlier versions left behind, which `remove`
+    /// alone never revisits. Bounded by the number of buckets (256), not by
+    /// the number of files staged.
+    @discardableResult
+    func pruneEmptyBuckets() -> Int {
+        guard let buckets = try? FileManager.default.contentsOfDirectory(
+            at: rootURL, includingPropertiesForKeys: [.isDirectoryKey], options: []
+        ) else { return 0 }
+        var removed = 0
+        for bucket in buckets {
+            let isDirectory = (try? bucket.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory
+            guard isDirectory == true else { continue }
+            let before = FileManager.default.fileExists(atPath: bucket.path)
+            pruneEmptyBucket(bucket)
+            if before, !FileManager.default.fileExists(atPath: bucket.path) { removed += 1 }
+        }
+        return removed
     }
 
     var totalBytes: Int64 {

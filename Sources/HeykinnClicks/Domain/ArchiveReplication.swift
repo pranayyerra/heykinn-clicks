@@ -101,11 +101,11 @@ struct ExportPart: Identifiable, Hashable {
 
     func redundancy(
         acrossTargets managedTargetIDs: Set<UUID>,
-        policy: LocalRedundancyPolicy = .default
+        copiesRequired: Int = 2
     ) -> PartRedundancy {
         let holders = targetIDs.intersection(managedTargetIDs)
         if holders.isEmpty { return .absent }
-        guard policy.isSatisfied(byCopies: holders.count) else { return .singleCopy }
+        guard holders.count >= copiesRequired else { return .singleCopy }
         // A lone copy under a one-copy policy is everything the policy asks
         // for. None of the evidence grades below can apply to it — they are
         // all agreements between copies — so answering with any of them, or
@@ -121,34 +121,80 @@ struct ExportPart: Identifiable, Hashable {
         return .singleCopy
     }
 
-    /// Drives that should receive this part for the policy to be satisfied.
+    /// Drives that should receive this part for its export to be kept the way
+    /// it asks.
+    ///
+    /// The set passed in is the export's **named destinations**, not every
+    /// device registered. Passing every device was the first wrong model
+    /// surviving in the export path: a Mac that is registered and holds none of
+    /// the zips was reported as owing a copy of all of them for ever, and no
+    /// change to the export's settings could clear it, because its settings
+    /// were never consulted.
     func targetsNeedingACopy(managedTargetIDs: Set<UUID>) -> Set<UUID> {
         managedTargetIDs.subtracting(targetIDs)
     }
 }
 
-/// What must happen for an export to satisfy the local redundancy policy.
+/// What must happen for an export to be kept the way its source asks.
 struct ArchiveReplicationPlan {
     var parts: [ExportPart]
+    /// Every registered device. The fallback for a set whose source has not
+    /// been recorded yet, and nothing else — see `destinations(forSet:)`.
     var managedTargetIDs: Set<UUID>
-    var policy: LocalRedundancyPolicy = .default
+
+    /// The devices each export names, keyed by set id.
+    ///
+    /// An export is kept where its source says, exactly like a folder. Grading
+    /// its parts against every registered device instead reported a device that
+    /// holds none of the zips — and was never asked to — as permanently owing a
+    /// copy of all of them, and had the transfer planner trying to send them.
+    var destinationsBySetID: [String: Set<UUID>] = [:]
+
+    /// How many copies each export set asks for, keyed by set id.
+    ///
+    /// Per set, because one Google export is one source and carries its own
+    /// copy count — two exports on one machine are entitled to different
+    /// answers. A set with no entry falls back below; that is the state before
+    /// an export has been given a source of its own, not a second policy.
+    var copiesRequiredBySetID: [String: Int] = [:]
+    /// What a set with no recorded source asks for.
+    var defaultCopiesRequired: Int = 2
+
+    func copiesRequired(forSet setID: String) -> Int {
+        copiesRequiredBySetID[setID] ?? defaultCopiesRequired
+    }
+
+    /// Where this export belongs. Falls back to every registered device only
+    /// for a set with no source yet — a download the app has found and nobody
+    /// has been asked about.
+    func destinations(forSet setID: String) -> Set<UUID> {
+        destinationsBySetID[setID] ?? managedTargetIDs
+    }
+
+    func redundancy(of part: ExportPart) -> PartRedundancy {
+        part.redundancy(
+            acrossTargets: destinations(forSet: part.setID),
+            copiesRequired: copiesRequired(forSet: part.setID)
+        )
+    }
+
+    /// Devices this part still owes a copy to, out of the ones its export names.
+    func targetsNeedingACopy(of part: ExportPart) -> Set<UUID> {
+        part.targetsNeedingACopy(managedTargetIDs: destinations(forSet: part.setID))
+    }
 
     var partsMeetingPolicy: [ExportPart] {
-        parts.filter {
-            $0.redundancy(acrossTargets: managedTargetIDs, policy: policy).meetsPolicy
-        }
+        parts.filter { redundancy(of: $0).meetsPolicy }
     }
 
     var partsNeedingWork: [ExportPart] {
-        parts.filter {
-            !$0.redundancy(acrossTargets: managedTargetIDs, policy: policy).meetsPolicy
-        }
+        parts.filter { !redundancy(of: $0).meetsPolicy }
     }
 
     /// Bytes still to move for the whole export to meet the policy.
     var bytesOutstanding: Int64 {
         partsNeedingWork.reduce(0) { total, part in
-            total + part.sizeBytes * Int64(max(part.targetsNeedingACopy(managedTargetIDs: managedTargetIDs).count, 0))
+            total + part.sizeBytes * Int64(max(targetsNeedingACopy(of: part).count, 0))
         }
     }
 
@@ -163,7 +209,9 @@ enum ArchiveReplicationPlanner {
     static func plan(
         archives: [TakeoutArchive],
         managedTargetIDs: Set<UUID>,
-        policy: LocalRedundancyPolicy = .default
+        destinationsBySetID: [String: Set<UUID>] = [:],
+        copiesRequiredBySetID: [String: Int] = [:],
+        defaultCopiesRequired: Int = 2
     ) -> ArchiveReplicationPlan {
         var byPart: [String: ExportPart] = [:]
         for archive in archives {
@@ -195,7 +243,9 @@ enum ArchiveReplicationPlanner {
         return ArchiveReplicationPlan(
             parts: byPart.values.sorted { ($0.setID, $0.partNumber) < ($1.setID, $1.partNumber) },
             managedTargetIDs: managedTargetIDs,
-            policy: policy
+            destinationsBySetID: destinationsBySetID,
+            copiesRequiredBySetID: copiesRequiredBySetID,
+            defaultCopiesRequired: defaultCopiesRequired
         )
     }
 }
@@ -336,14 +386,15 @@ enum ExportPartTransferPlanner {
         availableHoldingBytes: Int64
     ) -> ExportPartTransferPlan {
         var result = ExportPartTransferPlan()
-        let managed = replication.managedTargetIDs
         let partsByID = Dictionary(uniqueKeysWithValues: replication.parts.map { ($0.id, $0) })
         var held = Dictionary(uniqueKeysWithValues: heldParts.map { ($0.id, $0) })
 
         // 1. Deliver what is already waiting.
         for (id, part) in held.sorted(by: { $0.key < $1.key }) {
             let catalogued = partsByID[id]
-            let needing = catalogued?.targetsNeedingACopy(managedTargetIDs: managed) ?? managed
+            // The devices this export names, not every device registered.
+            let named = replication.destinations(forSet: part.setID)
+            let needing = catalogued.map { replication.targetsNeedingACopy(of: $0) } ?? named
             guard let recipient = needing.sorted(by: { $0.uuidString < $1.uuidString }).first else {
                 // Every managed drive already has it; the corridor is done
                 // with this one.
@@ -366,7 +417,7 @@ enum ExportPartTransferPlanner {
             // Already in the corridor: it is handled above, or waiting for its
             // recipient. Either way, do not copy it a second time.
             if held[part.id] != nil { continue }
-            let recipients = part.targetsNeedingACopy(managedTargetIDs: managed)
+            let recipients = replication.targetsNeedingACopy(of: part)
             guard !recipients.isEmpty else { continue }
             // Only a zip can be handed to another drive as-is. An extracted
             // folder is the same content, but copying a directory of tens of

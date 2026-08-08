@@ -9,6 +9,8 @@ struct SettingsView: View {
                 .tabItem { Label("Automation", systemImage: "wand.and.stars") }
             SafetySettings()
                 .tabItem { Label("Safety", systemImage: "checkmark.shield") }
+            AccessSettings()
+                .tabItem { Label("Access", systemImage: "key") }
         }
         // Fixed rather than content-sized: the tabs differ in height, and a
         // window that resizes as you switch tabs reads as a glitch.
@@ -50,6 +52,124 @@ private struct AutomationSettings: View {
     }
 }
 
+/// Every disk the app has been given a standing answer about, and the way to
+/// take that answer back.
+///
+/// This is the other half of the connect prompt's "remember this". Shipping
+/// the remembering without the revoking is how somebody ends up with a drive
+/// the app silently refuses to ask about and no screen that admits it exists —
+/// which is what the previous `ignoredVolumeKeys` preference did.
+private struct AccessSettings: View {
+    @EnvironmentObject private var store: AppStore
+    @State private var confirmingRevokeAll = false
+
+    /// Through the store's mirror, not `accessGrants` directly: views observe
+    /// `AppStore`, so reading the grant store straight would render once and
+    /// never update — a revoked row would stay on screen.
+    private var grants: [AccessGrant] { store.accessGrantList }
+
+    var body: some View {
+        Form {
+            Section {
+                Text("When you answer for a drive, the answer is kept so you are not asked again each time you plug it in. Everything kept is listed here.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Label(
+                    "Forgetting an answer changes nothing on the disk and unregisters nothing. The app simply asks about it again next time.",
+                    systemImage: "info.circle"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            }
+
+            Section("Disks you have answered for") {
+                if grants.isEmpty {
+                    Text("None yet. Connect a drive and the app will ask what it should be.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(grants) { grant in
+                        row(grant)
+                    }
+                }
+            }
+
+            if !grants.isEmpty {
+                Section {
+                    HStack {
+                        Spacer()
+                        Button("Forget all answers", role: .destructive) {
+                            confirmingRevokeAll = true
+                        }
+                    }
+                    .confirmationDialog(
+                        "Forget every remembered answer?",
+                        isPresented: $confirmingRevokeAll,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Forget all", role: .destructive) { store.revokeAllAccessGrants() }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        Text("Nothing on any disk is changed and no registered device is unregistered. Each drive will be asked about again the next time it is connected.")
+                    }
+                }
+            }
+
+            Section("If macOS keeps asking as well") {
+                Text("macOS has its own permission for reading external drives, separate from anything here. It is tied to the app's signature, so a build you compiled yourself is treated as a new app each time and macOS asks again. A signed release is not. Check System Settings → Privacy & Security → Files and Folders.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .formStyle(.grouped)
+    }
+
+    private func row(_ grant: AccessGrant) -> some View {
+        let reachable = store.isAccessGrantReachable(grant)
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: grant.decision.symbol)
+                .foregroundStyle(reachable ? Color.accentColor : Color.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(grant.displayName)
+                        .font(.callout.weight(.medium))
+                    Text(reachable ? "Connected" : "Not connected")
+                        .font(.caption2)
+                        .foregroundStyle(reachable ? Color.green : Color.secondary)
+                }
+                Text(grant.decision.explanation)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // The path even when the disk is absent: it is the only thing
+                // that tells two identically-named drives apart, and a disk
+                // being unplugged is exactly when someone wants to know which
+                // one this row is about.
+                if let path = grant.lastKnownPath {
+                    Text(reachable ? path : "Last seen at \(path)")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .textSelection(.enabled)
+                        .lineLimit(1)
+                        .truncationMode(.head)
+                }
+                Text("Decided \(Formatters.relative(grant.decidedAt))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 8)
+            Button("Forget") { store.revokeAccessGrant(grant.volumeKey) }
+                .buttonStyle(.link)
+                .font(.callout)
+        }
+        .padding(.vertical, 2)
+    }
+}
+
 private struct SafetySettings: View {
     @EnvironmentObject private var store: AppStore
 
@@ -57,7 +177,7 @@ private struct SafetySettings: View {
         Form {
             Section("How many copies") {
                 Label(
-                    "Every Local photo is kept on \(store.redundancyPolicy.description). Change that under Policies, where it sits with the rules it belongs to.",
+                    "Each source says how many copies of its photos to keep and which devices hold them. Change that under Sources, next to the photos it governs — there is no single setting for the whole archive.",
                     systemImage: "square.stack.3d.up"
                 )
                 .font(.callout)
@@ -69,7 +189,7 @@ private struct SafetySettings: View {
                     .foregroundStyle(.secondary)
             }
             Section("Checking for damage") {
-                Text("Checking re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It reads every byte, so it runs in batches rather than all at once, from Drives & Health.")
+                Text("Checking re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It reads every byte, so it runs in batches rather than all at once, from Safety → Drives.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             }

@@ -12,6 +12,11 @@ final class CatalogStore {
     init(databasePath: String) throws {
         database = try SQLiteDatabase(path: databasePath)
         try createSchema()
+        // Additive, and after the base schema so the tables it alters exist.
+        // `CREATE TABLE IF NOT EXISTS` cannot add a column to a table that is
+        // already there, so anything introduced after the first release has to
+        // come through here — see `CatalogStore+Sources.swift`.
+        try createSourceSchema()
     }
 
     private func createSchema() throws {

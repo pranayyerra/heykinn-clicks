@@ -139,15 +139,13 @@ final class ArchiveReplicationTests: XCTestCase {
             archive(part: 1, drive: a, size: 100),
             archive(part: 1, drive: b, size: 100),
         ]
-        let threeCopies = LocalRedundancyPolicy(desiredCopies: 3)
-
-        let underDefault = ArchiveReplicationPlanner.plan(
+                let underDefault = ArchiveReplicationPlanner.plan(
             archives: archives, managedTargetIDs: [a, b, c]
         )
         XCTAssertTrue(underDefault.isSatisfied, "Two copies satisfies the default policy")
 
         let underThree = ArchiveReplicationPlanner.plan(
-            archives: archives, managedTargetIDs: [a, b, c], policy: threeCopies
+            archives: archives, managedTargetIDs: [a, b, c], defaultCopiesRequired: 3
         )
         XCTAssertFalse(underThree.isSatisfied, "Two copies does not satisfy a three-copy policy")
         XCTAssertEqual(underThree.partsNeedingWork.first?.targetsNeedingACopy(managedTargetIDs: [a, b, c]), [c])
@@ -160,12 +158,11 @@ final class ArchiveReplicationTests: XCTestCase {
     /// shortfall that no amount of copying could ever clear.
     func testOneCopyUnderAOneCopyPolicyIsNotAShortfall() {
         let a = UUID()
-        let onlyCopy = LocalRedundancyPolicy(desiredCopies: 1)
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(part: 1, drive: a, size: 5_000)],
-            managedTargetIDs: [a], policy: onlyCopy
+            managedTargetIDs: [a], defaultCopiesRequired: 1
         )
-        let redundancy = plan.parts[0].redundancy(acrossTargets: [a], policy: onlyCopy)
+        let redundancy = plan.parts[0].redundancy(acrossTargets: [a], copiesRequired: 1)
 
         XCTAssertEqual(redundancy, .singleCopyByPolicy)
         XCTAssertTrue(redundancy.meetsPolicy, "One copy is what was asked for")
@@ -196,15 +193,14 @@ final class ArchiveReplicationTests: XCTestCase {
     /// reported at any of the grades that mean "the copies agree".
     func testASingleCopyIsNeverGradedAsVerifiedHoweverMuchIsKnownAboutIt() {
         let a = UUID()
-        let onlyCopy = LocalRedundancyPolicy(desiredCopies: 1)
         var hashed = archive(part: 1, drive: a, hash: "abc")
         hashed.quickChecksum = "abc-quick"
         let plan = ArchiveReplicationPlanner.plan(
-            archives: [hashed], managedTargetIDs: [a], policy: onlyCopy
+            archives: [hashed], managedTargetIDs: [a], defaultCopiesRequired: 1
         )
 
         XCTAssertEqual(
-            plan.parts[0].redundancy(acrossTargets: [a], policy: onlyCopy), .singleCopyByPolicy,
+            plan.parts[0].redundancy(acrossTargets: [a], copiesRequired: 1), .singleCopyByPolicy,
             "A hash agrees with nothing until there is a second copy to hold it against"
         )
         XCTAssertFalse(plan.parts[0].hashesAgree)
@@ -216,12 +212,12 @@ final class ArchiveReplicationTests: XCTestCase {
     /// a lone copy would pass a comparison against itself and be recorded as
     /// verified across targets.
     func testAComparisonNeedsTwoCopiesEvenWhenThePolicyAsksForOne() {
-        XCTAssertEqual(LocalRedundancyPolicy(desiredCopies: 1).copiesNeededToCompare, 2)
-        XCTAssertEqual(LocalRedundancyPolicy(desiredCopies: 2).copiesNeededToCompare, 2)
-        XCTAssertEqual(LocalRedundancyPolicy(desiredCopies: 3).copiesNeededToCompare, 3)
+        XCTAssertEqual(copiesNeededToCompare(forCopies: 1), 2)
+        XCTAssertEqual(copiesNeededToCompare(forCopies: 2), 2)
+        XCTAssertEqual(copiesNeededToCompare(forCopies: 3), 3)
         XCTAssertEqual(
-            LocalRedundancyPolicy(desiredCopies: 1).description, "one copy",
-            "A policy the user can actually set has to read as English"
+            Formatters.copies(1), "one copy",
+            "A number the user can actually set has to read as English"
         )
     }
 
@@ -230,20 +226,19 @@ final class ArchiveReplicationTests: XCTestCase {
     /// complete as it stands. Both meet the policy, by different routes.
     func testAnExtraCopyIsStillGradedWhenThePolicyOnlyAsksForOne() {
         let a = UUID(), b = UUID()
-        let onlyCopy = LocalRedundancyPolicy(desiredCopies: 1)
         let plan = ArchiveReplicationPlanner.plan(
             archives: [
                 archive(part: 1, drive: a, size: 100),
                 archive(part: 1, drive: b, size: 100),
                 archive(part: 2, drive: a, size: 100),
             ],
-            managedTargetIDs: [a, b], policy: onlyCopy
+            managedTargetIDs: [a, b], defaultCopiesRequired: 1
         )
         XCTAssertEqual(
-            plan.parts[0].redundancy(acrossTargets: [a, b], policy: onlyCopy), .redundantUnverified
+            plan.parts[0].redundancy(acrossTargets: [a, b], copiesRequired: 1), .redundantUnverified
         )
         XCTAssertEqual(
-            plan.parts[1].redundancy(acrossTargets: [a, b], policy: onlyCopy), .singleCopyByPolicy
+            plan.parts[1].redundancy(acrossTargets: [a, b], copiesRequired: 1), .singleCopyByPolicy
         )
         XCTAssertTrue(plan.isSatisfied)
     }
@@ -253,10 +248,9 @@ final class ArchiveReplicationTests: XCTestCase {
     /// waiting for a drive that the policy never asked for.
     func testASingleTargetInstallHasNoTransfersToRun() {
         let a = UUID()
-        let onlyCopy = LocalRedundancyPolicy(desiredCopies: 1)
         let replication = ArchiveReplicationPlanner.plan(
             archives: [archive(part: 1, drive: a, size: 5_000)],
-            managedTargetIDs: [a], policy: onlyCopy
+            managedTargetIDs: [a], defaultCopiesRequired: 1
         )
         let transfers = ExportPartTransferPlanner.plan(
             replication: replication,
@@ -284,16 +278,17 @@ final class ArchiveReplicationTests: XCTestCase {
             )
         }
         XCTAssertEqual(
-            ProtectionEvaluator.protectionStates(for: [asset], replicaStates: replicas)[asset.id],
+            ProtectionEvaluator.protectionStates(
+                for: [asset], replicaStates: replicas, desiredCopies: { _ in 2 }
+            )[asset.id],
             .fullyReplicated
         )
         XCTAssertEqual(
             ProtectionEvaluator.protectionStates(
-                for: [asset], replicaStates: replicas,
-                policy: LocalRedundancyPolicy(desiredCopies: 3)
+                for: [asset], replicaStates: replicas, desiredCopies: { _ in 3 }
             )[asset.id],
             .replicatedToOneDrive,
-            "Under a three-copy policy, two copies is not full protection"
+            "Where a source asks for three copies, two is not full protection"
         )
     }
 

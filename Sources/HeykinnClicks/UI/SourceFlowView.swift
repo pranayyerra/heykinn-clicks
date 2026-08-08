@@ -64,11 +64,11 @@ struct PhotoSource: Identifiable {
     }
 }
 
-/// Where photos come *in* from, drawn the way Storage & Health draws where
+/// Where photos come *in* from, drawn the way the drives screen draws where
 /// copies are *held*.
 ///
 /// The two screens answer opposite halves of one question and had nothing in
-/// common to look at: Storage & Health puts the archive in the middle with a
+/// common to look at: the drives screen puts the archive in the middle with a
 /// node for every place holding it, and Sources was a stack of cards whose
 /// relationship to each other, and to the archive, the reader had to assemble
 /// themselves. So this states it: every source on the left, the archive on the

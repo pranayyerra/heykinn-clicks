@@ -48,9 +48,9 @@ struct DrivesView: View {
             return "\(Formatters.count(damaged, "photo")) \(damaged == 1 ? "has" : "have") a copy that no longer matches."
         }
         if short > 0 {
-            return "\(short.formatted()) of \(store.protectionStates.count.formatted()) photos do not have \(store.redundancyPolicy.description) yet."
+            return "\(short.formatted()) of \(store.protectionStates.count.formatted()) photos are not yet on all the devices their source names."
         }
-        return "Yes — every photo has \(store.redundancyPolicy.description)."
+        return "Yes — every photo is on the devices its source names."
     }
 
     private func verdictDetail(reachable: Int, holders: Int) -> String {
@@ -154,7 +154,7 @@ struct DrivesView: View {
             }
             .padding(20)
         }
-        .navigationTitle("Storage & Health")
+        .navigationTitle("Drives")
         .toolbar {
             ToolbarItem {
                 Button {
@@ -227,6 +227,15 @@ struct DrivesView: View {
                 state = .damaged(count: breakdown.driftPhotos)
             } else if breakdown.expectedPhotos > 0, breakdown.presentPhotos < breakdown.expectedPhotos {
                 state = .filling(photosHeld: breakdown.presentPhotos, photosExpected: breakdown.expectedPhotos)
+            } else if breakdown.expectedPhotos == 0 {
+                // Holds nothing and is owed nothing, because no group names it.
+                // This fell through to `.complete` and read "Complete copy" —
+                // the every-device-holds-everything model talking. Under
+                // k-of-n a device is complete when it holds what it was asked
+                // to hold, and one asked for nothing is empty, not complete.
+                // The card underneath already said "Nothing to hold yet", so
+                // the two halves of the same screen contradicted each other.
+                state = .empty
             } else {
                 state = .complete
             }
@@ -241,14 +250,19 @@ struct DrivesView: View {
             )
         }
 
+        // This Mac is adopted as a target on first launch, so an empty slot
+        // here means it was deliberately forgotten — the supported way to run
+        // an archive the boot disk cannot hold. The detail says what taking it
+        // back would cost, since that is the decision being offered.
         if !store.targets.contains(where: { $0.kind == .hostDevice }) {
+            let needed = Formatters.bytes.string(fromByteCount: store.localArchiveBytes)
             result.append(ArchivePlace(
                 id: Self.hostDevicePlaceID,
-                name: "This device",
+                name: store.hostDeviceName,
                 symbol: "laptopcomputer",
                 state: .empty,
                 isReachable: true,
-                detail: "No copy here · \(Formatters.bytes.string(fromByteCount: store.localArchiveBytes)) to add",
+                detail: "Holding no copy · \(needed) to add",
                 target: nil
             ))
         }
@@ -367,13 +381,19 @@ struct DrivesView: View {
                     registrationCandidate = nil
                 }
                 .buttonStyle(.borderedProminent)
-                .disabled(store.targets.count >= store.redundancyPolicy.desiredCopies)
             }
-            if store.targets.count >= store.redundancyPolicy.desiredCopies {
-                Text("\(store.redundancyPolicy.desiredCopies) managed drive(s) are already registered, which is what the local redundancy policy asks for.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-            }
+            // No cap: copies are per photo, not devices in total, and refusing
+            // a drive because two copies were asked for confused the two.
+            //
+            // Nor does adding a device change where anything goes. This line
+            // used to say the archive would spread itself across devices "by
+            // whichever has the most room", which was the model before this
+            // one — the app choosing destinations is precisely what SPEC
+            // invariant 4 rules out.
+            Text("Registering a drive makes it available to name when you set up a source. Nothing moves on its own: a source's photos go to the devices you picked for it, so this drive stays empty until you name it under Sources.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
         .padding(24)
         .frame(width: 460)

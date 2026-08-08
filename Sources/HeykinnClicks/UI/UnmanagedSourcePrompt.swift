@@ -52,13 +52,19 @@ struct UnmanagedSourcePrompt: View {
             }
 
             HStack {
+                // Recorded as a decision now rather than a one-way suppression
+                // key, so it appears in Settings → Access and can be taken
+                // back. The wording says where, because a preference the user
+                // cannot find again is the thing this replaced.
                 Button("Don't ask again for this drive") {
                     let urls = offer.urls
-                    store.ignoreVolumePermanently(offer.volume)
+                    let volume = offer.volume
                     store.unmanagedSourceOffer = nil
+                    store.decide(.ignore, for: volume, remember: true)
                     store.importFolders(urls, offeringRegistration: false)
                     dismiss()
                 }
+                .help("Undo this later in Settings → Access.")
                 Spacer()
                 Button("Cancel") {
                     store.unmanagedSourceOffer = nil

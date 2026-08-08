@@ -1,4 +1,5 @@
 import SwiftUI
+import AppKit
 
 enum SidebarSection: String, CaseIterable, Identifiable {
     case overview
@@ -18,7 +19,7 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .overview: return "Overview"
         case .library: return "Library"
         case .duplicates: return "Duplicates"
-        case .targets: return "Storage & Health"
+        case .targets: return "Drives"
         case .violations: return "Violations"
         case .policies: return "Policies"
         case .migrations: return "Migrations"
@@ -41,8 +42,17 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         }
     }
 
+    /// Which question this page belongs under.
+    ///
+    /// Two sections — violations and migrations — are not tabs anywhere: they
+    /// are answers to "is it safe" that are usually empty, and they render as
+    /// sections of the safety page rather than as permanent destinations. They
+    /// still have to *belong* somewhere, or the sidebar highlights Overview
+    /// while showing one of them and the reader has no way back.
     var question: Question {
-        Question.allCases.first { $0.pages.contains(self) } ?? .overview
+        Question.allCases.first { $0.pages.contains(self) }
+            ?? Question.allCases.first { $0.carriedSections.contains(self) }
+            ?? .overview
     }
 
     /// What this page's badge is counting, so "1" can say what it is one of.
@@ -68,13 +78,13 @@ enum SidebarSection: String, CaseIterable, Identifiable {
 /// in their head to find anything: "Violations" and "Migrations" are the names
 /// of mechanisms, not of questions, and the same fact turned up under several
 /// of them — a lost copy appeared on Overview, in Violations, and in Activity,
-/// and an export's health was split across Sources and Storage & Health.
+/// and an export's health was split across Sources and the drives screen.
 ///
 /// So the top level is the questions, and the mechanisms are pages inside the
 /// question they answer. Nothing was deleted and no screen was merged: what
 /// changed is that finding one no longer requires knowing what the app calls
 /// it. The subtitle carries the plain wording, because "Is it safe?" is the
-/// question and "Storage & Health" is the answer's filing system.
+/// question and "Drives" is the answer's filing system.
 enum Question: String, CaseIterable, Identifiable {
     case overview
     case have
@@ -141,25 +151,58 @@ enum Question: String, CaseIterable, Identifiable {
         case .safe: return [.targets, .policies, .activity]
         }
     }
+
+    /// Everything whose count this question is answerable for, including the
+    /// two that are sections of a page rather than pages of their own.
+    ///
+    /// Without this the sidebar sat silent while the safety page was carrying
+    /// twenty-five damaged copies: the badge counted pages, violations was not
+    /// a page any more, and so the one number the whole sidebar exists to
+    /// surface was the one it could not see. Worst first.
+    var carriedSections: [SidebarSection] {
+        switch self {
+        case .safe: return [.violations, .migrations] + pages
+        default: return pages
+        }
+    }
 }
 
 struct ContentView: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var commands: AppCommandBus
     @Environment(\.openSettings) private var openSettings
 
-    /// The single source of truth. The sidebar shows which question this page
-    /// belongs to; picking a question moves to a page inside it.
-    @State private var page: SidebarSection = .overview
+    /// The single source of truth, kept across launches.
+    ///
+    /// It was `@State`, so quitting mid-import and reopening put the reader
+    /// back on Overview — the app forgot what they were doing every time, which
+    /// is the one piece of state a window is expected to remember.
+    @AppStorage("ui.lastViewedPage") private var storedPage = SidebarSection.overview.rawValue
     /// Where the reader was last inside each question, so coming back to one
     /// returns them to the page they were reading rather than to its first.
+    /// In-session only: this is a convenience within a sitting, not a setting.
     @State private var lastPage: [Question: SidebarSection] = [:]
+
+    private var page: SidebarSection {
+        SidebarSection(rawValue: storedPage) ?? .overview
+    }
+
+    private var pageSelection: Binding<SidebarSection> {
+        Binding(
+            get: { page },
+            set: { newPage in
+                storedPage = newPage.rawValue
+                lastPage[newPage.question] = newPage
+            }
+        )
+    }
 
     private var questionSelection: Binding<Question?> {
         Binding(
             get: { page.question },
             set: { question in
                 guard let question else { return }
-                page = lastPage[question] ?? question.pages[0]
+                pageSelection.wrappedValue = lastPage[question] ?? question.pages[0]
             }
         )
     }
@@ -217,9 +260,6 @@ struct ContentView: View {
         } detail: {
             questionDetail
         }
-        .onChange(of: page) { _, newPage in
-            lastPage[newPage.question] = newPage
-        }
         .sheet(item: $store.connectPrompt) { volume in
             DriveConnectPrompt(volume: volume)
         }
@@ -229,13 +269,53 @@ struct ContentView: View {
         .sheet(item: $store.unmanagedSourceOffer) { offer in
             UnmanagedSourcePrompt(offer: offer)
         }
+        .sheet(isPresented: $commands.isHelpPresented) {
+            HelpView()
+        }
+        // The menu bar's requests, acted on here because this is where the
+        // selection and the pickers live.
+        .onChange(of: commands.requestedPage) { _, requested in
+            guard let requested else { return }
+            pageSelection.wrappedValue = requested
+            commands.requestedPage = nil
+        }
+        .fileImporter(
+            isPresented: $commands.isImportPickerPresented,
+            allowedContentTypes: [.folder, .image, .movie],
+            allowsMultipleSelection: true
+        ) { result in
+            // Asks before reading. Placement needs a destination, and choosing
+            // one silently is the app deciding where somebody's photos live.
+            if case .success(let urls) = result { store.beginAddingSource(urls) }
+        }
+        .sheet(item: $store.pendingSourceSetup) { AddSourceSheet(setup: $0) }
+        .fileImporter(
+            isPresented: $commands.isExportSearchPickerPresented,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            if case .success(let urls) = result, let url = urls.first {
+                store.scanForTakeout(rootURL: url, targetID: nil)
+            }
+        }
+        // Titled for what happened rather than for the app's embarrassment.
+        // "Something went wrong" is the wording of a crash reporter: it tells
+        // the reader nothing, and it frames a refused registration or an
+        // unplugged drive — both of which are the app working correctly — as a
+        // malfunction. The message underneath is often a whole explanation, so
+        // it is worth being able to keep.
         .alert(
-            "Something went wrong",
+            "That didn’t finish",
             isPresented: Binding(
                 get: { store.lastError != nil },
                 set: { if !$0 { store.lastError = nil } }
             )
         ) {
+            Button("Copy the details") {
+                let pasteboard = NSPasteboard.general
+                pasteboard.clearContents()
+                pasteboard.setString(store.lastError ?? "", forType: .string)
+            }
             Button("OK", role: .cancel) {}
         } message: {
             Text(store.lastError ?? "")
@@ -250,13 +330,14 @@ struct ContentView: View {
         let pages = page.question.pages
         VStack(spacing: 0) {
             if pages.count > 1 {
-                Picker("", selection: $page) {
+                Picker("", selection: pageSelection) {
                     ForEach(pages) { candidate in
                         Text(label(for: candidate)).tag(candidate)
                     }
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
+                .accessibilityLabel("Pages in \(page.question.title)")
                 .padding(.horizontal, 20)
                 .padding(.top, 12)
                 .padding(.bottom, 4)
@@ -281,7 +362,7 @@ struct ContentView: View {
         case .overview:
             OverviewView(selection: Binding(
                 get: { page },
-                set: { if let destination = $0 { page = destination } }
+                set: { if let destination = $0 { pageSelection.wrappedValue = destination } }
             ))
         case .library: LibraryView()
         case .duplicates: DuplicatesView()
@@ -314,7 +395,7 @@ struct ContentView: View {
     /// what the app is worried about, which is the work the badge was supposed
     /// to save them. One item says what it is; several say how many of what.
     private func badgeText(for question: Question) -> String? {
-        let carried = question.pages
+        let carried = question.carriedSections
             .map { (page: $0, count: badge(for: $0)) }
             .filter { $0.count > 0 }
         // The first page that has something, named — rather than a sum across

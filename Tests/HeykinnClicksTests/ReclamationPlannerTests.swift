@@ -6,7 +6,8 @@ import XCTest
 /// ready to give up a cloud original.
 final class ReclamationPlannerTests: XCTestCase {
 
-    private let policy = LocalRedundancyPolicy(desiredCopies: 2)
+    /// What every source in these fixtures asks for.
+    private let copies = 2
     private let first = UUID()
     private let second = UUID()
 
@@ -41,15 +42,13 @@ final class ReclamationPlannerTests: XCTestCase {
 
     private func plan(
         _ asset: Asset,
-        replicas: [TargetReplicaState],
-        agreeing: Set<UUID>? = nil
+        replicas: [TargetReplicaState]
     ) -> ReclamationPlanner.Plan {
         ReclamationPlanner.plan(
             assets: [asset],
             replicasByAssetID: [asset.id: replicas],
             registeredTargetIDs: [first, second],
-            agreeingTargetIDs: agreeing ?? [first, second],
-            policy: policy
+            desiredCopies: { _ in copies }
         )
     }
 
@@ -84,14 +83,21 @@ final class ReclamationPlannerTests: XCTestCase {
         XCTAssertEqual(result.blocked[.notReadBack], 1)
     }
 
-    /// Targets that disagree are an open question about the content, and an
-    /// open question is not the ground to delete an original from.
-    func testDisagreeingTargetsBlockRelease() {
+    /// Devices holding different content is the normal state under k-of-n, so
+    /// it must not block release on its own.
+    ///
+    /// This replaces `testDisagreeingTargetsBlockRelease`, which asserted the
+    /// opposite. That test passed and encoded a rule that would have frozen
+    /// reclamation permanently the moment devices stopped mirroring each other
+    /// — the preconditions belong to the asset, not to how two disks compare.
+    func testDevicesHoldingDifferentContentDoesNotBlockRelease() {
         let asset = makeAsset()
-        let result = plan(asset, replicas: replicas(asset, on: [first, second]), agreeing: [first])
+        // Proven on both devices; whatever else those devices hold is
+        // irrelevant to this asset's release.
+        let result = plan(asset, replicas: replicas(asset, on: [first, second]))
 
-        XCTAssertTrue(result.releasableAssetIDs.isEmpty)
-        XCTAssertEqual(result.blocked[.targetsDisagree], 1)
+        XCTAssertEqual(result.releasableAssetIDs, [asset.id])
+        XCTAssertTrue(result.blocked.isEmpty)
     }
 
     /// A copy that is only pending is not a copy.
@@ -140,8 +146,7 @@ final class ReclamationPlannerTests: XCTestCase {
             assets: [asset],
             replicasByAssetID: [asset.id: replicas(asset, on: [first, forgotten])],
             registeredTargetIDs: [first, second],
-            agreeingTargetIDs: [first, second, forgotten],
-            policy: policy
+            desiredCopies: { _ in copies }
         )
 
         XCTAssertEqual(result.blocked[.notEnoughCopies], 1)

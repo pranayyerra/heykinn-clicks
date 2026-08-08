@@ -216,33 +216,19 @@ enum ReplicationTaskState: String, Codable, Hashable {
     case failed
 }
 
-/// How many managed targets should hold each Local asset.
+/// How many copies must be read before agreement between them can be claimed.
 ///
-/// Two is the shape the product is designed around — one drive can fail, and a
-/// second is what makes that survivable — but nothing in the model requires
-/// that number, so it lives here rather than as a literal scattered through
-/// protection, planning and registration.
-struct LocalRedundancyPolicy: Equatable {
-    var desiredCopies: Int
-
-    static let `default` = LocalRedundancyPolicy(desiredCopies: 2)
-
-    /// Human phrasing for the policy, used wherever it is explained.
-    var description: String {
-        switch desiredCopies {
-        case 1: return "one copy"
-        case 2: return "two copies"
-        default: return "\(desiredCopies) copies"
-        }
-    }
-
-    func isSatisfied(byCopies count: Int) -> Bool { count >= desiredCopies }
-
-    /// How many copies must be read before agreement between them can be
-    /// claimed. Comparing takes two, whatever the policy asks for: a lone copy
-    /// under a one-copy policy is fully protected and still has nothing to be
-    /// compared against, so a check over it would confirm nothing.
-    var copiesNeededToCompare: Int { max(desiredCopies, 2) }
+/// Comparing takes two, whatever a source asks for: a lone copy under a
+/// one-copy setting is exactly as protected as it was asked to be and still has
+/// nothing to be compared against, so a check over it would confirm nothing.
+///
+/// A `LocalRedundancyPolicy` type used to sit here, carrying one copy count for
+/// the whole archive. It is gone: the number belongs to each source, which
+/// names its own devices and its own copy count, and a single global figure
+/// could only ever contradict them. What survived is this one piece of
+/// arithmetic, which is about comparison rather than policy.
+func copiesNeededToCompare(forCopies desiredCopies: Int) -> Int {
+    max(desiredCopies, 2)
 }
 
 /// What a drive's pending backlog actually consists of. A bare task count
@@ -277,13 +263,25 @@ struct BacklogSummary: Equatable {
 struct VerificationBudget {
     var maxFiles: Int
     var maxBytes: Int64
+    /// No single file may take more than this share of one run.
+    ///
+    /// Without it, one 10 GB video consumes an entire patrol ration and every
+    /// other file waits for the next run half an hour later — and large files
+    /// are exactly what should not be able to monopolise the budget, being
+    /// also the slowest to read. A file over the cap is skipped rather than
+    /// blocking the queue behind it; an explicit sweep still reaches it.
+    var maxBytesPerFile: Int64 = .max
 
     static let sweep = VerificationBudget(maxFiles: 500, maxBytes: 4 * 1024 * 1024 * 1024)
     static let unlimited = VerificationBudget(maxFiles: .max, maxBytes: .max)
     /// The background patrol's ration. Small enough that a run finishes in
     /// seconds and is never what the user notices about the app — the point is
     /// that reading eventually happens, not that it happens quickly.
-    static let patrol = VerificationBudget(maxFiles: 40, maxBytes: 256 * 1024 * 1024)
+    static let patrol = VerificationBudget(
+        maxFiles: 40,
+        maxBytes: 256 * 1024 * 1024,
+        maxBytesPerFile: 64 * 1024 * 1024
+    )
 }
 
 /// Live progress of an in-flight sync against one drive. Present only while a

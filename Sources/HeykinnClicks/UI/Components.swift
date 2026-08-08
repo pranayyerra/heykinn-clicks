@@ -19,6 +19,21 @@ enum Formatters {
         number == 1 ? singular : (plural ?? singular + "s")
     }
 
+    /// "one copy", "two copies", "3 copies" — how a number of copies is said
+    /// wherever the app explains what a source asks for.
+    ///
+    /// Words for the two numbers that appear in ordinary sentences, digits
+    /// beyond them. This used to be `LocalRedundancyPolicy.description`, back
+    /// when there was a single number for the whole archive; the phrasing was
+    /// worth keeping when the number moved onto each source.
+    static func copies(_ count: Int) -> String {
+        switch count {
+        case 1: return "one copy"
+        case 2: return "two copies"
+        default: return "\(count) copies"
+        }
+    }
+
     static let bytes: ByteCountFormatter = {
         let formatter = ByteCountFormatter()
         formatter.countStyle = .file
@@ -168,10 +183,14 @@ extension ProtectionVerdict {
         }
     }
 
-    func displayName(policy: LocalRedundancyPolicy) -> String {
+    /// - Parameter copies: what this photo's own source asks for. Passed in
+    ///   rather than read from a global, because there is no longer an
+    ///   archive-wide answer and two photos side by side in the Library can
+    ///   legitimately want different numbers.
+    func displayName(copies: Int) -> String {
         switch self {
-        case .meetsPolicy: return "Safe on \(policy.description)"
-        case .shortOfPolicy: return "Not yet on \(policy.description)"
+        case .meetsPolicy: return "Safe on \(Formatters.copies(copies))"
+        case .shortOfPolicy: return "Not yet on \(Formatters.copies(copies))"
         case .diverged: return "A copy no longer matches"
         case .notLocal: return "—"
         }
@@ -195,12 +214,13 @@ extension CheckStanding {
 /// a footnote rather than a competing state.
 struct ProtectionBadge: View {
     let state: ProtectionState
-    var policy: LocalRedundancyPolicy = .default
+    /// What the photo's own source asks for.
+    var copies: Int = 2
 
     var body: some View {
         let verdict = state.verdict
         HStack(spacing: 6) {
-            Label(verdict.displayName(policy: policy), systemImage: verdict.symbolName)
+            Label(verdict.displayName(copies: copies), systemImage: verdict.symbolName)
                 .font(.caption)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
@@ -305,6 +325,11 @@ struct AssetThumbnailView: View {
             }
         }
         .clipShape(RoundedRectangle(cornerRadius: 8))
+        // One element, named. Left as-is a cell read out as an unlabelled
+        // image inside a button inside a link — three announcements, none of
+        // them the photograph.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(asset.kind.displayName), \(asset.originalFilename)")
         .onHover { inside in
             if inside {
                 preview.hoverBegan(url: previewURL)
@@ -359,7 +384,20 @@ struct SegmentedBar: View {
         }
         .frame(height: height)
         .clipShape(Capsule())
+        // A bar built of coloured rectangles has nothing to read out. The
+        // tooltips carry the numbers for a pointer; this carries them for
+        // everyone else.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenSummary)
         .animation(.easeInOut(duration: 0.25), value: segments)
+    }
+
+    private var spokenSummary: String {
+        let filled = segments.filter { $0.count > 0 }
+        guard !filled.isEmpty else { return "Nothing to show" }
+        return filled
+            .map { "\($0.label): \($0.count.formatted())" }
+            .joined(separator: ", ")
     }
 }
 
@@ -476,7 +514,23 @@ struct ProtectionDonut: View {
             .multilineTextAlignment(.center)
         }
         .frame(width: diameter, height: diameter)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(spokenSummary)
         .animation(.easeInOut(duration: 0.3), value: segments)
+    }
+
+    /// The whole card in one sentence, including the inner ring — which is the
+    /// part a screen reader would otherwise never hear about at all, because it
+    /// is drawn and never written.
+    private var spokenSummary: String {
+        var parts = ["\(headline) \(caption)"]
+        for segment in segments where segment.count > 0 {
+            parts.append("\(segment.label): \(segment.count.formatted())")
+        }
+        if let confirmed, total > 0 {
+            parts.append("\(confirmed.formatted()) of \(total.formatted()) read back and matched")
+        }
+        return parts.joined(separator: ". ")
     }
 }
 
@@ -512,6 +566,11 @@ struct StatTile: View {
         }
         .buttonStyle(.plain)
         .onHover { isHovering = $0 }
+        // "12" then "sets of identical files" as two separate announcements
+        // gives the number before the noun and makes the reader hold it.
+        // A label only — flattening a Button into an ignored-children element
+        // takes its activation with it.
+        .accessibilityLabel("\(value) \(title)")
         .animation(.easeInOut(duration: 0.12), value: isHovering)
     }
 }

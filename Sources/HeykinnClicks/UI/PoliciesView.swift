@@ -8,13 +8,13 @@ struct PoliciesView: View {
     var body: some View {
         List {
             Section {
-                redundancyRow
-            } header: {
-                Text("How many copies of every Local photo to keep, and where photos are sent.")
-            }
-            Section {
                 ForEach(store.policyRules) { rule in
                     ruleRow(rule)
+                }
+                if store.policyRules.isEmpty {
+                    Text("No rules. Photos come in as Local and stay there, which is what most archives want.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
                 }
             } header: {
                 // A List section header is a single truncating line, and this
@@ -23,6 +23,20 @@ struct PoliciesView: View {
                 Text("Rules apply as photos come in, and again whenever you change one. The highest-priority rule that matches decides, and anything you set on a photo yourself beats all of them. A rule naming a cloud only ever proposes a move — nothing leaves your drives without one you can see.")
                     .fixedSize(horizontal: false, vertical: true)
                     .textCase(nil)
+            }
+            // The copies stepper used to be the first thing on this screen, so
+            // this is where somebody looking for it will come. Say where it
+            // went rather than leaving them to find Sources on their own.
+            Section {
+                Label(
+                    "How many copies of your photos to keep, and which devices hold them, is set for each source under Sources — next to the photos it governs.",
+                    systemImage: "square.stack.3d.up"
+                )
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            } header: {
+                Text("How many copies")
             }
         }
         .navigationTitle("Policies")
@@ -47,50 +61,17 @@ struct PoliciesView: View {
         }
     }
 
-    /// The number the whole protection model is judged against. It was
-    /// hardcoded and invisible while the app enforced it — capping target
-    /// registration at a figure the user could neither see nor change.
-    private var redundancyRow: some View {
-        let targetCount = store.targets.count
-        // What was asked for, not what is currently possible. The stepper used
-        // to read the bounded number back, so with no drives registered it sat
-        // at one and could not be raised — the control for the app's central
-        // promise was unusable exactly when a new user would reach for it.
-        let desired = store.requestedCopies
-        return VStack(alignment: .leading, spacing: 6) {
-            Stepper(
-                value: Binding(
-                    get: { store.requestedCopies },
-                    set: { store.redundancyPolicy = LocalRedundancyPolicy(desiredCopies: $0) }
-                ),
-                in: 1...max(store.maxSettableCopies, LocalRedundancyPolicy.default.desiredCopies)
-            ) {
-                HStack {
-                    Label("Keep \(LocalRedundancyPolicy(desiredCopies: desired).description)", systemImage: "square.stack.3d.up")
-                        .font(.headline)
-                    Spacer()
-                    Text(targetCount == 1 ? "1 drive registered" : "\(targetCount) drives registered")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-            Text(redundancyNote(desired: desired, targets: targetCount))
-                .font(.caption)
-                .foregroundStyle(desired > targetCount ? .orange : .secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-        .padding(.vertical, 2)
-    }
-
-    private func redundancyNote(desired: Int, targets: Int) -> String {
-        if targets == 0 {
-            return "Register a target in Storage & Health first — the policy cannot ask for more copies than you have places to keep them."
-        }
-        if desired == targets {
-            return "That is every target you have registered. Add another in Storage & Health to raise this."
-        }
-        return "\(targets - desired) target(s) beyond what the policy asks for. Every registered target still holds a full copy; this is the number that must hold a photo before it counts as safe. Lowering it never deletes anything."
-    }
+    // A copies stepper used to head this screen: one number for the whole
+    // archive, capped at however many devices were registered. Both halves of
+    // it were wrong once sources arrived. How many copies, and on which
+    // devices, is a question about a particular set of photos — the answer for
+    // a Google export has nothing to do with the answer for a folder of scans —
+    // and it is asked and answered under Sources, next to the photos it
+    // governs. A global number sitting above those could only contradict them.
+    //
+    // Deleted rather than kept as a default for new sources: `newSourceDefaults`
+    // already does that job by remembering the last answer given, and a control
+    // presented as policy is read as policy however it is labelled.
 
     private func ruleRow(_ rule: PolicyRule) -> some View {
         HStack {
@@ -192,7 +173,7 @@ struct PolicyRuleEditor: View {
                     }
                 }
             }
-            Text("Would apply to \(matchCount.formatted()) existing asset(s).")
+            Text("Would apply to \(Formatters.count(matchCount, "existing asset")).")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if target != .local {

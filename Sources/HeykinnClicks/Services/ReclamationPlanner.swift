@@ -21,13 +21,11 @@ enum ReclamationPlanner {
     enum Blocker: String, CaseIterable, Hashable {
         case notEnoughCopies
         case notReadBack
-        case targetsDisagree
 
         var displayName: String {
             switch self {
             case .notEnoughCopies: return "not enough local copies yet"
             case .notReadBack: return "a copy has never been read back"
-            case .targetsDisagree: return "the targets do not agree on what they hold"
             }
         }
     }
@@ -48,16 +46,21 @@ enum ReclamationPlanner {
         var isEmpty: Bool { withVerifiedCloudCopy == 0 }
     }
 
-    /// `agreeingTargetIDs` are the targets whose Merkle trees agree with every
-    /// other target's. A copy on a target that disagrees with its peers is a
-    /// copy the archive has an open question about, and an open question is not
-    /// the ground to delete a cloud original from.
+    /// Preconditions are per asset, never per device pair.
+    ///
+    /// An `agreeingTargetIDs` parameter used to sit here, carrying which
+    /// devices held identical content. Under k-of-n devices hold different
+    /// content by design, so it would have blocked everything forever — and the
+    /// comparison behind it took both sides from the catalog's own hashes, so
+    /// it could not have detected damage even when devices did match. What
+    /// remains is the question that was always the real one: does *this* asset
+    /// have enough copies, and has every one of them been read back and
+    /// matched.
     static func plan(
         assets: [Asset],
         replicasByAssetID: [UUID: [TargetReplicaState]],
         registeredTargetIDs: Set<UUID>,
-        agreeingTargetIDs: Set<UUID>,
-        policy: LocalRedundancyPolicy
+        desiredCopies: (UUID) -> Int
     ) -> Plan {
         var plan = Plan()
 
@@ -73,7 +76,7 @@ enum ReclamationPlanner {
                 $0.state == .present && registeredTargetIDs.contains($0.targetID)
             }
 
-            guard policy.isSatisfied(byCopies: present.count) else {
+            guard present.count >= desiredCopies(asset.id) else {
                 plan.blocked[.notEnoughCopies, default: 0] += 1
                 continue
             }
@@ -83,10 +86,15 @@ enum ReclamationPlanner {
                 plan.blocked[.notReadBack, default: 0] += 1
                 continue
             }
-            guard present.allSatisfy({ agreeingTargetIDs.contains($0.targetID) }) else {
-                plan.blocked[.targetsDisagree, default: 0] += 1
-                continue
-            }
+            // A `targetsDisagree` gate used to sit here, asking whether the
+            // devices held identical content. Under k-of-n they hold different
+            // content by design, so it would have blocked every asset forever
+            // — and the tree it consulted compared the catalog's own hashes on
+            // both sides, so it could not have seen damage even when the
+            // devices did hold the same thing. Removed rather than rescoped:
+            // the honest version of the question is "has every copy of THIS
+            // asset been read back and matched", and that is the check
+            // immediately above.
 
             plan.releasableAssetIDs.insert(asset.id)
             plan.releasableBytes += asset.fileSize

@@ -113,34 +113,35 @@ final class CoreEngineTests: XCTestCase {
         }
 
         XCTAssertEqual(
-            ProtectionEvaluator.protectionState(for: asset, replicaStates: []),
+            ProtectionEvaluator.protectionState(for: asset, replicaStates: [], desiredCopies: 2),
             .stagedOnly
         )
         XCTAssertEqual(
-            ProtectionEvaluator.protectionState(for: asset, replicaStates: [replica(driveA, .present)]),
+            ProtectionEvaluator.protectionState(for: asset, replicaStates: [replica(driveA, .present)], desiredCopies: 2),
             .replicatedToOneDrive
         )
         XCTAssertEqual(
-            ProtectionEvaluator.protectionState(for: asset, replicaStates: [replica(driveA, .present), replica(driveB, .present)]),
+            ProtectionEvaluator.protectionState(for: asset, replicaStates: [replica(driveA, .present), replica(driveB, .present)], desiredCopies: 2),
             .fullyReplicated
         )
         XCTAssertEqual(
-            ProtectionEvaluator.protectionState(for: asset, replicaStates: [replica(driveA, .drift), replica(driveB, .present)]),
+            ProtectionEvaluator.protectionState(for: asset, replicaStates: [replica(driveA, .drift), replica(driveB, .present)], desiredCopies: 2),
             .driftDetected
         )
         let staleDate = Date().addingTimeInterval(-ProtectionEvaluator.verificationMaxAge - 3600)
         XCTAssertEqual(
             ProtectionEvaluator.protectionState(
                 for: asset,
-                replicaStates: [replica(driveA, .present, verified: staleDate), replica(driveB, .present)]
-            ),
+                replicaStates: [replica(driveA, .present, verified: staleDate), replica(driveB, .present)],
+            desiredCopies: 2
+        ),
             .verificationOverdue
         )
     }
 
     func testProtectionNotApplicableForCloudResidency() {
         let asset = makeAsset(residency: .appleCloud, presence: DomainPresence(local: false, appleCloud: true, googleCloud: false))
-        XCTAssertEqual(ProtectionEvaluator.protectionState(for: asset, replicaStates: []), .notApplicable)
+        XCTAssertEqual(ProtectionEvaluator.protectionState(for: asset, replicaStates: [], desiredCopies: 2), .notApplicable)
     }
 
     // MARK: - ViolationScanner

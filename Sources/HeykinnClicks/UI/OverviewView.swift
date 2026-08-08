@@ -7,6 +7,7 @@ import SwiftUI
 struct OverviewView: View {
     @Binding var selection: SidebarSection?
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var commands: AppCommandBus
 
     // MARK: - Derived figures
 
@@ -40,11 +41,27 @@ struct OverviewView: View {
             case .notLocal: break
             }
         }
+        // Named for the question rather than for a number. Every photo is
+        // judged against what its own source asks for, so there is no single
+        // figure to put in this label — "has two copies" would be wrong for
+        // the photos whose source asks for three, and wrong in the direction
+        // that reads as reassurance.
         return [
-            SegmentedBar.Segment(label: "Has \(store.redundancyPolicy.description)", count: met, color: .green),
-            SegmentedBar.Segment(label: "Short of \(store.redundancyPolicy.description)", count: short, color: .orange),
+            SegmentedBar.Segment(label: "Kept the way its source asks", count: met, color: .green),
+            SegmentedBar.Segment(label: "Short of what its source asks", count: short, color: .orange),
             SegmentedBar.Segment(label: "A copy no longer matches", count: diverged, color: .red)
         ]
+    }
+
+    /// Sources asking for more copies than they name devices to hold them.
+    ///
+    /// Not a shortfall the app can work off: no amount of copying satisfies a
+    /// source set to three copies across two devices. Only the user can fix
+    /// it, by naming another device or asking for fewer copies, so it is
+    /// reported as its own thing rather than folded into the photos that are
+    /// merely behind.
+    private var unsatisfiableSources: [StorageGroup] {
+        store.storageGroups.filter { !$0.isSatisfiable }
     }
 
     private var protectedCount: Int {
@@ -120,21 +137,156 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                safetyCard
-                drivesCard
-                if !attentionTiles.isEmpty {
-                    attentionCard
-                } else if !countedAssets.isEmpty {
-                    allClearCard
-                }
-                residencyCard
-                if !recentAssets.isEmpty {
-                    recentCard
+                if countedAssets.isEmpty {
+                    firstRun
+                } else {
+                    safetyCard
+                    drivesCard
+                    if !attentionTiles.isEmpty {
+                        attentionCard
+                    } else {
+                        allClearCard
+                    }
+                    residencyCard
+                    if !recentAssets.isEmpty {
+                        recentCard
+                    }
                 }
             }
             .padding(20)
         }
         .navigationTitle("Overview")
+    }
+
+    // MARK: - First run
+
+    /// What an empty archive gets instead of an empty dashboard.
+    ///
+    /// The cards below are all reports on a population, and with no photos in
+    /// it they degrade into a grey ring reading "—", a legend with no rows, and
+    /// a card headed "Where your photos live" whose only content is a sentence
+    /// about a rule. Somebody opening the app for the first time met a
+    /// dashboard that looked broken and had to work out for themselves that the
+    /// answer was to go and do something in a different section.
+    ///
+    /// So an empty archive gets the two things that have to happen, in order,
+    /// each with the button that does it and a tick once it is done. Ordered
+    /// this way round deliberately: photos can be imported with no target
+    /// registered at all — they stage on this Mac and queue — and telling
+    /// someone to buy a drive before they can try the app would be false.
+    private var firstRun: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Nothing in the archive yet")
+                    .font(.largeTitle)
+                    .bold()
+                Text("This app keeps your own copies of your own photos, on drives you own, "
+                     + "and checks they are still there and still undamaged. It reads from "
+                     + "wherever your photos are now and never changes anything it finds.")
+                    .font(.title3)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .padding(.bottom, 4)
+
+            firstRunStep(
+                number: 1,
+                title: "Point it at your photos",
+                detail: "A folder, an old backup, your Photos library, or a download from "
+                    + "Google. Everything comes in by copy — the originals are left where "
+                    + "they are.",
+                symbol: "tray.and.arrow.down",
+                isDone: false,
+                actionLabel: "Go to Sources"
+            ) {
+                selection = .takeout
+            }
+
+            firstRunStep(
+                number: 2,
+                title: "Give it somewhere to keep them",
+                detail: targetStepDetail,
+                symbol: "externaldrive.badge.plus",
+                isDone: !store.targets.isEmpty,
+                actionLabel: store.targets.isEmpty ? "Add a target" : "Manage targets"
+            ) {
+                selection = .targets
+            }
+
+            Divider()
+                .padding(.vertical, 4)
+
+            HStack(spacing: 6) {
+                Text("New to this?")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                Button("Read how the app thinks") { commands.isHelpPresented = true }
+                    .buttonStyle(.link)
+                Spacer()
+            }
+        }
+        .frame(maxWidth: 720, alignment: .leading)
+    }
+
+    private var targetStepDetail: String {
+        guard !store.targets.isEmpty else {
+            return "A target is a device holding a whole copy: this Mac, an external drive, "
+                + "or both. Until one exists, photos wait in a staging area on this Mac — "
+                + "safe, but only in one place."
+        }
+        let registered = store.targets.map(\.name).sorted().joined(separator: ", ")
+        return "Registered: \(registered). Each source you add says how many copies of its photos to keep and which of these devices hold them."
+    }
+
+    private func firstRunStep(
+        number: Int,
+        title: String,
+        detail: String,
+        symbol: String,
+        isDone: Bool,
+        actionLabel: String,
+        action: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top, spacing: 14) {
+            ZStack {
+                Circle()
+                    .fill(isDone ? Color.green.opacity(0.18) : Color.accentColor.opacity(0.15))
+                    .frame(width: 30, height: 30)
+                if isDone {
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 13, weight: .bold))
+                        .foregroundStyle(.green)
+                } else {
+                    Text("\(number)")
+                        .font(.system(size: 14, weight: .semibold, design: .rounded))
+                        .foregroundStyle(.tint)
+                }
+            }
+            .accessibilityLabel(isDone ? "Step \(number), done" : "Step \(number)")
+
+            VStack(alignment: .leading, spacing: 6) {
+                Label(title, systemImage: symbol)
+                    .font(.headline)
+                Text(detail)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                // Written out rather than picking a style with a ternary:
+                // ButtonStyle is not a single type, so the two branches cannot
+                // be the arms of one expression.
+                if isDone {
+                    Button(actionLabel, action: action)
+                        .buttonStyle(.bordered)
+                } else {
+                    Button(actionLabel, action: action)
+                        .buttonStyle(.borderedProminent)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
     }
 
     // MARK: - Safety
@@ -163,7 +315,11 @@ struct OverviewView: View {
                             .fixedSize(horizontal: false, vertical: true)
                             .help("Having enough copies and having read them back are different things. A copy nobody has read is still a copy — it just has not been confirmed undamaged yet.")
                     }
-                    if store.targets.count < store.redundancyPolicy.desiredCopies {
+                    // Offered when there is nowhere to put a copy at all, or
+                    // when a source is asking for more copies than it has
+                    // devices to hold them. Both are fixed by adding a device;
+                    // neither is fixed by waiting.
+                    if store.targets.isEmpty || !unsatisfiableSources.isEmpty {
                         Button {
                             selection = .targets
                         } label: {
@@ -186,27 +342,47 @@ struct OverviewView: View {
         if countedAssets.isEmpty {
             return "Nothing imported yet. Import a folder or a Google export to start the archive."
         }
-        if store.targets.count < store.redundancyPolicy.desiredCopies {
-            let missing = store.redundancyPolicy.desiredCopies - store.targets.count
-            return "\(localCount.formatted()) photos have nowhere to go. Add \(missing) more target(s) to keep \(store.redundancyPolicy.description) of everything."
+        // Nowhere to put anything is its own answer, and it is not a shortfall
+        // the app can work off.
+        if store.targets.isEmpty {
+            return "\(localCount.formatted()) photos have nowhere to go yet — no device is registered. Add one and the copies each source asks for start being made."
+        }
+        // A source asking for more copies than it names devices can never be
+        // satisfied by copying, so it is said plainly rather than counted in
+        // with the photos that are merely behind. Named, because "some source"
+        // is not something a person can act on.
+        if !unsatisfiableSources.isEmpty {
+            let named = unsatisfiableSources.prefix(2).map(\.label).joined(separator: " and ")
+            let rest = unsatisfiableSources.count > 2
+                ? " and \(unsatisfiableSources.count - 2) more"
+                : ""
+            return "\(named)\(rest) \(Formatters.pluralise(unsatisfiableSources.count, "asks", "ask")) for more copies than \(Formatters.pluralise(unsatisfiableSources.count, "it names devices", "they name devices")) to hold them. Name another device, or lower what \(Formatters.pluralise(unsatisfiableSources.count, "it asks", "they ask")) for, under Sources."
         }
         // One answer. What the app has and has not read back is reported under
-        // it, not folded into it — the copies either satisfy the policy or they
-        // do not, and a stale check does not change that.
+        // it, not folded into it — the copies either satisfy what the source
+        // asked for or they do not, and a stale check does not change that.
         if protectedCount == localCount {
             // "Safe" was doing two jobs — enough copies exist, and they are
             // known to be good — and only the first is true here. Say the one
             // the ring is actually reporting; the line under it says how far
             // the checking has got.
-            return "All \(localCount.formatted()) photos have \(store.redundancyPolicy.description)."
+            return "All \(localCount.formatted()) photos are on the devices their sources name."
         }
         let short = localCount - protectedCount
-        return "\(short.formatted()) of \(localCount.formatted()) photos do not have \(store.redundancyPolicy.description) yet."
+        // How many copies that is, not only how many photos. Under k-of-n a
+        // photo can be one copy short or three, and "412 photos short" reads
+        // the same either way — the copy count is what tells you whether this
+        // is one drive's worth of work or an evening's.
+        let copiesShort = store.placementShortfallSummary.copiesShort
+        let detail = copiesShort > short
+            ? " That is \(Formatters.count(copiesShort, "copy", "copies")) still to make."
+            : ""
+        return "\(short.formatted()) of \(localCount.formatted()) photos are not yet on all the devices their source names.\(detail)"
     }
 
     // MARK: - Drives
 
-    /// One line, not a second copy of Storage & Health. The cards live there;
+    /// One line, not a second copy of the drives screen. The cards live there;
     /// repeating them here made the same state render twice and gave neither
     /// screen a clear job.
     private var drivesCard: some View {
@@ -301,7 +477,13 @@ struct OverviewView: View {
                 value: store.violations.count.formatted(),
                 title: store.violations.count == 1 ? "thing to review" : "things to review",
                 tint: .red,
-                destination: .violations
+                // The safety page, not a Violations screen. Violations stopped
+                // being a page of their own — they are a section of the page
+                // that answers "is it safe", shown only when there are any —
+                // and sending the tile to the old destination landed the reader
+                // on a screen the sidebar could not highlight, with nothing to
+                // click to get back.
+                destination: .targets
             ))
         }
         if pendingArchiveCount > 0 {
@@ -338,7 +520,9 @@ struct OverviewView: View {
                 value: activeMigrationCount.formatted(),
                 title: activeMigrationCount == 1 ? "move in progress" : "moves in progress",
                 tint: .teal,
-                destination: .migrations
+                // Same reason as violations above: a section of the safety
+                // page, not a destination.
+                destination: .targets
             ))
         }
         return tiles
@@ -444,7 +628,8 @@ struct OverviewView: View {
                                 Image(systemName: verdict.symbolName)
                                     .font(.caption)
                                     .foregroundStyle(verdict.tint)
-                                    .help(verdict.displayName(policy: store.redundancyPolicy))
+                                    .help(verdict.displayName(copies: store.desiredCopies(forAsset: asset.id)))
+                                    .accessibilityLabel(verdict.displayName(copies: store.desiredCopies(forAsset: asset.id)))
                             }
                         }
                         .help(asset.originalFilename)

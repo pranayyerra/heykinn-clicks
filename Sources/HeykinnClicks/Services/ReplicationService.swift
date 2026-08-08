@@ -380,6 +380,22 @@ enum ReplicationService {
         if FileManager.default.fileExists(atPath: replicaFile.path) {
             try FileManager.default.removeItem(at: replicaFile)
         }
+        // A copy interrupted before its rename leaves one of these. Removing
+        // the asset without it would strand a file named after content the
+        // catalog no longer claims, which nothing else would ever look at.
+        let partial = replicaFile.appendingPathExtension("partial")
+        if FileManager.default.fileExists(atPath: partial.path) {
+            try? FileManager.default.removeItem(at: partial)
+        }
+        // The bucket directory this file lived in, if it is now empty. Replicas
+        // are filed under the first two characters of their id, so draining a
+        // device leaves up to 256 empty directories behind — invisible to the
+        // app and confusing in Finder, where the user sees a folder tree the
+        // app said it had stopped using.
+        pruneEmptyBucket(
+            replicaFile.deletingLastPathComponent(),
+            replicaRoot: replicaRoot(drive: drive, mountURL: mountURL)
+        )
         return TargetReplicaState(
             assetID: asset.id,
             targetID: drive.id,
@@ -387,6 +403,57 @@ enum ReplicationService {
             relativePath: nil,
             lastVerifiedAt: Date()
         )
+    }
+
+    static func replicaRoot(drive: ReplicationTarget, mountURL: URL) -> URL {
+        mountURL.appendingPathComponent(drive.replicaRootComponent, isDirectory: true)
+    }
+
+    /// Removes a replica bucket directory that has nothing left in it.
+    ///
+    /// Deliberately narrow. It refuses anything that is not *strictly inside*
+    /// the managed replica root, so no path the user owns can be reached even
+    /// if a caller passes the wrong directory, and it never removes the replica
+    /// root itself — that folder existing is how the drive reads as one the app
+    /// manages, and the copy path would recreate it anyway.
+    ///
+    /// Failure is silent: an empty directory left behind is untidy, and nothing
+    /// about the archive is wrong because of it.
+    static func pruneEmptyBucket(_ directory: URL, replicaRoot: URL) {
+        let root = replicaRoot.standardizedFileURL.path
+        let target = directory.standardizedFileURL.path
+        guard target != root, target.hasPrefix(root + "/") else { return }
+        guard let contents = try? FileManager.default.contentsOfDirectory(
+            at: directory, includingPropertiesForKeys: nil, options: []
+        ) else { return }
+        // `.DS_Store` and friends are not content worth keeping a directory
+        // alive for, but removing them is the user's business, not the app's —
+        // so a directory holding only hidden files is left alone.
+        guard contents.isEmpty else { return }
+        try? FileManager.default.removeItem(at: directory)
+    }
+
+    /// Removes every empty bucket under a drive's replica root.
+    ///
+    /// The sweep, for the directories that are already there: buckets emptied
+    /// by migration cleanup before removal pruned as it went, and any left by a
+    /// removal that could not finish. Bounded by the number of buckets (256),
+    /// not by the number of files, so it is cheap enough to run after a sync.
+    @discardableResult
+    static func pruneEmptyBuckets(drive: ReplicationTarget, mountURL: URL) -> Int {
+        let root = replicaRoot(drive: drive, mountURL: mountURL)
+        guard let buckets = try? FileManager.default.contentsOfDirectory(
+            at: root, includingPropertiesForKeys: [.isDirectoryKey], options: []
+        ) else { return 0 }
+        var removed = 0
+        for bucket in buckets {
+            let isDirectory = (try? bucket.resourceValues(forKeys: [.isDirectoryKey]))?.isDirectory
+            guard isDirectory == true else { continue }
+            let before = FileManager.default.fileExists(atPath: bucket.path)
+            pruneEmptyBucket(bucket, replicaRoot: root)
+            if before, !FileManager.default.fileExists(atPath: bucket.path) { removed += 1 }
+        }
+        return removed
     }
 }
 

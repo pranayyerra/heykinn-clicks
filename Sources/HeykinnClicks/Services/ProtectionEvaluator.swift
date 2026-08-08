@@ -10,10 +10,14 @@ enum ProtectionEvaluator {
     /// once turns what was an O(assets × replicas) scan into O(assets +
     /// replicas): with tens of thousands of each, the per-asset `filter` cost
     /// hundreds of millions of struct copies and stalled the main thread.
+    /// - Parameter desiredCopies: how many copies this asset's own source asks
+    ///   for. A function rather than a number: there is no archive-wide figure
+    ///   any more, and every asset is judged against what the user set for the
+    ///   thing it came from.
     static func protectionStates(
         for assets: [Asset],
         replicaStates: [TargetReplicaState],
-        policy: LocalRedundancyPolicy = .default,
+        desiredCopies: (UUID) -> Int,
         now: Date = Date()
     ) -> [UUID: ProtectionState] {
         let byAsset = Dictionary(grouping: replicaStates, by: \.assetID)
@@ -23,7 +27,7 @@ enum ProtectionEvaluator {
                 for: asset,
                 replicaStates: byAsset[asset.id] ?? [],
                 alreadyFiltered: true,
-                policy: policy,
+                desiredCopies: desiredCopies(asset.id),
                 now: now
             )
         }
@@ -36,7 +40,7 @@ enum ProtectionEvaluator {
         for asset: Asset,
         replicaStates: [TargetReplicaState],
         alreadyFiltered: Bool = false,
-        policy: LocalRedundancyPolicy = .default,
+        desiredCopies: Int,
         now: Date = Date()
     ) -> ProtectionState {
         guard asset.residency == .local else { return .notApplicable }
@@ -52,13 +56,12 @@ enum ProtectionEvaluator {
             return .driftDetected
         }
 
-        // Full replication means the policy's number of targets hold the asset.
-        // With fewer targets registered than the policy asks for, an asset can
-        // never be fully replicated — a truthful statement about the archive,
-        // not a bug.
+        // Full replication means as many devices hold the asset as its source
+        // asks for. With fewer devices named than that, an asset can never be
+        // fully replicated — a truthful statement about the archive, not a bug.
         let present = states.filter { $0.state == .present }
 
-        if policy.isSatisfied(byCopies: present.count) {
+        if present.count >= desiredCopies {
             // Never read back at all is a different claim from read back too
             // long ago, and saying "not checked recently" about a copy recorded
             // minutes ago is simply untrue.
@@ -71,9 +74,10 @@ enum ProtectionEvaluator {
             }
             return overdue ? .verificationOverdue : .fullyReplicated
         }
-        // Any number of copies short of the policy is partial protection — not
-        // "staged only", which would claim no drive holds it at all. With a
-        // policy above two, two copies is still partial.
+        // Any number of copies short of what the source asks for is partial
+        // protection — not "staged only", which would claim no drive holds it
+        // at all. Where a source asks for more than two, two copies is still
+        // partial.
         if present.count >= 1 {
             return .replicatedToOneDrive
         }

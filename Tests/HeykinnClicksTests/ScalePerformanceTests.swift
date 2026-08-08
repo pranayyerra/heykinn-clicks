@@ -36,10 +36,10 @@ final class ScalePerformanceTests: XCTestCase {
 
     func testBatchProtectionMatchesPerAssetResults() {
         let (assets, replicas) = makeCatalogFixture(assetCount: 300)
-        let batch = ProtectionEvaluator.protectionStates(for: assets, replicaStates: replicas)
+        let batch = ProtectionEvaluator.protectionStates(for: assets, replicaStates: replicas, desiredCopies: { _ in 2 })
         XCTAssertEqual(batch.count, assets.count)
         for asset in assets {
-            let individual = ProtectionEvaluator.protectionState(for: asset, replicaStates: replicas)
+            let individual = ProtectionEvaluator.protectionState(for: asset, replicaStates: replicas, desiredCopies: 2)
             XCTAssertEqual(batch[asset.id], individual, "Batch result must match the per-asset computation")
         }
         // Alternating fixture: half on both targets, half on one.
@@ -51,7 +51,7 @@ final class ScalePerformanceTests: XCTestCase {
         func measure(_ count: Int) -> TimeInterval {
             let (assets, replicas) = makeCatalogFixture(assetCount: count)
             let start = Date()
-            _ = ProtectionEvaluator.protectionStates(for: assets, replicaStates: replicas)
+            _ = ProtectionEvaluator.protectionStates(for: assets, replicaStates: replicas, desiredCopies: { _ in 2 })
             return Date().timeIntervalSince(start)
         }
         // Warm up so first-call overhead does not dominate the small case.
@@ -96,8 +96,9 @@ final class FirstCheckStateTests: XCTestCase {
         let a = asset()
         let state = ProtectionEvaluator.protectionStates(
             for: [a],
-            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: nil)]
-        )[a.id]
+            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: nil)],
+        desiredCopies: { _ in 2 }
+    )[a.id]
         XCTAssertEqual(state, .awaitingFirstCheck)
         XCTAssertNotEqual(state, .verificationOverdue, "It was never checked, not checked long ago")
         XCTAssertTrue(state?.isHealthy ?? false, "The copies exist; the policy is met")
@@ -108,8 +109,9 @@ final class FirstCheckStateTests: XCTestCase {
         let longAgo = Date().addingTimeInterval(-ProtectionEvaluator.verificationMaxAge - 3600)
         let state = ProtectionEvaluator.protectionStates(
             for: [a],
-            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: longAgo)]
-        )[a.id]
+            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: longAgo)],
+        desiredCopies: { _ in 2 }
+    )[a.id]
         XCTAssertEqual(state, .verificationOverdue)
     }
 
@@ -117,16 +119,18 @@ final class FirstCheckStateTests: XCTestCase {
         let a = asset()
         let state = ProtectionEvaluator.protectionStates(
             for: [a],
-            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: Date())]
-        )[a.id]
+            replicaStates: [replica(a.id, verified: Date()), replica(a.id, verified: Date())],
+        desiredCopies: { _ in 2 }
+    )[a.id]
         XCTAssertEqual(state, .fullyReplicated)
     }
 
     func testTooFewCopiesIsNotExcusedByHavingBeenChecked() {
         let a = asset()
         let state = ProtectionEvaluator.protectionStates(
-            for: [a], replicaStates: [replica(a.id, verified: Date())]
-        )[a.id]
+            for: [a], replicaStates: [replica(a.id, verified: Date())],
+        desiredCopies: { _ in 2 }
+    )[a.id]
         XCTAssertEqual(state, .replicatedToOneDrive, "One checked copy is still one copy")
         XCTAssertFalse(state?.isHealthy ?? true)
     }

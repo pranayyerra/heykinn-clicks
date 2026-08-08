@@ -20,12 +20,13 @@ struct ExportPartGrid: View {
     /// silently drops half the answer to the question this detail exists for.
     let archives: [TakeoutArchive]
     let managedTargetIDs: Set<UUID>
-    let policy: LocalRedundancyPolicy
+    /// How many copies this export set asks for.
+    let copiesRequired: Int
     let driveNames: [UUID: String]
     @State private var selected: ExportPart.ID?
 
     private func grade(_ part: ExportPart) -> PartRedundancy {
-        part.redundancy(acrossTargets: managedTargetIDs, policy: policy)
+        part.redundancy(acrossTargets: managedTargetIDs, copiesRequired: copiesRequired)
     }
 
     private func tint(_ grade: PartRedundancy) -> Color {
@@ -111,6 +112,8 @@ struct ExportPartGrid: View {
             }
             .map { (name: driveNames[$0.targetID!] ?? "a drive", archive: $0) }
             .sorted { ($0.name, $0.archive.kind == .zip ? 0 : 1) < ($1.name, $1.archive.kind == .zip ? 0 : 1) }
+        // The devices this export names, not every device registered — a Mac
+        // that was never asked to hold the zips does not owe a copy of them.
         let missing = managedTargetIDs.subtracting(part.targetIDs)
             .compactMap { driveNames[$0] }
             .sorted()

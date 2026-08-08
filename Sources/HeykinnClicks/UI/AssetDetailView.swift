@@ -20,7 +20,7 @@ struct AssetDetailView: View {
                                 .bold()
                             HStack(spacing: 8) {
                                 ResidencyBadge(domain: asset.residency)
-                                ProtectionBadge(state: store.protectionStates[asset.id] ?? .notApplicable, policy: store.redundancyPolicy)
+                                ProtectionBadge(state: store.protectionStates[asset.id] ?? .notApplicable, copies: store.desiredCopies(forAsset: asset.id))
                             }
                             Text("Residency set by \(asset.residencySource.displayName.lowercased())")
                                 .font(.caption)
@@ -74,7 +74,7 @@ struct AssetDetailView: View {
 
                     GroupBox("Residency") {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Changing residency here only reassigns the logical domain. The Violations screen will flag the presence mismatch until a migration moves the actual content — prefer creating a migration for real moves.")
+                            Text("Changing residency here only reassigns the logical domain. Safety will list the presence mismatch until a migration moves the actual content — prefer creating a migration for real moves.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             Picker("Residency domain", selection: Binding(
@@ -152,7 +152,7 @@ struct AssetDetailView: View {
                                 LabeledRow(label: "Size", value: Formatters.bytes.string(fromByteCount: motion.fileSize))
                                 HStack(spacing: 8) {
                                     ResidencyBadge(domain: motion.residency)
-                                    ProtectionBadge(state: store.protectionStates[motion.id] ?? .notApplicable, policy: store.redundancyPolicy)
+                                    ProtectionBadge(state: store.protectionStates[motion.id] ?? .notApplicable, copies: store.desiredCopies(forAsset: motion.id))
                                 }
                                 NavigationLink(value: motion.id) {
                                     Text("Show the motion file")
@@ -221,7 +221,7 @@ struct AssetDetailView: View {
                 }
                 Button("Cancel", role: .cancel) { pendingResidency = nil }
             } message: {
-                Text("This flips the logical domain only. Content is not moved; any presence mismatch will appear in Violations.")
+                Text("This flips the logical domain only. Content is not moved; any presence mismatch is listed under Safety.")
             }
         } else {
             ContentUnavailableView("Asset not found", systemImage: "questionmark.square")

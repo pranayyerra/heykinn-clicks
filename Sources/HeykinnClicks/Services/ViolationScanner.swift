@@ -76,7 +76,7 @@ enum ViolationScanner {
                     assetID: lingering.count == 1 ? lingering[0] : nil,
                     targetID: nil,
                     migrationJobID: job.id,
-                    detail: "Migration to \(job.toDomain.displayName): \(lingering.count) asset(s) still present in \(job.fromDomain.displayName)."
+                    detail: "Migration to \(job.toDomain.displayName): \(Formatters.count(lingering.count, "asset")) still present in \(job.fromDomain.displayName)."
                 ))
             }
         }

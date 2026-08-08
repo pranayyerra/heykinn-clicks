@@ -99,36 +99,26 @@ final class AppStoreOrchestrationTests: XCTestCase {
         }
     }
 
-    // MARK: - Policy clamping
+    // MARK: - Device identity
 
-    /// A policy asking for more copies than there are targets can never be met,
-    /// and reports a healthy archive as unsafe. It is bound to what exists.
-    func testPolicyIsClampedToTheNumberOfRegisteredTargets() throws {
-        let (store, _) = try makeStore(preferences: ["desiredCopies": 3])
-
-        XCTAssertEqual(
-            store.redundancyPolicy.desiredCopies, 1,
-            "With no targets registered, three copies is a promise the app cannot keep"
-        )
-    }
-
-    /// The ceiling is the target count, so registering one raises it — the
-    /// clamp must not be a one-way ratchet down.
-    func testRegisteringATargetRaisesTheCeiling() throws {
-        let (store, _) = try makeStore(preferences: ["desiredCopies": 3])
+    /// Redundancy means surviving a device failing, so two folders on one disk
+    /// are one device and the second registration is refused.
+    ///
+    /// This used to assert a copy-count ceiling alongside it. There is no
+    /// ceiling now — no archive-wide copy count for one to apply to — but the
+    /// claim underneath it is untouched and is the one that matters.
+    func testTwoFoldersOnOneDiskAreOneDevice() throws {
+        let (store, _) = try makeStore()
         let mount = try makeDirectory("target")
 
         store.registerHostDeviceTarget(at: mount, name: "Test target")
-
         XCTAssertEqual(store.targets.count, 1, store.lastError ?? "")
-        XCTAssertEqual(store.maxSettableCopies, 1)
 
         let second = try makeDirectory("target-2")
         store.registerHostDeviceTarget(at: second, name: "Second")
-        // Both folders are on this Mac's own disk, and one device holds one
-        // copy — so the second is refused and the ceiling does not move.
+
         XCTAssertEqual(store.targets.count, 1)
-        XCTAssertEqual(store.maxSettableCopies, 1)
+        XCTAssertNotNil(store.lastError, "and the refusal says why")
     }
 
     // MARK: - Sync trigger
@@ -1185,12 +1175,16 @@ final class AppStoreOrchestrationTests: XCTestCase {
     }
 }
 
-/// The redundancy policy has to be bounded by the drives that exist, or an
-/// archive with no drives reports 0% safe. Bounding it by *overwriting* what
-/// the user asked for made that permanent — and every install begins with no
-/// drives, so every install was quietly pinned to one copy for good.
+/// What the add-a-source sheet opens with.
+///
+/// This replaces a suite about clamping an archive-wide copy count to the
+/// number of drives that existed. That number is gone — each source carries
+/// its own — and with it the clamp, the ratchet bug it caused, and the ceiling.
+/// What survives is the one piece that was never policy: the app remembers the
+/// last answer given so the tenth folder going to the same two devices costs a
+/// click rather than a decision.
 @MainActor
-final class RedundancyPolicyBoundTests: XCTestCase {
+final class NewSourceDefaultsTests: XCTestCase {
 
     private var roots: [URL] = []
     private var suiteNames: [String] = []
@@ -1205,12 +1199,12 @@ final class RedundancyPolicyBoundTests: XCTestCase {
     private func makeStore(_ directory: URL? = nil) throws -> (AppStore, URL, UserDefaults) {
         let root = try directory ?? {
             let url = FileManager.default.temporaryDirectory
-                .appendingPathComponent("heykinn-policy-\(UUID().uuidString)", isDirectory: true)
+                .appendingPathComponent("heykinn-defaults-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             roots.append(url)
             return url
         }()
-        let suiteName = "heykinn-policy-\(root.lastPathComponent)"
+        let suiteName = "heykinn-defaults-\(root.lastPathComponent)"
         if !suiteNames.contains(suiteName) { suiteNames.append(suiteName) }
         let defaults = UserDefaults(suiteName: suiteName)!
         let store = AppStore(environment: AppEnvironment(
@@ -1219,51 +1213,88 @@ final class RedundancyPolicyBoundTests: XCTestCase {
         return (store, root, defaults)
     }
 
-    func testWithNoDrivesThePolicyInForceIsBoundedToOne() throws {
-        let (store, _, _) = try makeStore()
-        XCTAssertEqual(store.redundancyPolicy.desiredCopies, 1, "Nowhere to put a second copy")
-        XCTAssertEqual(store.requestedCopies, 2, "…but two is still what was asked for")
-    }
-
-    /// The bug, in one assertion: register a drive and the policy the user
-    /// asked for comes back on its own.
-    func testRegisteringDrivesRestoresTheRequestedPolicy() throws {
-        let (store, _, _) = try makeStore()
-        XCTAssertEqual(store.redundancyPolicy.desiredCopies, 1)
-
-        let first = FileManager.default.temporaryDirectory
+    private func makeTarget(_ store: AppStore, _ name: String) throws {
+        let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("heykinn-target-\(UUID().uuidString)", isDirectory: true)
-        try FileManager.default.createDirectory(at: first, withIntermediateDirectories: true)
-        roots.append(first)
-        store.registerHostDeviceTarget(at: first, name: "One")
-
-        XCTAssertEqual(
-            store.redundancyPolicy.desiredCopies, 1,
-            "One drive still only holds one copy"
-        )
-        XCTAssertEqual(store.requestedCopies, 2, "The request survived being bounded")
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        roots.append(url)
+        store.registerHostDeviceTarget(at: url, name: name)
     }
 
-    /// And it survives a relaunch: the bound was never written to preferences,
-    /// so a second session does not inherit it as the new intent.
-    func testTheBoundIsNotWrittenToPreferences() throws {
-        let (first, root, defaults) = try makeStore()
-        XCTAssertEqual(first.redundancyPolicy.desiredCopies, 1)
-        XCTAssertNil(
-            defaults.object(forKey: "desiredCopies"),
-            "Bounding the policy must not write anything down"
-        )
-
-        let (second, _, _) = try makeStore(root)
-        XCTAssertEqual(second.requestedCopies, 2, "A relaunch still wants two copies")
+    /// Nothing chosen yet and nowhere to put it: the sheet cannot offer devices
+    /// that do not exist, and must not ask for copies it has nowhere to keep.
+    func testWithNoDevicesTheDefaultNamesNone() throws {
+        let (store, _, _) = try makeStore()
+        XCTAssertEqual(store.newSourceDefaults.destinationTargetIDs, [])
+        XCTAssertEqual(store.newSourceDefaults.desiredCopies, 1)
     }
 
-    func testChangingThePolicyIsRemembered() throws {
+    /// With a device registered, the prefill is that device.
+    func testTheDefaultPrefillsTheDevicesThatExist() throws {
+        let (store, _, _) = try makeStore()
+        try makeTarget(store, "One")
+
+        XCTAssertEqual(store.targets.count, 1, store.lastError ?? "")
+        XCTAssertEqual(store.newSourceDefaults.destinationTargetIDs, store.targets.map(\.id))
+        XCTAssertEqual(store.newSourceDefaults.desiredCopies, 1)
+    }
+
+    /// An answer given once is remembered, and survives a relaunch — that is
+    /// the whole point of it.
+    func testAnAnswerIsRememberedAcrossRelaunch() throws {
         let (store, root, _) = try makeStore()
-        store.redundancyPolicy = LocalRedundancyPolicy(desiredCopies: 3)
-        XCTAssertEqual(store.requestedCopies, 3)
+        try makeTarget(store, "One")
+        let deviceID = try XCTUnwrap(store.targets.first?.id)
+
+        store.newSourceDefaults = StorageGroup.Defaults(
+            desiredCopies: 3, destinationTargetIDs: [deviceID]
+        )
 
         let (reopened, _, _) = try makeStore(root)
-        XCTAssertEqual(reopened.requestedCopies, 3)
+        XCTAssertEqual(reopened.newSourceDefaults.desiredCopies, 3)
+        XCTAssertEqual(reopened.newSourceDefaults.destinationTargetIDs, [deviceID])
+    }
+
+    /// A device forgotten since the answer was given is dropped rather than
+    /// carried as a destination nothing can satisfy. The copy count is left
+    /// alone: it is what the user asked for, and the sheet says so rather than
+    /// quietly lowering it.
+    func testADeviceForgottenSinceIsDroppedFromTheDefault() throws {
+        let (store, _, _) = try makeStore()
+        try makeTarget(store, "One")
+        let live = try XCTUnwrap(store.targets.first?.id)
+        let forgotten = UUID()
+
+        store.newSourceDefaults = StorageGroup.Defaults(
+            desiredCopies: 2, destinationTargetIDs: [live, forgotten]
+        )
+
+        XCTAssertEqual(store.newSourceDefaults.destinationTargetIDs, [live])
+        XCTAssertEqual(store.newSourceDefaults.desiredCopies, 2)
+    }
+
+    /// It binds nothing. Changing what the next source starts with must not
+    /// touch a source already configured — that is the line between a default
+    /// and a policy.
+    func testChangingTheDefaultDoesNotTouchAnExistingSource() throws {
+        let (store, _, _) = try makeStore()
+        try makeTarget(store, "One")
+        let deviceID = try XCTUnwrap(store.targets.first?.id)
+
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [],
+            label: "Scans",
+            desiredCopies: 1,
+            destinationTargetIDs: [deviceID]
+        ))
+        let group = try XCTUnwrap(store.storageGroups.first { $0.label == "Scans" })
+
+        store.newSourceDefaults = StorageGroup.Defaults(
+            desiredCopies: 3, destinationTargetIDs: [deviceID]
+        )
+
+        let unchanged = try XCTUnwrap(store.storageGroupsByID[group.id])
+        XCTAssertEqual(unchanged.desiredCopies, 1)
+        XCTAssertEqual(unchanged.destinationTargetIDs, [deviceID])
     }
 }

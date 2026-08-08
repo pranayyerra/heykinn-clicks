@@ -17,8 +17,9 @@ import SwiftUI
 /// not permission to claim more than the app checked.
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
-    @State private var isExportSearchPickerPresented = false
-    @State private var isFolderImportPickerPresented = false
+    /// Both pickers are the window's, shared with the File menu — see the note
+    /// on `AppCommandBus`. This screen used to own copies of both.
+    @EnvironmentObject private var commands: AppCommandBus
     @State private var importRequest: TakeoutImportRequest?
     /// Which sources are showing their detail. A source's detail belongs to
     /// the source: it used to sit further down the page as its own section, so
@@ -185,7 +186,7 @@ struct SourcesView: View {
                             }
                         }
                     }
-                    Button("Search a folder…") { isExportSearchPickerPresented = true }
+                    Button("Search a folder…") { commands.isExportSearchPickerPresented = true }
                 } label: {
                     Label("Search for Google downloads", systemImage: "magnifyingglass")
                 }
@@ -193,22 +194,6 @@ struct SourcesView: View {
             }
         }
         .sheet(item: $importRequest) { TakeoutImportSheet(request: $0) }
-        .fileImporter(
-            isPresented: $isExportSearchPickerPresented,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.scanForTakeout(rootURL: url, targetID: nil)
-            }
-        }
-        .fileImporter(
-            isPresented: $isFolderImportPickerPresented,
-            allowedContentTypes: [.folder, .image, .movie],
-            allowsMultipleSelection: true
-        ) { result in
-            if case .success(let urls) = result { store.importFolders(urls) }
-        }
     }
 
     /// The opened source's detail, titled so it is obvious which node it
@@ -376,7 +361,7 @@ struct SourcesView: View {
                 Text(
                     plan.releasableAssetIDs.isEmpty
                         ? "Nothing is ready to be freed yet."
-                        : "\(plan.releasableAssetIDs.count.formatted()) photo(s) — \(Formatters.bytes.string(fromByteCount: plan.releasableBytes)) — are safe enough on your own drives that their iCloud copy could go."
+                        : "\(Formatters.count(plan.releasableAssetIDs.count, "photo")) — \(Formatters.bytes.string(fromByteCount: plan.releasableBytes)) — are safe enough on your own drives that their iCloud copy could go."
                 )
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
@@ -468,7 +453,7 @@ struct SourcesView: View {
                 } else {
                     FolderSourceList()
                 }
-                Button("Choose a folder…") { isFolderImportPickerPresented = true }
+                Button("Choose a folder…") { commands.isImportPickerPresented = true }
                     .disabled(store.isImporting)
                 if store.isImporting {
                     HStack(spacing: 6) {

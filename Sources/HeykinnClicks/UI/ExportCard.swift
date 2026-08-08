@@ -25,6 +25,9 @@ struct ExportSummary: Identifiable {
     }
 
     var parts: [ExportPart] { plan.parts.filter { $0.setID == setID } }
+    /// How many copies this export asks for. Per set, so two exports on one
+    /// machine can be kept differently.
+    var copiesRequired: Int { plan.copiesRequired(forSet: setID) }
     var partCount: Int {
         parts.isEmpty ? Set(archives.compactMap(\.partNumber)).count : parts.count
     }
@@ -51,9 +54,9 @@ struct ExportSummary: Identifiable {
     /// Parts short of the policy, with the targets each one still owes a copy to.
     var shortfall: [(part: ExportPart, destinations: [UUID])] {
         parts.compactMap { part in
-            let redundancy = part.redundancy(acrossTargets: plan.managedTargetIDs, policy: plan.policy)
+            let redundancy = plan.redundancy(of: part)
             guard !redundancy.meetsPolicy else { return nil }
-            let destinations = Array(part.targetsNeedingACopy(managedTargetIDs: plan.managedTargetIDs))
+            let destinations = Array(plan.targetsNeedingACopy(of: part))
             guard !destinations.isEmpty else { return nil }
             return (part, destinations)
         }
@@ -98,9 +101,7 @@ struct ExportSummary: Identifiable {
                 .orange
             )
         }
-        let grades = parts.map {
-            $0.redundancy(acrossTargets: plan.managedTargetIDs, policy: plan.policy)
-        }
+        let grades = parts.map { plan.redundancy(of: $0) }
         let verified = grades.filter { $0 == .redundantVerified }
         let spotChecked = grades.filter { $0 == .redundantSpotChecked }
         let soleCopies = grades.filter { $0 == .singleCopyByPolicy }
@@ -109,7 +110,7 @@ struct ExportSummary: Identifiable {
         // Saying "not yet compared" would promise a check that is not coming.
         if soleCopies.count == parts.count {
             return (
-                "Safe on your one drive. You have asked for \(plan.policy.description), so there is no second copy to check this one against.",
+                "Safe on your one drive. This export is set to \(Formatters.copies(copiesRequired)), so there is no second copy to check this one against.",
                 "checkmark.circle",
                 .teal
             )
@@ -140,9 +141,21 @@ struct ExportCard: View {
     let export: ExportSummary
     @Binding var importRequest: TakeoutImportRequest?
     @EnvironmentObject private var store: AppStore
+    /// The source whose settings are being changed, if any.
+    @State private var editing: StorageGroup?
 
     private var driveNames: [UUID: String] {
         Dictionary(uniqueKeysWithValues: store.targets.map { ($0.id, $0.name) })
+    }
+
+    /// This export's own source, once it has one.
+    ///
+    /// Nil until the export has been imported: a download the app has merely
+    /// found on a drive has never been asked about, and inventing settings for
+    /// it would put a decision in the user's mouth. The card offers the sheet
+    /// as soon as there is something for it to govern.
+    private var group: StorageGroup? {
+        store.storageGroup(forExportSet: export.setID)
     }
 
     var body: some View {
@@ -161,7 +174,7 @@ struct ExportCard: View {
                             }
                         }
                         if !export.extractableZips.isEmpty {
-                            Button("Unzip \(export.extractableZips.count) file(s) onto the drive") {
+                            Button("Unzip \(Formatters.count(export.extractableZips.count, "file")) onto the drive") {
                                 store.extractTakeoutZips(export.extractableZips.map(\.id))
                             }
                         }
@@ -196,10 +209,30 @@ struct ExportCard: View {
                     ExportPartGrid(
                         parts: export.parts,
                         archives: export.archives,
-                        managedTargetIDs: export.plan.managedTargetIDs,
-                        policy: export.plan.policy,
+                        managedTargetIDs: export.plan.destinations(forSet: export.setID),
+                        copiesRequired: export.copiesRequired,
                         driveNames: driveNames
                     )
+                }
+
+                // The same affordance a folder has, in the same words. An
+                // export is a source like any other: it says how many copies of
+                // its photos to keep and which devices hold them, and the place
+                // to change that is next to the report of where they are.
+                if let group {
+                    HStack(spacing: 6) {
+                        Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))")
+                            .font(.caption)
+                            .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Button {
+                            editing = group
+                        } label: {
+                            Label("Change where these are kept", systemImage: "slider.horizontal.3")
+                                .font(.caption)
+                        }
+                        .buttonStyle(.link)
+                    }
                 }
 
                 transferPlan
@@ -216,6 +249,7 @@ struct ExportCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(6)
         }
+        .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
     }
 
     /// What is actually going to happen about a shortfall, rather than only

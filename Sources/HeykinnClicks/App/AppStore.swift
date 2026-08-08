@@ -27,7 +27,6 @@ final class AppStore: ObservableObject {
     @Published private(set) var driveBreakdowns: [UUID: DriveContentBreakdown] = [:]
     /// A Merkle tree per target over what the catalog records it holding, so
     /// "do these two targets agree?" costs one comparison instead of a sweep.
-    @Published private(set) var targetTrees: [UUID: MerkleTree] = [:]
     /// The few directories a target's recorded paths hang from.
     private var targetAnchors: [UUID: Set<String>] = [:]
     /// When each target's anchors were last confirmed present.
@@ -66,53 +65,17 @@ final class AppStore: ObservableObject {
 
     var isSyncing: Bool { syncProgress != nil }
 
-    /// How many targets should hold each Local asset. Read wherever redundancy
-    /// is judged, so the number is stated once — and set by the user, because
-    /// it governs how safe their archive is and how many targets they may
-    /// register. A number the app enforces but never shows is worse than no
-    /// rule at all.
-    /// The most copies the policy may ask for: you cannot keep more copies
-    /// than you have places to put them. Registering a target raises this.
-    var maxSettableCopies: Int { max(targets.count, 1) }
-
-    /// How many copies the user has asked for, whether or not there are places
-    /// to put them yet.
-    ///
-    /// Kept apart from the policy in force, because the app has to bound the
-    /// policy to the targets that exist — a policy asking for two copies with
-    /// no drives registered reports a healthy archive as 0% safe. Bounding it
-    /// used to mean *overwriting* this number, which made the clamp a one-way
-    /// ratchet: every new install opens with no targets, so two copies was
-    /// lowered to one and written to preferences before the user had plugged
-    /// anything in. Registering a drive raised the ceiling and nothing raised
-    /// the policy back, so the app sat at one copy for good — quietly not doing
-    /// the single thing it exists to do, while reporting 100%.
-    /// No `didSet`. A stored property with a default fires its observer when an
-    /// initialiser assigns it, so persisting there wrote the preference back
-    /// and audited a policy change nobody made on every single launch. The
-    /// side effects belong to the setter below, which only a person moving the
-    /// control ever reaches.
-    @Published private var desiredCopiesPreference: Int = LocalRedundancyPolicy.default.desiredCopies
-
-    /// The policy actually in force: what was asked for, bounded by the number
-    /// of places that could hold a copy. Registering a target raises it again
-    /// on its own, because nothing was thrown away to bound it.
-    var redundancyPolicy: LocalRedundancyPolicy {
-        get { LocalRedundancyPolicy(desiredCopies: min(desiredCopiesPreference, maxSettableCopies)) }
-        set {
-            guard newValue.desiredCopies != desiredCopiesPreference else { return }
-            desiredCopiesPreference = newValue.desiredCopies
-            defaults.set(desiredCopiesPreference, forKey: "desiredCopies")
-            // Protection is judged against this number, so every verdict in
-            // the app changes the moment it does.
-            recomputeDerivedState()
-            audit(.policy, "Redundancy policy set to \(LocalRedundancyPolicy(desiredCopies: desiredCopiesPreference).description) per Local photo.")
-        }
-    }
-
-    /// What the user asked for, for the control that sets it: a slider that
-    /// snapped back to the bounded value could never be moved above it.
-    var requestedCopies: Int { desiredCopiesPreference }
+    // A global `redundancyPolicy` used to live here: one copy count for the
+    // whole archive, with a slider under Policies and a ceiling of "however
+    // many devices are registered". Every one of those pieces was answering a
+    // question that now belongs to the source — how many copies of *these*
+    // photos, on *which* devices — and a single archive-wide number could only
+    // ever contradict the sources it sat above. It is gone rather than demoted:
+    // left as a default it would have kept being read as the real answer.
+    //
+    // `newSourceDefaults` below is what remains, and it is not a policy. It
+    // remembers the last answer given so the add sheet opens prefilled; it
+    // binds nothing, and changing it changes no photo's placement.
 
     /// An unmanaged external volume just appeared; the UI asks whether to use
     /// it as managed local storage (and/or scan it for Takeout).
@@ -141,9 +104,92 @@ final class AppStore: ObservableObject {
     /// refresh — small enough to feel live, large enough to amortise the
     /// per-chunk commit.
     private static let importChunkSize = 100
-    private var ignoredVolumeKeys: Set<String> = []
+
+    /// What the user has already decided about each disk. Owns what used to be
+    /// `ignoredVolumeKeys`, which could only say "stop asking" and had no way
+    /// back — see `Services/AccessGrants.swift`.
+    let accessGrants: AccessGrants
+
+    /// Each thing the user added, with its own copy count and destinations.
+    @Published private(set) var sources: [PhotoArchiveSource] = []
+    /// Which source each asset came from. A side map rather than a field on
+    /// `Asset` — see `CatalogStore.fetchSourceIDsByAsset`.
+    @Published private(set) var sourceIDByAsset: [UUID: UUID] = [:]
+
+    var sourcesByID: [UUID: PhotoArchiveSource] {
+        Dictionary(sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// How each set of photos is kept: copies and named devices. Separate from
+    /// the source, which records where they came from and never changes.
+    @Published private(set) var storageGroups: [StorageGroup] = []
+    /// Which group each asset is in. A strict partition — one group per asset,
+    /// because a policy needs one answer.
+    @Published private(set) var storageGroupIDByAsset: [UUID: UUID] = [:]
+
+    var storageGroupsByID: [UUID: StorageGroup] {
+        Dictionary(storageGroups.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
+    }
+
+    /// The group an asset belongs to, if it has one.
+    func storageGroup(forAsset assetID: UUID) -> StorageGroup? {
+        storageGroupIDByAsset[assetID].flatMap { storageGroupsByID[$0] }
+    }
+
+    /// What the next source starts with: whatever the last one used.
+    ///
+    /// The tenth folder going to the same two devices should cost a click, not
+    /// a decision — asking the same question ten times is how a considered
+    /// choice becomes a reflex.
+    var newSourceDefaults: StorageGroup.Defaults {
+        get {
+            guard let data = defaults.data(forKey: "newSourceDefaults"),
+                  let decoded = try? JSONDecoder().decode(
+                    StorageGroup.Defaults.self, from: data
+                  )
+            else {
+                // Before anything has been chosen: two copies where there are
+                // two devices to put them on, otherwise as many as there are.
+                // It is the setup most people describe when asked, and it
+                // arrives in the sheet ticked and changeable rather than as a
+                // hidden rule.
+                let wanted = min(
+                    StorageGroup.Defaults.initial.desiredCopies,
+                    max(targets.count, 1)
+                )
+                return StorageGroup.Defaults(
+                    desiredCopies: wanted,
+                    destinationTargetIDs: Array(targets.map(\.id).prefix(wanted))
+                )
+            }
+            // A device forgotten since the default was saved is dropped rather
+            // than carried as a destination nothing can satisfy.
+            let live = Set(targets.map(\.id))
+            return StorageGroup.Defaults(
+                desiredCopies: decoded.desiredCopies,
+                destinationTargetIDs: decoded.destinationTargetIDs.filter(live.contains)
+            )
+        }
+        set {
+            guard let data = try? JSONEncoder().encode(newValue) else { return }
+            defaults.set(data, forKey: "newSourceDefaults")
+        }
+    }
+
+    /// The grants, republished through the store.
+    ///
+    /// `AccessGrants` is observable in its own right, but no view observes it:
+    /// they observe `AppStore`, which is the orchestrator every screen already
+    /// has. Reading `store.accessGrants.grants` from a view therefore renders
+    /// correctly once and never updates — revoking a grant would leave its row
+    /// on screen. Mirroring it here is what makes the Access list live.
+    @Published private(set) var accessGrantList: [AccessGrant] = []
 
     private let defaults: UserDefaults
+    /// Everything on this machine the app writes into. Staging, the export-part
+    /// relay, the thumbnail cache, the catalog and this device's own copy all
+    /// hang off it — so it is also the answer to "is this folder ours".
+    private let appDirectory: URL
     let staging: StagingStore
     /// Where export parts wait while travelling between targets that are never
     /// plugged in at the same time.
@@ -253,6 +299,10 @@ final class AppStore: ObservableObject {
         try? FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
 
         defaults = environment.defaults
+        self.appDirectory = appDirectory
+        let grants = AccessGrants(defaults: environment.defaults)
+        accessGrants = grants
+        accessGrantList = grants.grants
         staging = StagingStore(rootURL: appDirectory.appendingPathComponent("Staging", isDirectory: true))
         relay = ExportPartRelay(rootURL: appDirectory.appendingPathComponent("ExportPartRelay", isDirectory: true))
         targetMonitor = TargetMonitor()
@@ -276,13 +326,11 @@ final class AppStore: ObservableObject {
         backgroundRotPatrol = stored.object(forKey: "backgroundRotPatrol") as? Bool ?? true
         importFromApplePhotos = stored.object(forKey: "importFromApplePhotos") as? Bool ?? true
         iCloudPhotosEnabled = stored.object(forKey: "iCloudPhotosEnabled") as? Bool
-        ignoredVolumeKeys = Set(stored.stringArray(forKey: "ignoredVolumeKeys") ?? [])
-        // The stored preference directly, not through `redundancyPolicy`:
-        // that is a computed property now, and a computed setter *does* run in
-        // an initialiser — writing the default straight back to preferences
-        // and auditing a policy change nobody made, on every launch.
-        desiredCopiesPreference = stored.object(forKey: "desiredCopies") as? Int
-            ?? LocalRedundancyPolicy.default.desiredCopies
+        hostTargetDeclined = stored.object(forKey: "hostTargetDeclined") as? Bool ?? false
+        // The old archive-wide copy count was read back here. Nothing reads it
+        // now — each source carries its own — and the stored key is left where
+        // it is rather than deleted: it costs nothing, and a downgrade to a
+        // build that still honours it should find the user's answer intact.
 
         loadAll()
 
@@ -298,6 +346,27 @@ final class AppStore: ObservableObject {
         // volumes — or backing the catalog up onto the user's actual drives —
         // is exactly what it must not do.
         guard environment.runsBackgroundWork else { return }
+
+        // Before the first sweep, so a disk that is already attached is
+        // readable without the user re-granting anything. Failures here are
+        // silent by design — the usual reason a bookmark will not resolve is
+        // that its disk is simply not plugged in.
+        accessGrants.resumeAccess()
+        adoptHostDeviceIfNeeded()
+        // After host adoption, so a first launch has a device to read
+        // destinations from, and before the first placement audit, which needs
+        // every asset to know which source it answers to.
+        backfillSources()
+        // After the backfill, so a source it has just created is linked in the
+        // same launch rather than the next one.
+        linkExportSourcesToTheirSets()
+        // And after both, so it reads the settled sources. A device taken off a
+        // source keeps the rows saying it is owed copies until something clears
+        // them, and the only things that did were registering a device and
+        // changing a source's settings — neither of which a user who has just
+        // undone a change has any reason to do next. Cheap, and silent when
+        // there is nothing to withdraw.
+        withdrawUnnamedPlacements()
 
         rescanTargets()
         // Runs after the drive scan so drive-resident leftovers are visible.
@@ -382,7 +451,7 @@ final class AppStore: ObservableObject {
 
         let discarded = relay.discardIncompleteCopies()
         if discarded > 0 {
-            audit(.replication, "Discarded \(discarded) incomplete part cop(ies) left by an interrupted transfer.")
+            audit(.replication, "Discarded \(Formatters.count(discarded, "incomplete part copy", "incomplete part copies")) left by an interrupted transfer.")
         }
         applyArchiveLevelRedundancy()
         refreshPartTransferPlan()
@@ -400,7 +469,7 @@ final class AppStore: ObservableObject {
         let transfers = partTransferPlan.transfers
         guard !transfers.isEmpty else {
             if !partTransferPlan.stranded.isEmpty {
-                audit(.replication, "\(partTransferPlan.stranded.count) export part(s) still need another copy, but no drive holding one is connected. Connect the drive that has them to continue.")
+                audit(.replication, "\(Formatters.count(partTransferPlan.stranded.count, "export part")) still need another copy, but no drive holding one is connected. Connect the drive that has them to continue.")
             }
             return
         }
@@ -444,7 +513,7 @@ final class AppStore: ObservableObject {
         applyArchiveLevelRedundancy()
         loadAll()
         if moved > 0 || failed > 0 {
-            audit(.replication, "Export part transfer: \(moved) part(s) moved, \(failed) failed\(transferCancelRequested ? ", stopped early at your request" : "").")
+            audit(.replication, "Export part transfer: \(Formatters.count(moved, "part")) moved, \(failed) failed\(transferCancelRequested ? ", stopped early at your request" : "").")
         }
         backupCatalog()
     }
@@ -587,7 +656,7 @@ final class AppStore: ObservableObject {
                     importBatchID: nil,
                     importedAssetCount: 0,
                     skippedDuplicateCount: 0,
-                    note: "Copied from \(step.donorDriveID.flatMap { targetsByID[$0]?.name } ?? "the Mac's holding area") to satisfy the \(redundancyPolicy.description) policy.",
+                    note: "Copied from \(step.donorDriveID.flatMap { targetsByID[$0]?.name } ?? "the Mac's holding area") so this export is kept on the devices its source names.",
                     exportSetID: transfer.setID,
                     partNumber: transfer.partNumber,
                     quickChecksum: outcome.quickChecksum
@@ -639,9 +708,7 @@ final class AppStore: ObservableObject {
     /// holds them is not work, it is waste.
     func applyArchiveLevelRedundancy() {
         let managedIDs = Set(targets.map(\.id))
-        archivePlan = ArchiveReplicationPlanner.plan(
-            archives: takeoutArchives, managedTargetIDs: managedIDs, policy: redundancyPolicy
-        )
+        archivePlan = makeArchivePlan()
         guard !archivePlan.partsMeetingPolicy.isEmpty else { return }
 
         let assetsByPart = assetIDsByExportPart()
@@ -687,7 +754,7 @@ final class AppStore: ObservableObject {
             guard !covered.isEmpty else { return }
             audit(
                 .replication,
-                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(archivePlan.parts.count) export part(s) exist as \(redundancyPolicy.description), covering \(covered.count) asset(s). Recorded \(claimed) cop(ies) against the parts holding them, replacing \(pendingCleared) pending entr(ies), and withdrew \(cancelled) file copies that are no longer needed."
+                "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(Formatters.count(archivePlan.parts.count, "export part")) are on as many devices as their export asks for, covering \(Formatters.count(covered.count, "asset")). Recorded \(Formatters.count(claimed, "copy", "copies")) against the parts holding them, replacing \(Formatters.count(pendingCleared, "pending entry", "pending entries")), and withdrew \(cancelled) file copies that are no longer needed."
             )
             loadAll()
         } catch {
@@ -705,16 +772,17 @@ final class AppStore: ObservableObject {
     /// when certainty is wanted.
     func spotCheckExportParts() {
         guard takeoutActivity == nil, !isImporting else { return }
-        let managedIDs = Set(targets.map(\.id))
-        archivePlan = ArchiveReplicationPlanner.plan(
-            archives: takeoutArchives, managedTargetIDs: managedIDs, policy: redundancyPolicy
-        )
-        // Meeting the policy no longer implies more than one copy — under a
-        // one-copy policy a part is protected by the only copy there is. That
-        // part is not a candidate: a comparison needs something to compare to,
-        // and running one over a lone file would report agreement with itself.
-        let candidates = archivePlan.partsMeetingPolicy.filter { part in
-            part.copies.count >= redundancyPolicy.copiesNeededToCompare
+        archivePlan = makeArchivePlan()
+        // Being kept the way its export asks no longer implies more than one
+        // copy — an export set to one copy is protected by the only copy there
+        // is. That part is not a candidate: a comparison needs something to
+        // compare to, and running one over a lone file would report agreement
+        // with itself.
+        let plan = archivePlan
+        let candidates = plan.partsMeetingPolicy.filter { part in
+            part.copies.count >= copiesNeededToCompare(
+                forCopies: plan.copiesRequired(forSet: part.setID)
+            )
                 && part.copies.values.contains { $0.kind == .zip }
                 && part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
         }
@@ -751,7 +819,9 @@ final class AppStore: ObservableObject {
                     }
                     checksums[targetID] = archive.quickChecksum
                 }
-                guard checksums.count >= redundancyPolicy.copiesNeededToCompare else { continue }
+                guard checksums.count >= copiesNeededToCompare(
+                    forCopies: plan.copiesRequired(forSet: part.setID)
+                ) else { continue }
 
                 if Set(checksums.values).count == 1 {
                     assetsConfirmed += markPartVerified(part, onTargets: Set(checksums.keys))
@@ -762,9 +832,9 @@ final class AppStore: ObservableObject {
                 }
             }
 
-            var message = "Spot check: \(agreed) export part(s) matched across targets on length and sampled content, covering \(assetsConfirmed) asset(s). This is a fast check, not a full byte-for-byte comparison."
+            var message = "Spot check: \(Formatters.count(agreed, "export part")) matched across targets on length and sampled content, covering \(Formatters.count(assetsConfirmed, "asset")). This is a fast check, not a full byte-for-byte comparison."
             if !disagreed.isEmpty {
-                message += " \(disagreed.count) part(s) DIFFER and are flagged: \(disagreed.joined(separator: ", "))."
+                message += " \(Formatters.count(disagreed.count, "part")) DIFFER and are flagged: \(disagreed.joined(separator: ", "))."
             }
             audit(.replication, message)
             takeoutActivity = nil
@@ -781,14 +851,14 @@ final class AppStore: ObservableObject {
     /// read per part replaces per-asset checking entirely.
     func verifyExportPartsByChecksum() {
         guard takeoutActivity == nil, !isImporting else { return }
-        let managedIDs = Set(targets.map(\.id))
-        archivePlan = ArchiveReplicationPlanner.plan(
-            archives: takeoutArchives, managedTargetIDs: managedIDs, policy: redundancyPolicy
-        )
+        archivePlan = makeArchivePlan()
         // Only parts whose copies are all reachable can be compared now — and
         // only parts that have a second copy to be compared against at all.
-        let candidates = archivePlan.partsMeetingPolicy.filter { part in
-            part.copies.count >= redundancyPolicy.copiesNeededToCompare
+        let plan = archivePlan
+        let candidates = plan.partsMeetingPolicy.filter { part in
+            part.copies.count >= copiesNeededToCompare(
+                forCopies: plan.copiesRequired(forSet: part.setID)
+            )
                 && part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
         }
         guard !candidates.isEmpty else {
@@ -817,7 +887,9 @@ final class AppStore: ObservableObject {
                     guard let hash = await fingerprintZipIfNeeded(archive) else { continue }
                     hashes[targetID] = hash
                 }
-                guard hashes.count >= redundancyPolicy.copiesNeededToCompare else { continue }
+                guard hashes.count >= copiesNeededToCompare(
+                    forCopies: plan.copiesRequired(forSet: part.setID)
+                ) else { continue }
 
                 if Set(hashes.values).count == 1 {
                     assetsConfirmed += markPartVerified(part, onTargets: Set(hashes.keys))
@@ -831,9 +903,9 @@ final class AppStore: ObservableObject {
                 }
             }
 
-            var message = "Checksum check: \(verifiedParts) export part(s) confirmed identical across targets, covering \(assetsConfirmed) asset(s)."
+            var message = "Checksum check: \(Formatters.count(verifiedParts, "export part")) confirmed identical across targets, covering \(Formatters.count(assetsConfirmed, "asset"))."
             if !mismatchedParts.isEmpty {
-                message += " \(mismatchedParts.count) part(s) DIFFER between targets and are flagged: \(mismatchedParts.joined(separator: ", "))."
+                message += " \(Formatters.count(mismatchedParts.count, "part")) DIFFER between targets and are flagged: \(mismatchedParts.joined(separator: ", "))."
             }
             audit(.replication, message)
             takeoutActivity = nil
@@ -932,8 +1004,8 @@ final class AppStore: ObservableObject {
         takeoutActivity = TakeoutActivity(
             phase: .reconciling, detail: "Capture dates",
             itemIndex: 0, itemCount: needingDate.count + needingProvenance.count,
-            note: "\(links.count) edit(s) to link, \(needingDate.count) date(s) to recover, "
-                + "\(needingProvenance.count) source(s) to identify"
+            note: "\(Formatters.count(links.count, "edit")) to link, \(Formatters.count(needingDate.count, "date")) to recover, "
+                + "\(Formatters.count(needingProvenance.count, "source")) to identify"
         )
 
         Task { @MainActor in
@@ -987,7 +1059,7 @@ final class AppStore: ObservableObject {
                     identified += 1
                 }
                 takeoutActivity?.itemIndex = identified
-                takeoutActivity?.note = "\(identified) source(s) identified from the catalog"
+                takeoutActivity?.note = "\(Formatters.count(identified, "source")) identified from the catalog"
 
                 // 2b. Whatever is left needs the file itself: a date to find,
                 //     or a source the catalog could not evidence. One rule
@@ -1028,8 +1100,8 @@ final class AppStore: ObservableObject {
 
                     if index % 50 == 0 {
                         takeoutActivity?.itemIndex = settledFromCatalog.count + index
-                        takeoutActivity?.note = "\(recovered.values.reduce(0, +)) date(s) recovered, "
-                            + "\(identified) source(s) identified"
+                        takeoutActivity?.note = "\(Formatters.count(recovered.values.reduce(0, +), "date")) recovered, "
+                            + "\(Formatters.count(identified, "source")) identified"
                     }
                 }
             } catch {
@@ -1044,9 +1116,9 @@ final class AppStore: ObservableObject {
             // a run that identifies nothing new should look settled rather
             // than broken.
             let declined = needingProvenance.count - identified
-            audit(.system, "Capture dates: linked \(linked) edited photo(s) to their originals; "
-                + "recovered \(recovered.values.reduce(0, +)) date(s)\(summary.isEmpty ? "" : " (\(summary))"); "
-                + "identified \(identified) previously unrecorded source(s)"
+            audit(.system, "Capture dates: linked \(Formatters.count(linked, "edited photo")) to their originals; "
+                + "recovered \(Formatters.count(recovered.values.reduce(0, +), "date"))\(summary.isEmpty ? "" : " (\(summary))"); "
+                + "identified \(Formatters.count(identified, "previously unrecorded source"))"
                 + (declined > 0 ? ", left \(declined) unknown for want of evidence" : "") + ".")
             takeoutActivity = nil
             loadAll()
@@ -1081,7 +1153,7 @@ final class AppStore: ObservableObject {
                     try catalog.upsertAsset(video)
                 }
             }
-            audit(.system, "Reopened \(reopened.count) video(s) for Live Photo matching: a newly imported still shares their name.")
+            audit(.system, "Reopened \(Formatters.count(reopened.count, "video")) for Live Photo matching: a newly imported still shares their name.")
             loadAll()
         } catch {
             lastError = "Could not reopen Live Photo checks: \(error.localizedDescription)"
@@ -1105,7 +1177,7 @@ final class AppStore: ObservableObject {
         takeoutActivity = TakeoutActivity(
             phase: .reconciling, detail: "Live Photos",
             itemIndex: 0, itemCount: candidates.count,
-            note: "checking \(candidates.count) candidate pair(s)"
+            note: "checking \(Formatters.count(candidates.count, "candidate pair"))"
         )
 
         // Positions so each confirmed pair can be published in O(1); waiting
@@ -1177,7 +1249,7 @@ final class AppStore: ObservableObject {
                     takeoutActivity?.note = "\(linked) paired, \(rejected) not Live Photos"
                 }
             }
-            audit(.system, "Live Photos: linked \(linked) pair(s) — \(strongMatches) confirmed by matching Apple identifiers, \(inferredMatches) by the movie's identifier plus filename (Google had stripped the still's). \(rejected) same-name candidate(s) were not Live Photos and were left alone.")
+            audit(.system, "Live Photos: linked \(Formatters.count(linked, "pair")) — \(strongMatches) confirmed by matching Apple identifiers, \(inferredMatches) by the movie's identifier plus filename (Google had stripped the still's). \(Formatters.count(rejected, "same-name candidate")) were not Live Photos and were left alone.")
             takeoutActivity = nil
             loadAll()
         }
@@ -1246,7 +1318,7 @@ final class AppStore: ObservableObject {
 
     // MARK: - Catalog backup
 
-    /// Snapshots per drive, newest first — surfaced in Drives & Health.
+    /// Snapshots per drive, newest first — surfaced under Safety.
     @Published private(set) var catalogSnapshots: [UUID: [CatalogSnapshot]] = [:]
 
     /// A drive is due a snapshot if it has none or its newest is older than this.
@@ -1328,7 +1400,7 @@ final class AppStore: ObservableObject {
                 try catalog.upsertReplicationTask(task)
             }
             if !transientlyFailed.isEmpty {
-                repairs.append("requeued \(transientlyFailed.count) copy task(s) that had no reachable source")
+                repairs.append("requeued \(Formatters.count(transientlyFailed.count, "copy task")) that had no reachable source")
             }
 
             let stuck = replicationTasks.filter { $0.state == .inProgress }
@@ -1337,7 +1409,7 @@ final class AppStore: ObservableObject {
                 task.errorMessage = "Requeued after an interrupted run"
                 try catalog.upsertReplicationTask(task)
             }
-            if !stuck.isEmpty { repairs.append("requeued \(stuck.count) interrupted replication task(s)") }
+            if !stuck.isEmpty { repairs.append("requeued \(Formatters.count(stuck.count, "interrupted replication task"))") }
 
             // 2. Staged files no asset points at: bytes copied in just before
             // the process died. Reclaimable, and nothing references them.
@@ -1355,7 +1427,7 @@ final class AppStore: ObservableObject {
                     }
                 }
             }
-            if orphanedStaging > 0 { repairs.append("removed \(orphanedStaging) orphaned staged file(s)") }
+            if orphanedStaging > 0 { repairs.append("removed \(Formatters.count(orphanedStaging, "orphaned staged file"))") }
 
             // 3. Abandoned zip-extraction workspaces on the Mac (each can be
             // many GB) and half-written `.extracting` folders on targets.
@@ -1364,7 +1436,7 @@ final class AppStore: ObservableObject {
             if let leftovers = try? FileManager.default.contentsOfDirectory(at: workArea, includingPropertiesForKeys: nil),
                !leftovers.isEmpty {
                 for item in leftovers { try? FileManager.default.removeItem(at: item) }
-                repairs.append("cleared \(leftovers.count) abandoned extraction workspace(s)")
+                repairs.append("cleared \(Formatters.count(leftovers.count, "abandoned extraction workspace"))")
             }
             // Only look where extractions actually happen — beside a known
             // archive. Walking whole volumes at launch would cost a full-drive
@@ -1380,13 +1452,13 @@ final class AppStore: ObservableObject {
                     partials += 1
                 }
             }
-            if partials > 0 { repairs.append("removed \(partials) incomplete extraction folder(s)") }
+            if partials > 0 { repairs.append("removed \(Formatters.count(partials, "incomplete extraction folder"))") }
 
             // A transfer interrupted by a crash or an unplug leaves a
             // half-written part in the holding area. It is worthless and can
             // be many gigabytes.
             let abandoned = relay.discardIncompleteCopies()
-            if abandoned > 0 { repairs.append("discarded \(abandoned) interrupted export-part cop(ies)") }
+            if abandoned > 0 { repairs.append("discarded \(Formatters.count(abandoned, "interrupted export-part copy", "interrupted export-part copies"))") }
 
             if !repairs.isEmpty {
                 audit(.system, "Startup reconciliation: " + repairs.joined(separator: "; ") + ".")
@@ -1418,10 +1490,14 @@ final class AppStore: ObservableObject {
             importBatches = try catalog.fetchImportBatches()
             auditEvents = try catalog.fetchAuditEvents()
             takeoutArchives = try catalog.fetchTakeoutArchives()
-            // The policy in force is bounded by the targets that exist, and
-            // `redundancyPolicy` does that arithmetic on read. Nothing is
-            // written down here: overwriting what the user asked for is what
-            // made the bound permanent.
+            sources = try catalog.fetchSources()
+            storageGroups = try catalog.fetchStorageGroups()
+            storageGroupIDByAsset = try catalog.fetchStorageGroupIDsByAsset()
+            // Before `recomputeDerivedState`: every protection verdict is
+            // judged against the copy count on the asset's own source, so the
+            // source map has to be current before anything derived from it is
+            // rebuilt.
+            sourceIDByAsset = try catalog.fetchSourceIDsByAsset()
             recomputeDerivedState()
         } catch {
             lastError = "Catalog load failed: \(error.localizedDescription)"
@@ -1440,7 +1516,7 @@ final class AppStore: ObservableObject {
         protectionStates = ProtectionEvaluator.protectionStates(
             for: assets,
             replicaStates: replicaStates,
-            policy: redundancyPolicy
+            desiredCopies: { [self] in desiredCopies(forAsset: $0) }
         )
 
         var breakdowns: [UUID: DriveContentBreakdown] = [:]
@@ -1468,17 +1544,14 @@ final class AppStore: ObservableObject {
         }
         driveBreakdowns = breakdowns
 
-        // One tree per target, over what the catalog records each of them
-        // holding. Built here so comparing two targets later is a single root
-        // comparison rather than a scan.
-        var leavesByTarget: [UUID: [MerkleTree.Leaf]] = [:]
-        for replica in replicaStates where replica.state == .present {
-            guard let asset = assetsByID[replica.assetID] else { continue }
-            leavesByTarget[replica.targetID, default: []].append(
-                MerkleTree.Leaf(key: replica.assetID.uuidString, digest: asset.contentHash)
-            )
-        }
-        targetTrees = leavesByTarget.mapValues { MerkleTree(leaves: $0) }
+        // A Merkle tree per target used to be built here so two targets could
+        // be compared by their roots. Both trees took their leaf digests from
+        // `asset.contentHash` — the catalog's hash — so a shared asset carried
+        // an identical digest on both sides by construction, and the
+        // comparison could only ever report which asset keys each target held.
+        // Under k-of-n that difference is the design. Removed rather than
+        // rescoped; the placement audit answers the membership question
+        // exactly, off these same rows.
 
         // The handful of directories every recorded path hangs from. Kept so
         // the periodic check can stat three paths instead of twenty-four
@@ -1504,11 +1577,7 @@ final class AppStore: ObservableObject {
         // Planning is pure arithmetic over a few dozen archives, so the
         // export-part picture stays current with the catalog rather than only
         // after an operation that happens to recompute it.
-        archivePlan = ArchiveReplicationPlanner.plan(
-            archives: takeoutArchives,
-            managedTargetIDs: Set(targets.map(\.id)),
-            policy: redundancyPolicy
-        )
+        archivePlan = makeArchivePlan()
         refreshPartTransferPlan()
     }
 
@@ -1576,8 +1645,14 @@ final class AppStore: ObservableObject {
         promptForUnmanagedVolumes()
     }
 
-    /// Asks (once per appearance, never for ignored volumes) whether a newly
-    /// mounted unmanaged external volume should become managed local storage.
+    /// Acts on what the user already decided about a newly mounted volume, and
+    /// only asks about the ones they have not.
+    ///
+    /// The old version could remember exactly one answer — "never ask about
+    /// this drive" — so somebody who chose "scan it" was asked the same
+    /// question at every mount forever. A remembered decision is now carried
+    /// out here without a prompt, which is the whole point of having recorded
+    /// it.
     private func promptForUnmanagedVolumes() {
         let unmanaged = targetMonitor.availableVolumes.filter { volume in
             volume.isRemovable
@@ -1585,8 +1660,23 @@ final class AppStore: ObservableObject {
                 && TargetMonitor.match(volume: volume, against: targets) == nil
         }
         for volume in unmanaged {
-            let key = volume.volumeUUID ?? volume.url.path
-            guard !promptedVolumeKeys.contains(key), !ignoredVolumeKeys.contains(key) else { continue }
+            let key = AccessGrants.key(forVolumeUUID: volume.volumeUUID, path: volume.url.path)
+
+            if let decision = accessGrants.decision(forKey: key) {
+                // Same disk, possibly a different mount point. Keep the record
+                // pointing at where it actually is, so the Access list names a
+                // place the user recognises and the bookmark stays fresh.
+                accessGrants.noteSeen(key: key, displayName: volume.name, path: volume.url.path)
+                // Acting is idempotent per session, not per mount: re-running
+                // a sweep every time the monitor rescans would restart the
+                // Takeout pipeline on a drive already being worked on.
+                guard !promptedVolumeKeys.contains(key) else { continue }
+                promptedVolumeKeys.insert(key)
+                apply(decision, to: volume)
+                continue
+            }
+
+            guard !promptedVolumeKeys.contains(key) else { continue }
             promptedVolumeKeys.insert(key)
             if connectPrompt == nil {
                 connectPrompt = volume
@@ -1594,11 +1684,75 @@ final class AppStore: ObservableObject {
         }
     }
 
-    func ignoreVolumePermanently(_ volume: VolumeInfo) {
-        let key = volume.volumeUUID ?? volume.url.path
-        ignoredVolumeKeys.insert(key)
-        defaults.set(Array(ignoredVolumeKeys), forKey: "ignoredVolumeKeys")
+    /// Carries out a remembered decision. Registration is still gated on a
+    /// free slot: the policy caps how many targets exist, and a grant made
+    /// when a slot was free must not force one open later.
+    private func apply(_ decision: VolumeDecision, to volume: VolumeInfo) {
+        switch decision {
+        case .manage:
+            // No slot check: devices are unbounded, and the policy's number is
+            // copies per photo rather than places in total.
+            registerVolumeTarget(volume: volume, name: volume.name)
+        case .scan:
+            scanForTakeout(rootURL: volume.url, targetID: nil)
+        case .ignore:
+            break
+        }
+    }
+
+    /// Records what the user chose in the connect prompt.
+    ///
+    /// `remember` off means the choice happens and is not written down — the
+    /// disk is asked about again next time. That is what an unchecked
+    /// "remember this" honestly means, as against a grant with a quiet expiry.
+    func decide(_ decision: VolumeDecision, for volume: VolumeInfo, remember: Bool) {
+        accessGrants.record(
+            decision: decision,
+            forVolumeUUID: volume.volumeUUID,
+            path: volume.url.path,
+            displayName: volume.name,
+            remember: remember
+        )
+        if remember {
+            accessGrantList = accessGrants.grants
+            audit(
+                .replication,
+                "\(volume.name) will be \(decision.displayName.lowercased()) from now on, without asking. Change it under Settings → Access."
+            )
+        }
+        apply(decision, to: volume)
         connectPrompt = nil
+    }
+
+    /// Forgets one disk's decision. Deletes nothing and unregisters nothing —
+    /// the next time that disk appears, the app asks again.
+    func revokeAccessGrant(_ key: String) {
+        let name = accessGrants.grant(forKey: key)?.displayName ?? "A device"
+        accessGrants.revoke(key)
+        // So the prompt can fire again this session rather than waiting for a
+        // relaunch, which would read as the revoke not having worked.
+        promptedVolumeKeys.remove(key)
+        accessGrantList = accessGrants.grants
+        audit(.replication, "Forgot what to do with \(name). It will be asked about the next time it is connected; nothing on it was changed.")
+    }
+
+    /// Forgets every remembered answer at once. Same guarantee as one: disks
+    /// are untouched and registered devices stay registered.
+    func revokeAllAccessGrants() {
+        guard !accessGrants.grants.isEmpty else { return }
+        let count = accessGrants.grants.count
+        for grant in accessGrants.grants { promptedVolumeKeys.remove(grant.volumeKey) }
+        accessGrants.revokeAll()
+        accessGrantList = accessGrants.grants
+        audit(.replication, "Forgot what to do with \(Formatters.count(count, "device")). Each will be asked about again the next time it is connected; nothing on any of them was changed.")
+    }
+
+    /// Whether a grant's disk is attached right now, so the Access list can
+    /// say so rather than listing everything identically.
+    func isAccessGrantReachable(_ grant: AccessGrant) -> Bool {
+        availableVolumes.contains { volume in
+            AccessGrants.key(forVolumeUUID: volume.volumeUUID, path: volume.url.path) == grant.volumeKey
+        }
     }
 
     private func audit(_ category: AuditCategory, _ message: String, assetID: UUID? = nil, targetID: UUID? = nil) {
@@ -1619,8 +1773,20 @@ final class AppStore: ObservableObject {
     /// `offeringRegistration` is cleared by the prompt itself, so answering it
     /// does not walk back into it.
     func importFolders(_ urls: [URL], offeringRegistration: Bool = true) {
-        guard beginFolderImport(urls, offeringRegistration: offeringRegistration) else { return }
-        Task { await runFolderImport(urls) }
+        guard beginFolderImport(urls, offeringRegistration: offeringRegistration) else {
+            // Deferred — the registration offer intercepted it, or an import is
+            // already running. The claim must not survive: left set, the next
+            // import to start would file its photos under this source.
+            importingIntoSourceID = nil
+            return
+        }
+        Task {
+            await runFolderImport(urls)
+            // Only this import's assets belong to it. A later automatic sweep
+            // must not inherit the claim, or a Takeout pipeline running after
+            // a folder import would file its photos under the folder.
+            importingIntoSourceID = nil
+        }
     }
 
     /// The awaitable form, for callers that have to know the sweep finished
@@ -1640,6 +1806,21 @@ final class AppStore: ObservableObject {
     private func beginFolderImport(_ urls: [URL], offeringRegistration: Bool) -> Bool {
         guard !urls.isEmpty else { return false }
 
+        // The app's own folders are not a place photos came from. A sweep that
+        // *descends* into one already steps over it — `HeykinnClicks` and
+        // `Staging` are in `ImportService.excludedDirectoryNames` — but the
+        // exclusion is checked against directories the enumerator yields, and
+        // never against the root it was handed. Point the sweep straight at the
+        // app's own copy folder and it reads every replica back as user
+        // content, filing the archive's own output under a new source.
+        //
+        // Refused here rather than only at the caller that did it, because the
+        // guard has to hold for the next caller too.
+        if let owned = urls.first(where: { isAppOwnedFolder($0) }) {
+            lastError = "\(owned.lastPathComponent) is where this app keeps its own copies. Everything in it is already in the archive, under the source it originally came from — importing it would record the app's own copies as photos you added."
+            return false
+        }
+
         // A Google export is not a folder of photos, whatever it looks like in
         // Finder. Brought in through the export machinery, one 10 GB zip backs
         // thousands of replicas and one read checks them all; brought in as a
@@ -1656,7 +1837,11 @@ final class AppStore: ObservableObject {
         // without hashing all of it again. Registering the drive first makes
         // the same import free. Asked here because here is the only point at
         // which the cheaper answer is still available.
-        if offeringRegistration, targets.count < 2, let volume = unmanagedVolume(holding: urls) {
+        // No device-count condition: there is no cap to be near, and the
+        // saving this offer exists for — crediting the files where they sit
+        // instead of copying every one onto the Mac — is worth the same
+        // whether it is the first drive or the fifth.
+        if offeringRegistration, let volume = unmanagedVolume(holding: urls) {
             unmanagedSourceOffer = UnmanagedSourceOffer(volume: volume, urls: urls)
             return false
         }
@@ -1756,6 +1941,175 @@ final class AppStore: ObservableObject {
             targetID: targetID
         )
         await performFolderImport(roots, offeringRegistration: false)
+    }
+
+    // MARK: - Where a source's photos are
+
+    /// Where the photos from one source actually sit, right now.
+    ///
+    /// The Google export screen has always answered this per part; a folder
+    /// somebody added answered it not at all, and the difference was purely in
+    /// what each screen bothered to read. Both go through here now, so a
+    /// folder and an export cannot describe the same drive in two vocabularies
+    /// — or, worse, disagree about whether its content is safe.
+    ///
+    /// Motion halves are excluded to match every other count the UI shows: the
+    /// Library presents a Live Photo as one item, and reporting "24 of 36
+    /// copied" for what the user sees as 18 photos reads as a bug.
+    func copyStatus(forAssetIDs ids: [UUID], destinations: [UUID]? = nil, copies: Int? = nil) -> SourceCopyStatus {
+        let subjects = ids.compactMap { assetsByID[$0] }.filter { !$0.isLivePhotoMotion }
+        guard !subjects.isEmpty else { return .empty }
+
+        // The source's own settings when the caller knows them; otherwise the
+        // settings of the first asset, which for a real source is all of them.
+        let policy = subjects.first.map { placementPolicy(forAsset: $0.id) }
+        let named = destinations ?? policy?.destinations ?? []
+        let wanted = copies ?? policy?.copies ?? newSourceDefaults.desiredCopies
+        let namedSet = Set(named)
+        // `uniqueKeysWithValues` would trap on a repeated id. The caller passes
+        // asset ids gathered from a filter, and a duplicate there is a bug
+        // elsewhere — but crashing the app to report it is not the trade, and
+        // this runs on a redraw path.
+        let sizes = Dictionary(subjects.map { ($0.id, $0.fileSize) }, uniquingKeysWith: { first, _ in first })
+
+        // One pass over the assets, not one per question. This runs on every
+        // redraw of an opened source, and the archive it has to survive is
+        // hundreds of thousands of rows — walking the set once per device,
+        // then again for load-bearing, then again for the corridor, is the
+        // shape that stops being affordable exactly when it matters (lesson 8).
+        var held = [UUID: Int]()
+        var pending = [UUID: Int]()
+        var archiveBacked = [UUID: Int]()
+        var histogram = [Int: Int]()
+        var loadBearing = 0
+        var waiting = 0
+
+        let absent = Set(targets.map(\.id)).subtracting(reachablePaths.keys)
+        // Which assets owe a copy to a device that is not here. Built once off
+        // the task list rather than scanned per asset, which would be a linear
+        // search inside a linear walk.
+        var owedToAbsent = Set<UUID>()
+        if !absent.isEmpty {
+            for task in replicationTasks
+            where task.state == .queued && task.action == .copy && absent.contains(task.targetID) {
+                owedToAbsent.insert(task.assetID)
+            }
+        }
+
+        var owed = [UUID: Int]()
+        var owedBytes = [UUID: Int64]()
+
+        for asset in subjects {
+            // Counted only on devices the source named. A copy sitting on some
+            // other drive is real and is shown as a leftover, but it does not
+            // satisfy a setting that never asked for it.
+            var countedCopies = 0
+            var presentAnywhere = 0
+            var backedCount = 0
+            var seenOnNamed = Set<UUID>()
+
+            for replica in replicasByAssetID[asset.id] ?? [] {
+                let isNamed = namedSet.contains(replica.targetID)
+                switch replica.state {
+                case .present:
+                    held[replica.targetID, default: 0] += 1
+                    presentAnywhere += 1
+                    if isNamed {
+                        countedCopies += 1
+                        seenOnNamed.insert(replica.targetID)
+                    }
+                    if ReplicationService.isArchiveBacked(replica) {
+                        archiveBacked[replica.targetID, default: 0] += 1
+                        backedCount += 1
+                    }
+                case .pending, .copying:
+                    pending[replica.targetID, default: 0] += 1
+                    if isNamed { seenOnNamed.insert(replica.targetID) }
+                case .stale, .drift, .missing:
+                    // Not counted as a copy. The bytes are there and no longer
+                    // match what was imported, so calling it a copy would claim
+                    // more than was checked — the one thing invariant 2 forbids.
+                    break
+                }
+            }
+
+            // A named device with no row at all for this photo owes it. This
+            // is the case the previous version could not express, and it is
+            // the one that matters: a source set to keep photos on the NAS,
+            // with nothing on the NAS, is short.
+            for targetID in named where !seenOnNamed.contains(targetID) {
+                owed[targetID, default: 0] += 1
+                owedBytes[targetID, default: 0] += sizes[asset.id] ?? 0
+            }
+
+            histogram[countedCopies, default: 0] += 1
+            let presentCount = presentAnywhere
+
+            // Same rule as `hasOnlyArchiveBackedCopies`, inlined so the walk
+            // stays single-pass: every copy that exists is the source's own
+            // file, and nothing is staged behind it.
+            if asset.stagingRelativePath == nil, presentCount > 0, presentCount == backedCount {
+                loadBearing += 1
+            }
+            if staging.exists(relativePath: asset.stagingRelativePath),
+               owedToAbsent.contains(asset.id) {
+                waiting += 1
+            }
+        }
+
+        // Named devices always — including ones holding nothing, which is
+        // precisely the row worth showing. Then any unnamed device still
+        // carrying copies, so a leftover after a retarget is visible rather
+        // than being space that silently went missing.
+        func placement(for target: ReplicationTarget, isDestination: Bool) -> SourceCopyStatus.Placement {
+            SourceCopyStatus.Placement(
+                targetID: target.id,
+                name: target.name,
+                kind: target.kind,
+                isReachable: reachablePaths[target.id] != nil,
+                isDestination: isDestination,
+                held: held[target.id] ?? 0,
+                pending: pending[target.id] ?? 0,
+                owed: isDestination ? (owed[target.id] ?? 0) : 0,
+                owedBytes: isDestination ? (owedBytes[target.id] ?? 0) : 0,
+                archiveBacked: archiveBacked[target.id] ?? 0
+            )
+        }
+
+        // In the user's order, because the first device someone names is the
+        // one they think of as primary.
+        var placements = named.compactMap { targetID in
+            targetsByID[targetID].map { placement(for: $0, isDestination: true) }
+        }
+        placements += targets
+            .filter { !namedSet.contains($0.id) && (held[$0.id] ?? 0) + (pending[$0.id] ?? 0) > 0 }
+            .map { placement(for: $0, isDestination: false) }
+
+        return SourceCopyStatus(
+            total: subjects.count,
+            desiredCopies: wanted,
+            copiesHistogram: histogram,
+            placements: placements,
+            destinationCount: named.count,
+            waitingInCorridor: waiting,
+            loadBearing: loadBearing
+        )
+    }
+
+    /// The same question asked of one source.
+    func copyStatus(forSource sourceID: UUID) -> SourceCopyStatus {
+        guard sourcesByID[sourceID] != nil else { return .empty }
+        // No settings passed: a source no longer carries any. `copyStatus`
+        // reads them off the group its photos are in, which is the only place
+        // they live now — and the only answer that stays right if the photos
+        // are later moved into a different group.
+        let ids = assets.filter { sourceIDByAsset[$0.id] == sourceID }.map(\.id)
+        return copyStatus(forAssetIDs: ids)
+    }
+
+    /// The same question asked of one import batch.
+    func copyStatus(forBatch batchID: UUID) -> SourceCopyStatus {
+        copyStatus(forAssetIDs: assets.filter { $0.importBatchID == batchID }.map(\.id))
     }
 
     /// How long a note about a path is worth keeping. Long enough that a drive
@@ -1908,7 +2262,7 @@ final class AppStore: ObservableObject {
         }
 
         if released > 0 {
-            audit(.replication, "Released \(released) staged file(s) — \(Formatters.bytes.string(fromByteCount: freed)) — now that your own drives hold them safely.")
+            audit(.replication, "Released \(Formatters.count(released, "staged file")) — \(Formatters.bytes.string(fromByteCount: freed)) — now that your own drives hold them safely.")
             loadAll()
         }
         return freed
@@ -1918,13 +2272,45 @@ final class AppStore: ObservableObject {
     /// manage but does not. Nil for anything on this Mac's own disk, for a
     /// drive already registered, and for one the user has said not to ask
     /// about again.
+    /// Whether a folder is one the app writes its own copies into.
+    ///
+    /// Two families: everything under the app's directory on this machine —
+    /// staging, the relay, and this device's own copy — and the single folder
+    /// the app owns at the root of each registered drive.
+    ///
+    /// "At or inside" only. A folder that merely *contains* one of these is a
+    /// legitimate thing to sweep — the home folder contains Application
+    /// Support — and the enumerator steps over the app's directories on the way
+    /// down. Refusing those too would turn a working import into an error.
+    func isAppOwnedFolder(_ url: URL) -> Bool {
+        var roots = [appDirectory]
+        for target in targets {
+            guard let mount = reachablePaths[target.id] else { continue }
+            roots.append(
+                mount.appendingPathComponent(ReplicationTarget.appFolderName, isDirectory: true)
+            )
+        }
+        // Both spellings, for the same reason `unmanagedVolume` checks both: a
+        // path handed over by the picker and the same path with its symlinks
+        // resolved are the same folder and rarely the same string.
+        let spellings = Set([
+            url.standardizedFileURL.path,
+            url.resolvingSymlinksInPath().standardizedFileURL.path
+        ])
+        return roots.contains { rootURL in
+            let root = rootURL.standardizedFileURL.path
+            return spellings.contains { $0 == root || $0.hasPrefix(root + "/") }
+        }
+    }
+
     private func unmanagedVolume(holding urls: [URL]) -> VolumeInfo? {
         guard let first = urls.first else { return nil }
         let spellings = [first.path, first.resolvingSymlinksInPath().path]
         return availableVolumes.first { volume in
             guard volume.isRemovable, volume.url.path != "/" else { return false }
             guard TargetMonitor.match(volume: volume, against: targets) == nil else { return false }
-            guard !ignoredVolumeKeys.contains(volume.volumeUUID ?? volume.url.path) else { return false }
+            let key = AccessGrants.key(forVolumeUUID: volume.volumeUUID, path: volume.url.path)
+            guard accessGrants.decision(forKey: key) == nil else { return false }
             return spellings.contains { $0.hasPrefix(volume.url.path + "/") }
         }
     }
@@ -1940,40 +2326,827 @@ final class AppStore: ObservableObject {
     }
 
     /// Persists imported assets and queues their replication backlog.
-    /// Local-resident assets owe a replica to every managed drive; sync
-    /// happens whenever the targets appear. A drive whose replica is already
-    /// satisfied by the import source itself (archive-backed, e.g. a Takeout
-    /// folder on that drive) records the verified in-place replica instead of
-    /// queuing a duplicate copy onto the same disk.
+    /// A Local asset owes `desiredCopies` copies spread across the registered
+    /// devices — **not** a copy on every one of them. Which devices are chosen
+    /// is `PlacementPlanner`'s job: most free space after the write, preferring
+    /// devices plugged in now.
+    ///
+    /// A device whose copy is already satisfied by the import source itself
+    /// (archive-backed, e.g. a Takeout folder on that device) counts towards
+    /// the `k` where it sits, and is never sent a duplicate onto the same disk.
     @discardableResult
     private func persistImportedAssets(
         _ imported: [Asset],
         archiveBacked: [UUID: TargetReplicaState] = [:]
     ) throws -> [TargetReplicaState] {
         var written: [TargetReplicaState] = []
+
+        // Claim these for the source that started the import *first*: placement
+        // below reads each asset's source to find its destinations, so an
+        // assignment made after the planning would plan against the fallback
+        // and put the photos somewhere the user did not choose.
+        //
+        // In memory only. The catalog's half of this is written after the rows
+        // exist, further down — `assignSource` is an UPDATE, and running it
+        // against assets that have not been inserted yet matched nothing at
+        // all. Placement still saw the right answer from the map here, so the
+        // photos went to the right devices; but the link was never stored, and
+        // the `loadAll` at the end of every import replaced this map with what
+        // the catalog held, which was nothing. Every folder added through the
+        // sheet came out of its own import unattached to the source that
+        // started it, falling back to the defaults for good.
+        let claimedSourceID = imported.isEmpty ? nil : importingIntoSourceID
+        let claimedGroupID = imported.isEmpty ? nil : importingIntoStorageGroupID
+        if let claimedSourceID {
+            for asset in imported { sourceIDByAsset[asset.id] = claimedSourceID }
+        }
+        // The group is what placement below actually reads.
+        if let claimedGroupID {
+            for asset in imported { storageGroupIDByAsset[asset.id] = claimedGroupID }
+        }
+
+        let local = imported.filter { $0.residency == .local }
+        let sizes = Dictionary(
+            local.map { ($0.id, $0.fileSize) }, uniquingKeysWith: { first, _ in first }
+        )
+        // A device that already holds the file counts and is sent nothing —
+        // the Takeout zips already sitting on the drive you named are that
+        // drive's copy, not something to transport onto it.
+        let holders = local.reduce(into: [UUID: Set<UUID>]()) { holders, asset in
+            if let backed = archiveBacked[asset.id] { holders[asset.id] = [backed.targetID] }
+        }
+        // Grouped by policy, then planned per group in one pass so bytes
+        // promised to a device are counted against its room as the batch goes.
+        var destinationsByAsset: [UUID: [UUID]] = [:]
+        for group in groupedByPolicy(local.map(\.id)) {
+            let plans = PlacementPlanner.plan(
+                assets: group.assetIDs.map { (id: $0, sizeBytes: sizes[$0] ?? 0) },
+                existingHolders: holders,
+                destinations: group.destinations,
+                desiredCopies: group.copies,
+                candidates: placementCandidates
+            )
+            for plan in plans { destinationsByAsset[plan.assetID] = plan.destinations }
+        }
+
         for asset in imported {
             try catalog.upsertAsset(asset)
-            if asset.residency == .local {
-                for drive in targets {
-                    if let backed = archiveBacked[asset.id], backed.targetID == drive.id {
-                        try catalog.upsertReplicaState(backed)
-                        written.append(backed)
-                    } else {
-                        try enqueueTask(assetID: asset.id, targetID: drive.id, action: .copy)
-                        let pending = TargetReplicaState(
-                            assetID: asset.id,
-                            targetID: drive.id,
-                            state: .pending,
-                            relativePath: nil,
-                            lastVerifiedAt: nil
+            guard asset.residency == .local else { continue }
+
+            if let backed = archiveBacked[asset.id] {
+                try catalog.upsertReplicaState(backed)
+                written.append(backed)
+            }
+            for targetID in destinationsByAsset[asset.id] ?? [] {
+                try enqueueTask(assetID: asset.id, targetID: targetID, action: .copy)
+                let pending = TargetReplicaState(
+                    assetID: asset.id,
+                    targetID: targetID,
+                    state: .pending,
+                    relativePath: nil,
+                    lastVerifiedAt: nil
+                )
+                try catalog.upsertReplicaState(pending)
+                written.append(pending)
+            }
+        }
+
+        // Now that the rows are there for the UPDATE to find.
+        if let claimedSourceID {
+            try catalog.assignSource(claimedSourceID, toAssets: imported.map(\.id))
+        }
+        if let claimedGroupID {
+            try catalog.assignStorageGroup(claimedGroupID, toAssets: imported.map(\.id))
+        }
+        return written
+    }
+
+    // MARK: - Adding a source
+
+    /// A folder chosen but not yet imported, waiting for its settings.
+    ///
+    /// Nothing is read until this is answered, because placement without a
+    /// destination is the app guessing — and the guess would be silent and
+    /// permanent-feeling, since re-deciding later costs a retarget.
+    struct PendingSourceSetup: Identifiable {
+        let id = UUID()
+        var urls: [URL]
+        var label: String
+        var desiredCopies: Int
+        var destinationTargetIDs: [UUID]
+    }
+
+    @Published var pendingSourceSetup: PendingSourceSetup?
+
+    /// Opens the settings sheet for a folder the user just picked, prefilled
+    /// with whatever they chose last time.
+    func beginAddingSource(_ urls: [URL]) {
+        guard let first = urls.first else { return }
+        let defaults = newSourceDefaults
+        pendingSourceSetup = PendingSourceSetup(
+            urls: urls,
+            label: urls.count == 1
+                ? first.lastPathComponent
+                : urls.map(\.lastPathComponent).joined(separator: ", "),
+            desiredCopies: defaults.desiredCopies,
+            // Prefilled but not assumed: with nothing chosen before and no
+            // devices named, the sheet opens with the registered devices
+            // ticked up to the copy count, which is what most people want and
+            // all of it visible rather than hidden in a rule.
+            destinationTargetIDs: defaults.destinationTargetIDs.isEmpty
+                ? Array(targets.map(\.id).prefix(defaults.desiredCopies))
+                : defaults.destinationTargetIDs
+        )
+    }
+
+    /// Records the source, remembers the answer for next time, and starts the
+    /// import.
+    func confirmAddingSource(_ setup: PendingSourceSetup) {
+        pendingSourceSetup = nil
+        // Two rows, because they answer two questions. The source records that
+        // this folder was added and where it was; the group records how its
+        // photos are to be kept. They start life together and part company the
+        // moment either is edited.
+        let source = PhotoArchiveSource(
+            id: UUID(),
+            kind: .folder,
+            label: setup.label,
+            originPath: setup.urls.count == 1 ? setup.urls[0].path : nil,
+            addedAt: Date()
+        )
+        let group = StorageGroup(
+            id: UUID(),
+            label: setup.label,
+            desiredCopies: setup.desiredCopies,
+            destinationTargetIDs: setup.destinationTargetIDs,
+            createdAt: Date()
+        )
+        do {
+            try catalog.upsertSource(source)
+            try catalog.upsertStorageGroup(group)
+        } catch {
+            lastError = "Could not save the settings for \(setup.label): \(error.localizedDescription)"
+            return
+        }
+        newSourceDefaults = StorageGroup.Defaults(
+            desiredCopies: setup.desiredCopies,
+            destinationTargetIDs: setup.destinationTargetIDs
+        )
+        sources.append(source)
+        storageGroups.append(group)
+        audit(
+            .system,
+            "Added \(setup.label), set to keep its photos on \(deviceNames(setup.destinationTargetIDs)) — \(Formatters.count(setup.desiredCopies, "copy", "copies")) each."
+        )
+        // The import claims both for everything it brings in.
+        importingIntoSourceID = source.id
+        importingIntoStorageGroupID = group.id
+        importFolders(setup.urls)
+    }
+
+    /// The source an in-flight import should attribute its assets to. Cleared
+    /// when the import finishes; nil means the fallback path applies.
+    private var importingIntoSourceID: UUID?
+    /// The group an in-flight import should put its assets in.
+    private var importingIntoStorageGroupID: UUID?
+
+    func deviceNames(_ ids: [UUID]) -> String {
+        let names = ids.compactMap { targetsByID[$0]?.name }
+        guard !names.isEmpty else { return "no device" }
+        guard names.count > 1 else { return names[0] }
+        return names.dropLast().joined(separator: ", ") + " and " + names[names.count - 1]
+    }
+
+    // MARK: - Changing where a source lives
+
+    /// What changing a source's settings would actually do, computed before
+    /// anything happens.
+    ///
+    /// The separation between deleting and releasing is the point. A copy the
+    /// app wrote into its own replica folder can be removed once the new copy
+    /// verifies. A file the *user* put there — the Takeout zip they downloaded
+    /// onto that drive — is only un-counted, because the app does not delete
+    /// files it did not write. A sheet that added those together would either
+    /// promise space it will not reclaim or threaten a deletion it will not
+    /// perform.
+    func retargetPlan(
+        for group: StorageGroup,
+        newDestinations: [UUID],
+        newCopies: Int
+    ) -> RetargetPlan {
+        let assetIDs = assets.filter { storageGroupIDByAsset[$0.id] == group.id }
+        let sizes = Dictionary(
+            assetIDs.map { ($0.id, $0.fileSize) }, uniquingKeysWith: { first, _ in first }
+        )
+        let old = Set(group.destinationTargetIDs)
+        let new = Set(newDestinations)
+
+        var arriving: [RetargetPlan.DeviceChange] = []
+        for targetID in newDestinations where !old.contains(targetID) {
+            guard let target = targetsByID[targetID] else { continue }
+            var count = 0
+            var bytes: Int64 = 0
+            for asset in assetIDs {
+                let alreadyThere = (replicasByAssetID[asset.id] ?? []).contains {
+                    $0.targetID == targetID && $0.state == .present
+                }
+                if !alreadyThere {
+                    count += 1
+                    bytes += sizes[asset.id] ?? 0
+                }
+            }
+            arriving.append(RetargetPlan.DeviceChange(
+                targetID: targetID, name: target.name,
+                isReachable: reachablePaths[targetID] != nil,
+                toCopy: count, bytesToCopy: bytes,
+                toDelete: 0, bytesFreed: 0, toRelease: 0
+            ))
+        }
+
+        var departing: [RetargetPlan.DeviceChange] = []
+        for targetID in group.destinationTargetIDs where !new.contains(targetID) {
+            guard let target = targetsByID[targetID] else { continue }
+            var toDelete = 0
+            var freed: Int64 = 0
+            var toRelease = 0
+            for asset in assetIDs {
+                guard let replica = (replicasByAssetID[asset.id] ?? []).first(where: {
+                    $0.targetID == targetID && $0.state == .present
+                }) else { continue }
+                if ReplicationService.isArchiveBacked(replica) {
+                    // The user's own file. Released from the catalog's count,
+                    // never removed.
+                    toRelease += 1
+                } else {
+                    toDelete += 1
+                    freed += sizes[asset.id] ?? 0
+                }
+            }
+            departing.append(RetargetPlan.DeviceChange(
+                targetID: targetID, name: target.name,
+                isReachable: reachablePaths[targetID] != nil,
+                toCopy: 0, bytesToCopy: 0,
+                toDelete: toDelete, bytesFreed: freed, toRelease: toRelease
+            ))
+        }
+
+        return RetargetPlan(
+            sourceID: group.id, sourceLabel: group.label,
+            arriving: arriving, departing: departing
+        )
+    }
+
+    /// Applies new settings to a source and queues the work.
+    ///
+    /// Copies are queued now; removals are **not**. A remove enqueued alongside
+    /// the copy would race it, and the whole guarantee of a move is that the
+    /// new copy exists and has been read back before the old one goes. So the
+    /// departing devices are recorded on the source and the removals are
+    /// queued by `releaseDepartedDevices` once the arrivals verify.
+    func applyStorageGroupSettings(
+        _ group: StorageGroup,
+        desiredCopies: Int,
+        destinations: [UUID]
+    ) {
+        var updated = group
+        updated.desiredCopies = desiredCopies
+        updated.destinationTargetIDs = destinations
+        do {
+            try catalog.upsertStorageGroup(updated)
+        } catch {
+            lastError = "Could not save the settings for \(group.label): \(error.localizedDescription)"
+            return
+        }
+        audit(
+            .policy,
+            "\(group.label) is now kept on \(deviceNames(destinations)) — \(Formatters.count(desiredCopies, "copy", "copies")) each. Copies to the new devices are queued; anything on a device it no longer uses stays until the new copy has been read back and matched."
+        )
+        loadAll()
+        auditPlacement()
+    }
+
+    /// Removes the app's own copies from devices a source has moved off, once
+    /// the new copies are proven.
+    ///
+    /// Gated on proof rather than on a timer or a prompt: every asset must be
+    /// present on the number of devices the source now asks for, and each of
+    /// those copies must have been read back at least once. Archive-backed
+    /// files are never queued for removal — releasing the catalog's claim on
+    /// them is all that happens, and it happens by the placement audit no
+    /// longer counting them.
+    @discardableResult
+    func releaseDepartedDevices(for groupID: UUID) -> Int {
+        guard let group = storageGroupsByID[groupID] else { return 0 }
+        let named = Set(group.destinationTargetIDs)
+        var queued = 0
+
+        do {
+            try catalog.transaction {
+                for asset in assets where storageGroupIDByAsset[asset.id] == groupID {
+                    let replicas = replicasByAssetID[asset.id] ?? []
+                    let proven = replicas.filter {
+                        named.contains($0.targetID) && $0.state == .present && $0.lastVerifiedAt != nil
+                    }
+                    // Not proven yet — leave everything exactly where it is.
+                    guard proven.count >= group.desiredCopies else { continue }
+
+                    for replica in replicas
+                    where !named.contains(replica.targetID) && replica.state == .present {
+                        guard !ReplicationService.isArchiveBacked(replica) else { continue }
+                        try enqueueTask(
+                            assetID: asset.id, targetID: replica.targetID, action: .remove
                         )
-                        try catalog.upsertReplicaState(pending)
-                        written.append(pending)
+                        queued += 1
                     }
                 }
             }
+        } catch {
+            lastError = "Could not queue the cleanup for \(group.label): \(error.localizedDescription)"
+            return queued
         }
-        return written
+
+        if queued > 0 {
+            audit(
+                .replication,
+                "\(group.label): \(Formatters.count(queued, "copy", "copies")) on devices it no longer uses are queued for removal, now that the new copies have been read back and matched."
+            )
+            loadAll()
+        }
+        return queued
+    }
+
+    // MARK: - Sources
+
+    /// Gives every asset that predates sources one to belong to.
+    ///
+    /// Runs once at startup and is a no-op afterwards. Existing archives were
+    /// built before any of this existed, and an asset without a source would
+    /// fall back to the *current* defaults — which for someone whose photos
+    /// are on two drives today could mean the app deciding they belong
+    /// somewhere else entirely.
+    ///
+    /// So the destinations are not guessed: they are read from where the
+    /// copies already are. The archive already answered the question, and the
+    /// backfill's only job is to write that answer down. A source whose assets
+    /// live nowhere yet gets the defaults, because there is nothing to read.
+    func backfillSources() {
+        let unassigned: [UUID]
+        do {
+            unassigned = try catalog.fetchAssetIDsWithoutSource()
+        } catch {
+            lastError = "Could not check which photos still need a source: \(error.localizedDescription)"
+            return
+        }
+        guard !unassigned.isEmpty else { return }
+
+        let pending = Set(unassigned)
+        let batchByID = Dictionary(
+            importBatches.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+
+        // Grouped the way the user would group them: one folder is one source
+        // however many times it was swept, and one export is one source
+        // however many parts it arrived in.
+        // Which export each batch belongs to, so a backfilled export links to
+        // the same set id a fresh import would use — otherwise the settings on
+        // its card would govern a source nothing points at.
+        var setIDByBatchID: [UUID: String] = [:]
+        for archive in takeoutArchives {
+            guard let batchID = archive.importBatchID, let setID = archive.exportSetID else { continue }
+            setIDByBatchID[batchID] = setID
+        }
+
+        var groups: [String: (kind: PhotoArchiveSource.Kind, label: String, path: String?, setID: String?, assetIDs: [UUID])] = [:]
+        for asset in assets where pending.contains(asset.id) {
+            let batch = asset.importBatchID.flatMap { batchByID[$0] }
+            let kind: PhotoArchiveSource.Kind
+            let label: String
+            let path: String?
+            var setID: String?
+
+            if asset.providerLocalID != nil {
+                kind = .applePhotos
+                label = "Photos library"
+                path = nil
+            } else if let batch, batch.isFolderImport, batch.isFilesystemPath {
+                kind = .folder
+                label = (batch.sourcePath as NSString).lastPathComponent
+                path = batch.sourcePath
+            } else if let batch {
+                kind = .takeoutExport
+                label = batch.sourcePath
+                path = batch.isFilesystemPath ? batch.sourcePath : nil
+                setID = setIDByBatchID[batch.id]
+            } else {
+                // Imported by a version that wrote no batch row. Kept together
+                // under one honest label rather than split into one source per
+                // photo, which would be unmanageable and untrue.
+                kind = .folder
+                label = "Added before the app kept a record"
+                path = nil
+            }
+
+            // Keyed by the export where there is one: one export is one
+            // source however many batches its parts arrived in.
+            let key = "\(kind.rawValue)|\(setID ?? path ?? label)"
+            groups[key, default: (kind, label, path, setID, [])].assetIDs.append(asset.id)
+        }
+
+        guard !groups.isEmpty else { return }
+        let fallback = newSourceDefaults
+        var created = 0
+
+        do {
+            try catalog.transaction {
+                for key in groups.keys.sorted() {
+                    guard let group = groups[key] else { continue }
+
+                    // Where these photos actually are. Present copies only —
+                    // a queued copy is an intention, and adopting intentions as
+                    // configuration would make a half-finished sync permanent.
+                    var deviceCounts: [UUID: Int] = [:]
+                    for assetID in group.assetIDs {
+                        for replica in replicasByAssetID[assetID] ?? []
+                        where replica.state == .present {
+                            deviceCounts[replica.targetID, default: 0] += 1
+                        }
+                    }
+                    let observed = deviceCounts
+                        .sorted { $0.value == $1.value ? $0.key.uuidString < $1.key.uuidString : $0.value > $1.value }
+                        .map(\.key)
+
+                    // What the archive is already doing, not what the current
+                    // default says it should do. Split into named values: as
+                    // one expression the type-checker gives up on it.
+                    let copies: Int = observed.isEmpty ? fallback.desiredCopies : observed.count
+                    let destinations: [UUID] = observed.isEmpty
+                        ? fallback.destinationTargetIDs
+                        : observed
+                    let now = Date()
+
+                    let source = PhotoArchiveSource(
+                        id: UUID(),
+                        kind: group.kind,
+                        label: group.label,
+                        originPath: group.path,
+                        exportSetID: group.setID,
+                        addedAt: now
+                    )
+                    let storage = StorageGroup(
+                        id: UUID(),
+                        label: group.label,
+                        desiredCopies: copies,
+                        destinationTargetIDs: destinations,
+                        createdAt: now
+                    )
+                    try catalog.upsertSource(source)
+                    try catalog.upsertStorageGroup(storage)
+                    try catalog.assignSource(source.id, toAssets: group.assetIDs)
+                    try catalog.assignStorageGroup(storage.id, toAssets: group.assetIDs)
+                    created += 1
+                }
+            }
+        } catch {
+            lastError = "Could not record where your existing photos came from: \(error.localizedDescription)"
+            return
+        }
+
+        audit(
+            .system,
+            "Recorded \(Formatters.count(created, "source")) for \(Formatters.count(unassigned.count, "photo")) added before the app tracked where they came from. Each is set to keep its photos on the devices already holding them — nothing was moved, and you can change any of it under Sources."
+        )
+        loadAll()
+    }
+
+    /// Where this asset's copies belong, and how many — read off its source.
+    ///
+    /// An asset with no source yet (imported before sources existed, and not
+    /// backfilled) falls back to the current defaults rather than being placed
+    /// nowhere. Placing nothing would quietly stop protecting content that was
+    /// protected yesterday, which is the worse failure of the two.
+    /// How many copies this asset owes, read off its source. The number every
+    /// protection verdict in the app is judged against.
+    func desiredCopies(forAsset assetID: UUID) -> Int {
+        placementPolicy(forAsset: assetID).copies
+    }
+
+    /// The export-part picture, built from the archives the catalog knows
+    /// about.
+    ///
+    /// One place, because it is built on every recompute and by each of the
+    /// three checks over export parts, and four call sites disagreeing about
+    /// how many copies a part owes is exactly the bug this model exists to
+    /// prevent.
+    func makeArchivePlan() -> ArchiveReplicationPlan {
+        ArchiveReplicationPlanner.plan(
+            archives: takeoutArchives,
+            managedTargetIDs: Set(targets.map(\.id)),
+            destinationsBySetID: destinationsByExportSet,
+            copiesRequiredBySetID: copiesRequiredByExportSet,
+            defaultCopiesRequired: newSourceDefaults.desiredCopies
+        )
+    }
+
+    /// Where a group's photos came from, when they all came from one place.
+    ///
+    /// The group carries no path of its own — it is policy, not history — so
+    /// the sheet that edits it asks the sources behind its photos. A group made
+    /// by hand out of several imports has no single answer, and gets none.
+    func originPath(forStorageGroup groupID: UUID) -> String? {
+        var paths = Set<String>()
+        for asset in assets where storageGroupIDByAsset[asset.id] == groupID {
+            guard let sourceID = sourceIDByAsset[asset.id],
+                  let path = sourcesByID[sourceID]?.originPath else { continue }
+            paths.insert(path)
+            if paths.count > 1 { return nil }
+        }
+        return paths.first
+    }
+
+    /// The group behind one source's photos, when they are all in one.
+    private func groupBehind(_ source: PhotoArchiveSource) -> StorageGroup? {
+        var groupIDs = Set<UUID>()
+        for asset in assets where sourceIDByAsset[asset.id] == source.id {
+            guard let groupID = storageGroupIDByAsset[asset.id] else { continue }
+            groupIDs.insert(groupID)
+            if groupIDs.count > 1 { return nil }
+        }
+        return groupIDs.first.flatMap { storageGroupsByID[$0] }
+    }
+
+    /// The group one export's photos are in, when they are all in one.
+    ///
+    /// Membership moved onto the group, so an export's photos *can* be split
+    /// across several — someone pulls ten out of a download into a group of
+    /// their own. There is then no single answer to "how is this export kept",
+    /// and inventing one by picking the biggest would be the app deciding. Nil
+    /// says so, and the card reports the split rather than a number.
+    func storageGroup(forExportSet setID: String) -> StorageGroup? {
+        guard let source = sources.first(where: { $0.exportSetID == setID }) else { return nil }
+        if let fromPhotos = groupBehind(source) { return fromPhotos }
+        // No photos to read it from — an export found on a drive and not yet
+        // imported. Its group is the one made with it, which shares its id.
+        // Without this the export looks group-less right up until its first
+        // photo lands, and every ask for its settings would make another group.
+        return storageGroupsByID[source.id]
+    }
+
+    /// Where each export belongs, read off the group its photos are in.
+    var destinationsByExportSet: [String: Set<UUID>] {
+        var result: [String: Set<UUID>] = [:]
+        for source in sources {
+            guard let setID = source.exportSetID,
+                  let group = storageGroup(forExportSet: setID) else { continue }
+            result[setID] = Set(group.destinationTargetIDs)
+        }
+        return result
+    }
+
+    /// What each export set asks for, read off the source that is that export.
+    ///
+    /// A set with no source yet — discovered but never imported — is absent
+    /// here and falls back to the defaults, which is the honest answer: nobody
+    /// has been asked about it.
+    var copiesRequiredByExportSet: [String: Int] {
+        var result: [String: Int] = [:]
+        for source in sources {
+            guard let setID = source.exportSetID,
+                  let group = storageGroup(forExportSet: setID) else { continue }
+            result[setID] = group.desiredCopies
+        }
+        return result
+    }
+
+    /// Gives an export's source the set id it is identified by.
+    ///
+    /// Sources recorded before exports carried one have `exportSetID` nil, so
+    /// nothing can find them: the export's card offers no settings, and the
+    /// archive plan falls back to the defaults for a set the user may already
+    /// have configured. Nothing needs to be re-read to fix it — the source's
+    /// assets name their import batch, and the archives of that batch name the
+    /// set — so this is arithmetic over rows the catalog already holds.
+    ///
+    /// Runs at launch beside the source backfill, and does nothing once every
+    /// export source is linked.
+    func linkExportSourcesToTheirSets() {
+        let exportSources = sources.filter { $0.kind == .takeoutExport }
+        guard exportSources.contains(where: { $0.exportSetID == nil }) else { return }
+
+        var setIDByBatchID: [UUID: String] = [:]
+        for archive in takeoutArchives {
+            guard let batchID = archive.importBatchID,
+                  let setID = archive.exportSetID else { continue }
+            setIDByBatchID[batchID] = setID
+        }
+        guard !setIDByBatchID.isEmpty else { return }
+
+        // Which set each source's photos actually came out of, and how many of
+        // them. Counted rather than taken from the first match: a source
+        // covering several batches should answer to the export most of it came
+        // from.
+        var assetIDsBySource: [UUID: [UUID]] = [:]
+        var setCountsBySource: [UUID: [String: Int]] = [:]
+        for asset in assets {
+            guard let sourceID = sourceIDByAsset[asset.id] else { continue }
+            assetIDsBySource[sourceID, default: []].append(asset.id)
+            guard let batchID = asset.importBatchID,
+                  let setID = setIDByBatchID[batchID] else { continue }
+            setCountsBySource[sourceID, default: [:]][setID, default: 0] += 1
+        }
+
+        // Sources grouped by the export they belong to.
+        var bySet: [String: [PhotoArchiveSource]] = [:]
+        for source in exportSources {
+            let setID = source.exportSetID
+                ?? setCountsBySource[source.id]?
+                    .max { a, b in a.value == b.value ? a.key < b.key : a.value < b.value }?.key
+            guard let setID else { continue }
+            bySet[setID, default: []].append(source)
+        }
+
+        var linked = 0
+        var merged = 0
+        var leftSplit: [String] = []
+
+        do {
+            try catalog.transaction {
+                for setID in bySet.keys.sorted() {
+                    guard var group = bySet[setID], !group.isEmpty else { continue }
+                    // Most photos first: the keeper should be the row that
+                    // already describes most of the export.
+                    group.sort { a, b in
+                        let countA = assetIDsBySource[a.id]?.count ?? 0
+                        let countB = assetIDsBySource[b.id]?.count ?? 0
+                        return countA == countB ? a.addedAt < b.addedAt : countA > countB
+                    }
+                    let keeper = group[0]
+                    let rest = Array(group.dropFirst())
+
+                    // One export is one source — but only where collapsing them
+                    // throws nothing away. Two rows that ask for the same copies
+                    // on the same devices in the same order say one thing twice,
+                    // and merging them loses nothing. Two that disagree are two
+                    // decisions the user made, and picking a winner would be the
+                    // app quietly overruling one of them (invariant 4). Those
+                    // are left exactly as they are and reported.
+                    // Compared through the groups, which is where the settings
+                    // are. Two sources with no group between them agree
+                    // trivially — there is nothing to disagree about.
+                    let keeperGroup = groupBehind(keeper)
+                    let agree = rest.allSatisfy { other in
+                        let mine = groupBehind(other)
+                        return mine?.desiredCopies == keeperGroup?.desiredCopies
+                            && mine?.destinationTargetIDs == keeperGroup?.destinationTargetIDs
+                    }
+
+                    if keeper.exportSetID != setID {
+                        var updated = keeper
+                        updated.exportSetID = setID
+                        try catalog.upsertSource(updated)
+                        linked += 1
+                    }
+
+                    guard !rest.isEmpty else { continue }
+                    guard agree else {
+                        leftSplit.append(setID)
+                        continue
+                    }
+                    for loser in rest {
+                        let moving = assetIDsBySource[loser.id] ?? []
+                        if !moving.isEmpty {
+                            try catalog.assignSource(keeper.id, toAssets: moving)
+                        }
+                        try catalog.deleteSource(id: loser.id)
+                        merged += 1
+                    }
+                }
+            }
+        } catch {
+            lastError = "Could not link your Google downloads to their settings: \(error.localizedDescription)"
+            return
+        }
+
+        guard linked > 0 || merged > 0 || !leftSplit.isEmpty else { return }
+        var message = ""
+        if linked > 0 {
+            message += "Linked \(Formatters.count(linked, "Google download")) to the settings recorded for \(Formatters.pluralise(linked, "it", "them")), so how many copies to keep and where can be changed from the download's own card. "
+        }
+        if merged > 0 {
+            message += "\(Formatters.count(merged, "duplicate record")) of the same download were folded into one — they asked for the same copies on the same devices, so nothing changed about where anything is kept. "
+        }
+        if !leftSplit.isEmpty {
+            message += "\(Formatters.count(leftSplit.count, "download")) is recorded more than once with different settings; both were left alone, because choosing between them is yours to do under Sources. "
+        }
+        audit(.system, message + "Nothing was moved.")
+        loadAll()
+    }
+
+    /// The source for one Google export, creating it the first time.
+    ///
+    /// Exports had no source of their own, so their photos fell through to the
+    /// add-sheet defaults and there was nothing for "change where these are
+    /// kept" to change. One row per export set — its zips and the folders they
+    /// unpack into are one source, not two, which is what stops somebody
+    /// placing the zip on one drive and its contents on another and believing
+    /// they have two copies.
+    @discardableResult
+    func sourceForExportSet(_ setID: String, label: String) -> (source: PhotoArchiveSource, group: StorageGroup)? {
+        if let existing = sources.first(where: { $0.exportSetID == setID }) {
+            // The source is there; the group may not be, if the export was
+            // recorded before it had one.
+            if let group = storageGroup(forExportSet: setID) { return (existing, group) }
+            guard let group = makeStorageGroup(id: existing.id, label: label) else { return nil }
+            return (existing, group)
+        }
+
+        let source = PhotoArchiveSource(
+            id: UUID(),
+            kind: .takeoutExport,
+            label: label,
+            originPath: nil,
+            exportSetID: setID,
+            addedAt: Date()
+        )
+        // Shares the source's id, the same convention the policy migration
+        // uses, so the two halves of one export can find each other before any
+        // photo exists to link them.
+        guard let group = makeStorageGroup(id: source.id, label: label) else { return nil }
+        do {
+            try catalog.upsertSource(source)
+        } catch {
+            lastError = "Could not record settings for \(label): \(error.localizedDescription)"
+            return nil
+        }
+        sources.append(source)
+        return (source, group)
+    }
+
+    /// A new group carrying the last answer the user gave.
+    ///
+    /// The same starting point every other group gets when one is made without
+    /// asking. The card offers the same settings sheet a folder has, so this is
+    /// a starting point rather than a decision taken on the user's behalf and
+    /// then hidden.
+    private func makeStorageGroup(id: UUID = UUID(), label: String) -> StorageGroup? {
+        let defaults = newSourceDefaults
+        let destinations = defaults.destinationTargetIDs.isEmpty
+            ? Array(targets.map(\.id).prefix(defaults.desiredCopies))
+            : defaults.destinationTargetIDs
+        let group = StorageGroup(
+            id: id,
+            label: label,
+            desiredCopies: defaults.desiredCopies,
+            destinationTargetIDs: destinations,
+            createdAt: Date()
+        )
+        do {
+            try catalog.upsertStorageGroup(group)
+        } catch {
+            lastError = "Could not record settings for \(label): \(error.localizedDescription)"
+            return nil
+        }
+        storageGroups.append(group)
+        return group
+    }
+
+    func placementPolicy(forAsset assetID: UUID) -> (destinations: [UUID], copies: Int) {
+        guard let group = storageGroup(forAsset: assetID) else {
+            let fallback = newSourceDefaults
+            return (fallback.destinationTargetIDs, fallback.desiredCopies)
+        }
+        return (group.destinationTargetIDs, group.desiredCopies)
+    }
+
+    /// Groups assets by the policy that applies to them, so a batch is planned
+    /// once per distinct destination set rather than once per asset.
+    private func groupedByPolicy(_ assetIDs: [UUID]) -> [(destinations: [UUID], copies: Int, assetIDs: [UUID])] {
+        var buckets: [String: (destinations: [UUID], copies: Int, assetIDs: [UUID])] = [:]
+        for assetID in assetIDs {
+            let policy = placementPolicy(forAsset: assetID)
+            let key = "\(policy.copies)|" + policy.destinations.map(\.uuidString).joined(separator: ",")
+            buckets[key, default: (policy.destinations, policy.copies, [])].assetIDs.append(assetID)
+        }
+        // Sorted so a batch plans in a reproducible order; dictionary order is
+        // not, and placement that varies between runs cannot be tested.
+        return buckets.keys.sorted().compactMap { buckets[$0] }
+    }
+
+    /// Every registered device, with the free space placement should reason
+    /// about.
+    ///
+    /// An unreachable device reports nil rather than a remembered figure: a
+    /// drive's free space when it was last seen is not evidence about its free
+    /// space now, and `PlacementPlanner` ranks unknown last rather than
+    /// treating it as empty.
+    var placementCandidates: [PlacementPlanner.Candidate] {
+        targets.map { target in
+            let mount = reachablePaths[target.id]
+            return PlacementPlanner.Candidate(
+                targetID: target.id,
+                freeBytes: mount.flatMap { TakeoutExtractor.availableCapacity(onVolumeOf: $0) },
+                isReachable: mount != nil
+            )
+        }
     }
 
     /// Publishes freshly imported assets to the UI immediately, without the
@@ -1990,9 +3163,15 @@ final class AppStore: ObservableObject {
         for replica in replicas { replicasByAssetID[replica.assetID, default: []].append(replica) }
         let replicasByAsset = Dictionary(grouping: replicas, by: \.assetID)
         for asset in imported {
+            // The source map is only refreshed by `loadAll`, so mid-import this
+            // falls back to the add-sheet defaults. That is the right answer
+            // for a row the Library is showing provisionally, and the
+            // `loadAll` at the end of the import replaces it with the source's
+            // own number.
             protectionStates[asset.id] = ProtectionEvaluator.protectionState(
                 for: asset,
-                replicaStates: replicasByAsset[asset.id] ?? []
+                replicaStates: replicasByAsset[asset.id] ?? [],
+                desiredCopies: desiredCopies(forAsset: asset.id)
             )
         }
     }
@@ -2096,14 +3275,14 @@ final class AppStore: ObservableObject {
             } catch {
                 audit(.importEvent, "Could not record what this sweep read; the next one will re-read it.")
             }
-            audit(.importEvent, "Imported \(result.importedAssets.count) asset(s) from \(result.batch.sourcePath) (\(result.duplicateFilenames.count) exact duplicate(s) skipped, \(result.failures.count) failure(s)).")
+            audit(.importEvent, "Imported \(Formatters.count(result.importedAssets.count, "asset")) from \(result.batch.sourcePath) (\(Formatters.count(result.duplicateFilenames.count, "exact duplicate")) skipped, \(Formatters.count(result.failures.count, "failure"))).")
             if !adoption.isEmpty {
-                var line = "\(adoption.adopted) file(s) already in the archive were found in place and recorded as that drive's copy"
+                var line = "\(Formatters.count(adoption.adopted, "file")) already in the archive were found in place and recorded as that drive's copy"
                 if adoption.withdrawn > 0 {
-                    line += "; \(adoption.withdrawn) queued copy(s) withdrawn"
+                    line += "; \(Formatters.count(adoption.withdrawn, "queued copy", "queued copies")) withdrawn"
                 }
                 if adoption.reclaimedFiles > 0 {
-                    line += "; removed \(adoption.reclaimedFiles) duplicate(s) the app had written alongside them, freeing \(Formatters.bytes.string(fromByteCount: adoption.reclaimedBytes))"
+                    line += "; removed \(Formatters.count(adoption.reclaimedFiles, "duplicate")) the app had written alongside them, freeing \(Formatters.bytes.string(fromByteCount: adoption.reclaimedBytes))"
                 }
                 audit(.replication, line + ".")
             }
@@ -2114,7 +3293,7 @@ final class AppStore: ObservableObject {
                 pairLivePhotos()
             }
             if !result.failures.isEmpty {
-                lastError = "Import finished with \(result.failures.count) failure(s): \(result.failures.first!.error)"
+                lastError = "Import finished with \(Formatters.count(result.failures.count, "failure")): \(result.failures.first!.error)"
             }
         } catch {
             lastError = "Import persistence failed: \(error.localizedDescription)"
@@ -2211,7 +3390,7 @@ final class AppStore: ObservableObject {
                         newCount += 1
                     }
                 }
-            audit(.importEvent, "Takeout scan of \(rootURL.path): \(found.count) archive(s) found, \(newCount) new, \(refreshedCount) refreshed.", targetID: targetID)
+            audit(.importEvent, "Takeout scan of \(rootURL.path): \(Formatters.count(found.count, "archive")) found, \(newCount) new, \(refreshedCount) refreshed.", targetID: targetID)
         } catch {
             lastError = "Recording Takeout scan results failed: \(error.localizedDescription)"
         }
@@ -2288,6 +3467,25 @@ final class AppStore: ObservableObject {
             return
         }
 
+        // Claim everything this import brings in for the export it came out of,
+        // the same way the add-a-source sheet claims a folder's photos. Without
+        // it an export's photos answered to nobody: they fell through to the
+        // defaults, and the settings on the export's card governed nothing.
+        //
+        // Set before the first chunk, because `persistImportedAssets` reads it
+        // per chunk and placement inside it needs the export's destinations,
+        // not the defaults'. Cleared in `defer` so a failure part-way through
+        // cannot leave the claim standing for the next import to inherit.
+        if let setID = targets[0].exportSetID,
+           let claimed = sourceForExportSet(setID, label: setLabel) {
+            importingIntoSourceID = claimed.source.id
+            importingIntoStorageGroupID = claimed.group.id
+        }
+        defer {
+            importingIntoSourceID = nil
+            importingIntoStorageGroupID = nil
+        }
+
         for (index, archiveConst) in targets.enumerated() {
             var archive = archiveConst
             takeoutActivity = TakeoutActivity(
@@ -2329,7 +3527,7 @@ final class AppStore: ObservableObject {
                     ? min(archive.importedThroughIndex, partFiles.count)
                     : 0
                 if resumeFrom > 0 {
-                    audit(.importEvent, "Resuming \(archive.displayName) after \(resumeFrom) already-processed file(s); \(partFiles.count - resumeFrom) remain.")
+                    audit(.importEvent, "Resuming \(archive.displayName) after \(Formatters.count(resumeFrom, "already-processed file")); \(partFiles.count - resumeFrom) remain.")
                 }
                 var processedFiles = resumeFrom
 
@@ -2347,7 +3545,7 @@ final class AppStore: ObservableObject {
                     if let sourceDriveID,
                        reachablePaths[sourceDriveID] == nil || isQuiescing(sourceDriveID) {
                         let why = reachablePaths[sourceDriveID] == nil ? "disconnected" : "being released"
-                        audit(.importEvent, "Import of \(archive.displayName) stopped at \(processedFiles) of \(partFiles.count) file(s): the drive is \(why). It will resume from here.")
+                        audit(.importEvent, "Import of \(archive.displayName) stopped at \(processedFiles) of \(Formatters.count(partFiles.count, "file")): the drive is \(why). It will resume from here.")
                         abortedAt = archive.displayName
                         break
                     }
@@ -2426,9 +3624,9 @@ final class AppStore: ObservableObject {
                 try catalog.upsertTakeoutArchive(archive)
                 if partArchiveBackedCount > 0, let mount = placement.mounts.first {
                     let targetName = targetsByID[mount.targetID]?.name ?? "drive"
-                    audit(.replication, "\(partArchiveBackedCount) asset(s) from \(archive.displayName) use their Takeout files as the \(targetName) replica — no duplicate copy queued for that drive.", targetID: mount.targetID)
+                    audit(.replication, "\(Formatters.count(partArchiveBackedCount, "asset")) from \(archive.displayName) use their Takeout files as the \(targetName) replica — no duplicate copy queued for that drive.", targetID: mount.targetID)
                 }
-                audit(.importEvent, "\(archive.displayName): imported \(partImported) asset(s), \(partDuplicates) duplicate(s) skipped.")
+                audit(.importEvent, "\(archive.displayName): imported \(Formatters.count(partImported, "asset")), \(Formatters.count(partDuplicates, "duplicate")) skipped.")
             } catch {
                 lastError = "Takeout import failed at \(archive.displayName): \(error.localizedDescription)"
                 abortedAt = archive.displayName
@@ -2443,7 +3641,7 @@ final class AppStore: ObservableObject {
             batch.duplicateCount = duplicateTotal
             batch.failedCount = failureTotal
             try catalog.upsertImportBatch(batch)
-            var message = "Imported \(allImported.count) asset(s) from \(setLabel) (\(duplicateTotal) duplicate(s) skipped, \(failureTotal) failure(s))."
+            var message = "Imported \(Formatters.count(allImported.count, "asset")) from \(setLabel) (\(Formatters.count(duplicateTotal, "duplicate")) skipped, \(Formatters.count(failureTotal, "failure")))."
             if let abortedAt {
                 message += " Aborted at \(abortedAt); already-imported parts are kept."
             }
@@ -2489,7 +3687,7 @@ final class AppStore: ObservableObject {
                 detail: archive.displayName,
                 stepIndex: index + 1,
                 stepCount: targets.count,
-                note: "\(workers) parallel worker(s)"
+                note: "\(Formatters.count(workers, "parallel worker"))"
             )
             do {
                 markBusy(archiveDriveID, true)
@@ -2563,7 +3761,7 @@ final class AppStore: ObservableObject {
                 $0.targetID == targetID && $0.state == .present && ($0.relativePath?.hasPrefix(folderRelative) ?? false)
             }.count
             if backingCount > 0 {
-                lastError = "Not deleting \(archive.displayName): its files are the \(targetsByID[targetID]?.name ?? "drive") replica for \(backingCount) asset(s). It is storage, not a redundant copy."
+                lastError = "Not deleting \(archive.displayName): its files are the \(targetsByID[targetID]?.name ?? "drive") replica for \(Formatters.count(backingCount, "asset")). It is storage, not a redundant copy."
                 return
             }
         }
@@ -2818,10 +4016,10 @@ final class AppStore: ObservableObject {
             try settleQueuedCopyTasks(assetIDs: Set(result.claimedReplicas.map(\.assetID)), targetID: targetID)
             archive.importedAt = Date()
             archive.importedAssetCount = result.claimedReplicas.count
-            archive.note = "Reconciled: existing content on \(targetName) claimed as \(result.claimedReplicas.count) verified replica(s); nothing was copied."
+            archive.note = "Reconciled: existing content on \(targetName) claimed as \(Formatters.count(result.claimedReplicas.count, "verified replica")); nothing was copied."
             try catalog.upsertTakeoutArchive(archive)
             let method = usedFastPath ? "checksum match with a known identical zip" : "in-place hashing"
-            audit(.replication, "\(archive.displayName) on \(targetName): \(result.claimedReplicas.count) of \(result.scannedFileCount) file(s) claimed as in-place replicas via \(method); queued copies cancelled.", targetID: targetID)
+            audit(.replication, "\(archive.displayName) on \(targetName): \(result.claimedReplicas.count) of \(Formatters.count(result.scannedFileCount, "file")) claimed as in-place replicas via \(method); queued copies cancelled.", targetID: targetID)
         } catch {
             lastError = "Reconciliation persistence failed: \(error.localizedDescription)"
         }
@@ -2867,7 +4065,7 @@ final class AppStore: ObservableObject {
         for domain in ResidencyDomain.allCases where domain != .local {
             let withdrawn = clearUnverifiedCloudPresence(domain: domain)
             guard withdrawn > 0 else { continue }
-            repairs.append("withdrew \(withdrawn) unverified \(domain.displayName) presence claim(s) recorded by an earlier version")
+            repairs.append("withdrew \(Formatters.count(withdrawn, "unverified \(domain.displayName) presence claim")) recorded by an earlier version")
         }
     }
 
@@ -2891,7 +4089,7 @@ final class AppStore: ObservableObject {
                     MigrationService.fail(job, reason: "\(domain.displayName) presence was never verified and has been withdrawn")
                 )
             }
-            audit(.violation, "Withdrew unverified \(domain.displayName) presence from \(affected.count) asset(s) the app holds locally; it has no \(domain.displayName) connection and never confirmed the claim.")
+            audit(.violation, "Withdrew unverified \(domain.displayName) presence from \(Formatters.count(affected.count, "asset")) the app holds locally; it has no \(domain.displayName) connection and never confirmed the claim.")
             loadAll()
             return affected.count
         } catch {
@@ -2932,6 +4130,92 @@ final class AppStore: ObservableObject {
         )
     }
 
+    /// The folder this machine holds its copy in when nobody has chosen one.
+    ///
+    /// Beside the catalog rather than in Pictures or Documents: it is the app's
+    /// own storage, it should not appear in the user's own folders uninvited,
+    /// and putting it next to the database means one place to look and one
+    /// place to move. It is outside `Staging/`, which the registration check
+    /// enforces anyway — staging is transit and a target inside it would have
+    /// the app counting its own waiting room as a copy.
+    var defaultHostTargetURL: URL {
+        staging.rootURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("LocalCopy", isDirectory: true)
+    }
+
+    /// Set when the user forgets the host target, so the app does not silently
+    /// re-adopt this Mac on the next launch and undo their decision. Forgetting
+    /// is the supported way to run an archive that will not fit on the boot
+    /// disk (SPEC invariant 4), and a default that reasserts itself is not a
+    /// default, it is a policy.
+    private var hostTargetDeclined: Bool = false
+
+    /// Makes this machine a target on first launch.
+    ///
+    /// The Mac is a device like any other, and treating it only as a corridor
+    /// meant a fresh install with no drive attached held nothing the policy
+    /// counted — while a boot disk with room to spare sat unused. Under the
+    /// default two-copy policy this is copy one, and the second is the first
+    /// drive registered.
+    ///
+    /// Deliberately quiet, and deliberately conservative:
+    ///
+    /// - It runs once. Once the user has forgotten the host target, or
+    ///   registered one themselves, this never acts again.
+    /// - It defers rather than failing when the folder cannot be made.
+    ///   Surfacing that as a startup error, on a launch the user did not ask
+    ///   anything of, would be alarming and unactionable. A later launch, or an
+    ///   explicit registration from the Drives screen, still works.
+    /// - It does not require room for the whole archive. Under `k`-of-`n` the
+    ///   Mac takes the share that fits and placement routes the rest to
+    ///   drives, so the old "will the entire archive fit on the boot disk"
+    ///   gate was asking a question that no longer decides anything.
+    func adoptHostDeviceIfNeeded() {
+        guard !hostTargetDeclined else { return }
+        guard !targets.contains(where: { $0.kind == .hostDevice }) else { return }
+
+        let url = defaultHostTargetURL
+        do {
+            try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        } catch {
+            return
+        }
+
+        // Still declines a boot disk with no room to spare: a device that
+        // cannot take even the reserve is not somewhere copies can go, and
+        // registering it would add a device that placement always skips.
+        let available = TakeoutExtractor.availableCapacity(onVolumeOf: url) ?? 0
+        guard available > PlacementPlanner.reserveBytes else { return }
+
+        // The refusal path sets `lastError`, and this registration was the
+        // app's idea rather than the user's, so it is not theirs to dismiss.
+        // Restored rather than cleared: an error already on the store came
+        // from something they did do, and swallowing it here would lose it.
+        let existingError = lastError
+        registerHostDeviceTarget(at: url, name: hostDeviceName)
+        lastError = existingError
+    }
+
+    /// What this Mac is called, so the Drives screen and every source's copy
+    /// status name the machine rather than saying "This device" twice.
+    var hostDeviceName: String {
+        let name = Host.current().localizedName ?? ""
+        return name.isEmpty ? "This Mac" : name
+    }
+
+    /// Whether this machine currently holds a counted copy.
+    var hostTarget: ReplicationTarget? {
+        targets.first { $0.kind == .hostDevice }
+    }
+
+    /// Records that the user does not want this Mac holding a copy, so the
+    /// first-launch adoption does not put it back.
+    func declineHostTarget() {
+        hostTargetDeclined = true
+        defaults.set(true, forKey: "hostTargetDeclined")
+    }
+
     /// Registers this machine as a target, holding its copy in the folder the
     /// user picked. The folder says where; the device is what is being
     /// registered — so a folder that turns out to live on an external drive is
@@ -2966,21 +4250,26 @@ final class AppStore: ObservableObject {
             lastError = "\(clash.name) is already on this storage. Two copies on one device do not survive that device failing, so they count as one."
             return
         }
-        // Registering seeds a copy task for every Local asset, so this is not a
-        // bookkeeping change: it is a decision to write the whole archive onto
-        // this disk. Say the size, and refuse rather than fill the boot volume.
-        let needed = localArchiveBytes
+        // A device only has to have room for *something*, not for the whole
+        // archive: placement gives it the share that fits and routes the rest
+        // elsewhere. What is refused is a disk with no usable room at all,
+        // which would be a device placement could never choose — a registered
+        // target that silently does nothing is worse than a refusal.
         let available = TakeoutExtractor.availableCapacity(onVolumeOf: url) ?? 0
-        let reserve = ExportPartTransferPlanner.holdingAreaReserveBytes
-        if needed + reserve > available {
+        if available <= PlacementPlanner.reserveBytes {
             lastError = """
-            Not registering \(url.lastPathComponent): holding a copy here needs \
-            \(Formatters.bytes.string(fromByteCount: needed)) plus \
-            \(Formatters.bytes.string(fromByteCount: reserve)) kept free, and this disk has \
-            \(Formatters.bytes.string(fromByteCount: available)) available.
+            Not registering \(url.lastPathComponent): a device needs more than \
+            \(Formatters.bytes.string(fromByteCount: PlacementPlanner.reserveBytes)) free to hold \
+            anything, and this disk has \(Formatters.bytes.string(fromByteCount: available)) available.
             """
             return
         }
+
+        // Registering this Mac on purpose overrides an earlier decision not to
+        // have it — otherwise the flag from a previous "forget" would sit there
+        // invisibly and un-register it on the next launch.
+        hostTargetDeclined = false
+        defaults.set(false, forKey: "hostTargetDeclined")
 
         register(
             name: name.isEmpty ? url.lastPathComponent : name,
@@ -2998,6 +4287,45 @@ final class AppStore: ObservableObject {
         assets.filter { $0.residency == .local }.reduce(0) { $0 + $1.fileSize }
     }
 
+    /// Local photos, counted the way the Library counts them: a Live Photo is
+    /// one photo though it is a still and a movie on disk. Files are what gets
+    /// copied; photos are what the user thinks they own, and a device's share
+    /// has to be stated in the same unit as the archive it is a share of.
+    var localPhotoCount: Int {
+        assets.filter { $0.residency == .local && !$0.isLivePhotoMotion }.count
+    }
+
+    /// Clears empty replica bucket directories from a connected device.
+    ///
+    /// The same sweep that runs after a sync, available on demand — because
+    /// the directories already on a user's drives were left by versions that
+    /// removed files without pruning, and waiting for a sync that happens to
+    /// remove something is a long wait for a folder they can see right now.
+    ///
+    /// Removes directories only, never files, and only inside the managed
+    /// replica root. A bucket still holding a photo is left alone by
+    /// `pruneEmptyBuckets` itself, which asks the filesystem rather than the
+    /// catalog — so a replica the catalog has lost track of still protects its
+    /// directory from being removed.
+    func tidyEmptyReplicaFolders(_ targetID: UUID) {
+        guard let drive = targetsByID[targetID] else { return }
+        guard let mount = reachablePaths[targetID] else {
+            lastError = "\(drive.name) is not connected."
+            return
+        }
+        let removed = ReplicationService.pruneEmptyBuckets(drive: drive, mountURL: mount)
+        guard removed > 0 else {
+            audit(.drive, "Checked \(drive.name) for empty folders left where copies used to be; there were none.", targetID: targetID)
+            return
+        }
+        audit(
+            .drive,
+            "Removed \(Formatters.count(removed, "empty folder")) from \(drive.name), left behind where copies used to be. No files were touched.",
+            targetID: targetID
+        )
+        loadAll()
+    }
+
     /// Drops a target from the registry, freeing its slot.
     ///
     /// Nothing on the target is deleted — forgetting says what the app manages,
@@ -3009,9 +4337,25 @@ final class AppStore: ObservableObject {
         do {
             try catalog.deleteTarget(id: targetID)
             audit(.drive, "Forgot \(target.name). Its files were left untouched and the slot is free for a replacement.")
+            // Forgetting this Mac is the supported way to run an archive the
+            // boot disk cannot hold. Remember the decision, or first-launch
+            // adoption puts the host target straight back on next launch and
+            // the user has no way to make it stop.
+            if target.kind == .hostDevice { declineHostTarget() }
             lastRotPatrol[targetID] = nil
             lastAnchorCheck[targetID] = nil
             loadAll()
+            // Its replicas went with it, so assets it was holding are now
+            // short. Re-place them onto the devices that remain — this is the
+            // path back from a failed drive, and leaving it to a later launch
+            // would mean sitting below the policy without saying so.
+            let requeued = auditPlacement()
+            if requeued > 0 {
+                audit(
+                    .replication,
+                    "Re-placed \(Formatters.count(requeued, "copy", "copies")) that \(target.name) was holding onto your other devices."
+                )
+            }
             rescanTargets()
         } catch {
             lastError = "Could not forget \(target.name): \(error.localizedDescription)"
@@ -3057,20 +4401,35 @@ final class AppStore: ObservableObject {
                 replicaRootComponent: ReplicationTarget.defaultReplicaRoot
             )
             try catalog.upsertTarget(target)
-            // Every existing Local asset owes this new target a replica.
-            for asset in assets where asset.residency == .local {
-                try enqueueTask(assetID: asset.id, targetID: targetID, action: .copy)
-                try catalog.upsertReplicaState(TargetReplicaState(
-                    assetID: asset.id,
-                    targetID: targetID,
-                    state: .pending,
-                    relativePath: nil,
-                    lastVerifiedAt: nil
-                ))
-            }
-            audit(.drive, "Registered \(kind.displayName.lowercased()) target \(target.name); backlog seeded for existing Local assets.", targetID: targetID)
+            audit(.drive, "Registered \(kind.displayName.lowercased()) target \(target.name).", targetID: targetID)
             loadAll()
+            // A new device does *not* owe a copy of everything. It owes a share
+            // of whatever the archive is currently short — which, if every
+            // photo already has its copies, is nothing at all.
+            //
+            // Seeding the whole archive onto every new device was the old
+            // model's defining move, and it is what made a third drive
+            // impossible: registering one queued a full copy of the archive
+            // whether or not a single photo needed it.
+            //
+            // The scan comes first, and has to. Placement asks each candidate
+            // how much room it has, and a device nobody has looked at yet
+            // reports nil — which `PlacementPlanner` reads as no room, so every
+            // photo came back with a `.noRoom` obstacle and the audit queued
+            // nothing at all. Registering a drive therefore did nothing until
+            // some later event happened to re-run the audit. Scanning first
+            // also lets the connect sequence claim content the drive already
+            // holds, so the audit that follows asks for what is genuinely
+            // missing rather than queuing copies adoption then withdraws.
             rescanTargets()
+            let queued = auditPlacement()
+            if queued > 0 {
+                audit(
+                    .drive,
+                    "\(target.name) took \(Formatters.count(queued, "copy", "copies")) the archive was short.",
+                    targetID: targetID
+                )
+            }
         } catch {
             lastError = "Target registration failed: \(error.localizedDescription)"
         }
@@ -3258,12 +4617,12 @@ final class AppStore: ObservableObject {
         }
 
         if repaired > 0 || repairedArchives > 0 {
-            var what = ["\(repaired) replica(s)"]
-            if repairedArchives > 0 { what.append("\(repairedArchives) export archive(s)") }
+            var what = ["\(Formatters.count(repaired, "replica"))"]
+            if repairedArchives > 0 { what.append("\(Formatters.count(repairedArchives, "export archive"))") }
             audit(.replication, "\(target.name): content had moved; repointed \(what.joined(separator: " and ")) to their new location. Nothing was copied.", targetID: targetID)
         }
         if unresolved > 0 {
-            audit(.violation, "\(target.name): \(unresolved) replica(s) are not where the catalog recorded them and were not found on the target.", targetID: targetID)
+            audit(.violation, "\(target.name): \(Formatters.count(unresolved, "replica")) are not where the catalog recorded them and were not found on the target.", targetID: targetID)
         }
         if repaired > 0 || unresolved > 0 || repairedArchives > 0 { loadAll() }
         return (repaired, unresolved)
@@ -3367,7 +4726,7 @@ final class AppStore: ObservableObject {
         if moved > 0 {
             audit(
                 .drive,
-                "\(targetName): moved \(moved) delivered export part(s) (e.g. \(example ?? "one")) in beside the rest of their export, where this drive already keeps it. A rename within the drive; no bytes moved.",
+                "\(targetName): moved \(Formatters.count(moved, "delivered export part")) (e.g. \(example ?? "one")) in beside the rest of their export, where this drive already keeps it. A rename within the drive; no bytes moved.",
                 targetID: targetID
             )
             loadAll()
@@ -3406,7 +4765,7 @@ final class AppStore: ObservableObject {
         }
         audit(
             .importEvent,
-            "Stopped treating \(containers.count) folder(s) as export(s) of their own (e.g. \(containers[0].0.displayName)): each one holds other exports rather than being one. Nothing on disk was touched, and the exports inside them are unaffected."
+            "Stopped treating \(Formatters.count(containers.count, "folder")) as exports of their own (e.g. \(containers[0].0.displayName)): each one holds other exports rather than being one. Nothing on disk was touched, and the exports inside them are unaffected."
         )
         loadAll()
         return containers.count
@@ -3530,14 +4889,14 @@ final class AppStore: ObservableObject {
         if !vanished.isEmpty {
             audit(
                 .violation,
-                "\(target.name): \(vanished.count) export archive(s) the catalog recorded are no longer on the drive (e.g. \(vanished[0].displayName)). They no longer count as copies of their parts.",
+                "\(target.name): \(Formatters.count(vanished.count, "export archive")) the catalog recorded are no longer on the drive (e.g. \(vanished[0].displayName)). They no longer count as copies of their parts.",
                 targetID: targetID
             )
         }
         if !returned.isEmpty {
             audit(
                 .drive,
-                "\(target.name): \(returned.count) export archive(s) previously recorded as gone are back where the catalog expects them.",
+                "\(target.name): \(Formatters.count(returned.count, "export archive")) previously recorded as gone are back where the catalog expects them.",
                 targetID: targetID
             )
         }
@@ -3683,7 +5042,7 @@ final class AppStore: ObservableObject {
         if !absent.isEmpty {
             audit(
                 .violation,
-                "\(target.name): \(absent.count) cop(ies) the catalog recorded are not on the drive (e.g. \(absentExample ?? "a file the catalog expected")), and were not found anywhere else on it. They no longer count towards the redundancy policy.",
+                "\(target.name): \(Formatters.count(absent.count, "copy", "copies")) the catalog recorded are not on the drive (e.g. \(absentExample ?? "a file the catalog expected")), and were not found anywhere else on it. They no longer count towards the redundancy policy.",
                 targetID: targetID
             )
         }
@@ -3695,7 +5054,7 @@ final class AppStore: ObservableObject {
             if baselines > 0 {
                 audit(
                     .drive,
-                    "\(target.name): recorded the size and date of \(baselines) file(s) across \(subjects.count) file(s) on disk. Nothing was compared — there was nothing yet to compare against.",
+                    "\(target.name): recorded the size and date of \(Formatters.count(baselines, "file")) across \(Formatters.count(subjects.count, "file")) on disk. Nothing was compared — there was nothing yet to compare against.",
                     targetID: targetID
                 )
             }
@@ -3705,7 +5064,7 @@ final class AppStore: ObservableObject {
 
         audit(
             .drive,
-            "\(target.name): \(changedAssetIDs.count) file(s) changed since the app last looked (e.g. \(firstReason ?? "size or date moved")). Reading them back to find out whether the content is still right.",
+            "\(target.name): \(Formatters.count(changedAssetIDs.count, "file")) changed since the app last looked (e.g. \(firstReason ?? "size or date moved")). Reading them back to find out whether the content is still right.",
             targetID: targetID
         )
         loadAll()
@@ -3713,15 +5072,179 @@ final class AppStore: ObservableObject {
         return (subjects.count, changedAssetIDs.count, baselines, absent.count)
     }
 
-    func agreement(for targetID: UUID) -> [(other: ReplicationTarget, agrees: Bool, divergentCount: Int)] {
-        guard let mine = targetTrees[targetID] else { return [] }
-        return targets.filter { $0.id != targetID }.compactMap { other in
-            guard let theirs = targetTrees[other.id] else { return nil }
-            if mine.agrees(with: theirs) {
-                return (other, true, 0)
-            }
-            return (other, false, mine.divergentKeys(from: theirs).count)
+    /// Assets not yet on all the devices their source names.
+    ///
+    /// This is what replaced the cross-target tree comparison. That compared
+    /// one device's recorded content against another's and called a difference
+    /// divergence — a useful signal only while every device was supposed to
+    /// hold everything. Devices now hold what their sources put there, so the
+    /// question worth asking is not "do these two match" but "is this photo on
+    /// the devices its source named", and that is answerable exactly from the
+    /// replica rows with no tree, no false positives, and no disk access.
+    func placementShortfall() -> [PlacementPlanner.Placement] {
+        let localAssets = assets.filter { $0.residency == .local }
+        guard !localAssets.isEmpty, !targets.isEmpty else { return [] }
+
+        var holders: [UUID: Set<UUID>] = [:]
+        var sizes: [UUID: Int64] = [:]
+        for asset in localAssets {
+            // Pending and in-flight count as held, so running the audit twice
+            // does not queue the same copy twice.
+            holders[asset.id] = Set(
+                (replicasByAssetID[asset.id] ?? [])
+                    .filter { $0.state == .present || $0.state == .pending || $0.state == .copying }
+                    .map(\.targetID)
+            )
+            sizes[asset.id] = asset.fileSize
         }
+
+        var result: [PlacementPlanner.Placement] = []
+        for group in groupedByPolicy(localAssets.map(\.id)) {
+            // Only assets actually short of one of their named devices.
+            let short = group.assetIDs.filter { assetID in
+                let held = holders[assetID] ?? []
+                return held.filter(group.destinations.contains).count < group.copies
+            }
+            guard !short.isEmpty else { continue }
+            result += PlacementPlanner.plan(
+                assets: short.map { (id: $0, sizeBytes: sizes[$0] ?? 0) },
+                existingHolders: holders,
+                destinations: group.destinations,
+                desiredCopies: group.copies,
+                candidates: placementCandidates
+            )
+            .filter { !$0.destinations.isEmpty }
+        }
+        return result
+    }
+
+    /// Places and queues the copies the archive is short.
+    ///
+    /// Counts pending and in-flight copies as holders, so running it twice does
+    /// not queue the same copy twice — the audit is meant to be safe to run on
+    /// every connect and every launch.
+    @discardableResult
+    func auditPlacement() -> Int {
+        // Before planning what is short: a device the user has just taken off a
+        // source is not short of anything, and the rows saying otherwise would
+        // otherwise sit there for good.
+        withdrawUnnamedPlacements()
+
+        let plans = placementShortfall()
+        guard !plans.isEmpty else { return 0 }
+
+        var queued = 0
+        do {
+            for plan in plans {
+                for targetID in plan.destinations {
+                    try enqueueTask(assetID: plan.assetID, targetID: targetID, action: .copy)
+                    try catalog.upsertReplicaState(TargetReplicaState(
+                        assetID: plan.assetID, targetID: targetID,
+                        state: .pending, relativePath: nil, lastVerifiedAt: nil
+                    ))
+                    queued += 1
+                }
+            }
+        } catch {
+            lastError = "Could not queue the copies your archive is short: \(error.localizedDescription)"
+            return queued
+        }
+
+        if queued > 0 {
+            audit(
+                .replication,
+                "Queued \(Formatters.count(queued, "copy", "copies")) so \(Formatters.count(plans.count, "photo")) reach the devices their source is set to keep them on."
+            )
+            loadAll()
+        }
+        return queued
+    }
+
+    /// Withdraws intentions to copy onto devices no source names.
+    ///
+    /// A `pending` replica row is not a copy — it is an intention, and an
+    /// intention to put a photo on a device the user has since taken off its
+    /// source is simply wrong. Nothing removed them: `applySourceSettings`
+    /// queues the new copies and `releaseDepartedDevices` handles copies that
+    /// actually exist, gated on proof, but a copy that was never made has
+    /// nothing to prove and no reason to wait.
+    ///
+    /// `applyArchiveLevelRedundancy` opens the same gap from the other side. It
+    /// withdraws the queued *task* for every asset an export part covers, on
+    /// every device, but only rewrites the pending *rows* on devices that hold
+    /// the part — so a device holding no part keeps rows whose tasks are gone,
+    /// and reports work waiting that nothing will ever perform.
+    ///
+    /// Deliberately narrow: only `pending`, only where the device is not named.
+    /// A `present` row is bytes on a disk and is `releaseDepartedDevices`'s
+    /// business; `copying` is in flight and belongs to the sync that started it.
+    @discardableResult
+    func withdrawUnnamedPlacements() -> Int {
+        var staleReplicas: [(assetID: UUID, targetID: UUID)] = []
+        for replica in replicaStates where replica.state == .pending {
+            let named = Set(placementPolicy(forAsset: replica.assetID).destinations)
+            guard !named.contains(replica.targetID) else { continue }
+            staleReplicas.append((replica.assetID, replica.targetID))
+        }
+        let staleKeys = Set(staleReplicas.map { "\($0.assetID)|\($0.targetID)" })
+        let staleTasks = replicationTasks.filter {
+            $0.state == .queued && $0.action == .copy
+                && staleKeys.contains("\($0.assetID)|\($0.targetID)")
+        }
+        guard !staleReplicas.isEmpty || !staleTasks.isEmpty else { return 0 }
+
+        do {
+            try catalog.transaction {
+                for stale in staleReplicas {
+                    try catalog.deleteReplicaState(assetID: stale.assetID, targetID: stale.targetID)
+                }
+                for task in staleTasks {
+                    try catalog.deleteReplicationTask(id: task.id)
+                }
+            }
+        } catch {
+            lastError = "Could not withdraw copies to devices no longer in use: \(error.localizedDescription)"
+            return 0
+        }
+
+        let devices = Set(staleReplicas.map(\.targetID))
+            .compactMap { targetsByID[$0]?.name }
+            .sorted()
+        audit(
+            .replication,
+            "Withdrew \(Formatters.count(staleReplicas.count, "queued copy", "queued copies")) to \(devices.isEmpty ? "devices no source uses" : devices.joined(separator: " and ")) — no source keeps its photos there any more, so nothing was waiting to be done. Nothing was deleted from any device."
+        )
+        loadAll()
+        return staleReplicas.count
+    }
+
+    /// How far the archive is from what its sources ask for: how many photos
+    /// are short, and how many copies that adds up to.
+    ///
+    /// Counts pending and in-flight copies as held, so a sync in progress reads
+    /// as on its way rather than as a shortfall — the number is meant to say
+    /// "this needs a decision", not "this is busy".
+    var placementShortfallSummary: (assetsShort: Int, copiesShort: Int) {
+        var assetsShort = 0
+        var copiesShort = 0
+        for asset in assets where asset.residency == .local {
+            let policy = placementPolicy(forAsset: asset.id)
+            // Only copies on the devices the source actually named count.
+            // Counting any copy anywhere would report a photo as satisfied
+            // because it happens to sit on a drive nobody asked it to be on.
+            let held = (replicasByAssetID[asset.id] ?? [])
+                .filter {
+                    ($0.state == .present || $0.state == .pending || $0.state == .copying)
+                        && policy.destinations.contains($0.targetID)
+                }
+                .count
+            let missing = policy.copies - held
+            if missing > 0 {
+                assetsShort += 1
+                copiesShort += missing
+            }
+        }
+        return (assetsShort, copiesShort)
     }
 
     func backlogCount(for targetID: UUID) -> Int {
@@ -3758,7 +5281,7 @@ final class AppStore: ObservableObject {
                 for task in doomed { try catalog.deleteReplicationTask(id: task.id) }
             }
             let targetName = targetsByID[targetID]?.name ?? "drive"
-            audit(.replication, "Cleared \(doomed.count) queued \(action.rawValue) task(s) for \(targetName); they can be re-queued at any time.", targetID: targetID)
+            audit(.replication, "Cleared \(Formatters.count(doomed.count, "queued \(action.rawValue) task")) for \(targetName); they can be re-queued at any time.", targetID: targetID)
             loadAll()
         } catch {
             lastError = "Could not clear queued tasks: \(error.localizedDescription)"
@@ -3884,13 +5407,32 @@ final class AppStore: ObservableObject {
                 try? catalog.upsertTarget(updatedDrive)
             }
             let remaining = queued.count - completed - failed
-            var summary = "Sync with \(drive.name): \(completed) task(s) completed, \(failed) failed"
+            var summary = "Sync with \(drive.name): \(Formatters.count(completed, "task")) completed, \(failed) failed"
             if let reason = interruptionReason {
-                summary += "; \(reason) with \(remaining) task(s) still queued"
+                summary += "; \(reason) with \(Formatters.count(remaining, "task")) still queued"
             }
             audit(.replication, summary + ".", targetID: targetID)
             syncProgress = nil
             loadAll()
+            // A sync is the only thing that turns a queued copy into a proven
+            // one, so it is the only moment a pending retarget can become
+            // safe to finish. Checked here rather than on a timer: the
+            // precondition changed exactly now.
+            for source in sources { releaseDepartedDevices(for: source.id) }
+            // Removals prune as they go, but a sync that removed files is also
+            // the moment buckets left by earlier versions — and by migration
+            // cleanup, which never pruned — become worth sweeping. Bounded by
+            // the bucket count, not the file count.
+            if let mount = reachablePaths[targetID], let drive = targetsByID[targetID] {
+                let pruned = ReplicationService.pruneEmptyBuckets(drive: drive, mountURL: mount)
+                if pruned > 0 {
+                    audit(
+                        .replication,
+                        "Removed \(Formatters.count(pruned, "empty folder")) left behind on \(drive.name) where copies used to be. No files were touched.",
+                        targetID: targetID
+                    )
+                }
+            }
             // After the reload, so the verdicts this reads are the ones the
             // sync just established rather than the ones it started with.
             reclaimStaging()
@@ -3955,32 +5497,6 @@ final class AppStore: ObservableObject {
     /// up where this one left off. Replicas already queued are not re-queued.
     /// Queues reads against only the assets the trees say disagree.
     ///
-    /// This is what the trees buy: a divergence found by comparing roots costs
-    /// nothing to find, and re-reading it costs only the files responsible
-    /// rather than a sweep of the whole target. Falls back to nothing when the
-    /// targets agree — there is no work to do, and reading anyway would be the
-    /// timer this replaced.
-    func queueDivergenceCheck(_ targetID: UUID) {
-        guard reachablePaths[targetID] != nil else {
-            lastError = "That target is not reachable."
-            return
-        }
-        let divergent = Set(
-            agreement(for: targetID)
-                .filter { !$0.agrees }
-                .flatMap { comparison -> [UUID] in
-                    guard let mine = targetTrees[targetID],
-                          let theirs = targetTrees[comparison.other.id] else { return [] }
-                    return mine.divergentKeys(from: theirs).compactMap(UUID.init(uuidString:))
-                }
-        )
-        guard !divergent.isEmpty else {
-            audit(.replication, "\(targetsByID[targetID]?.name ?? "Target") holds the same content as every other target; nothing to re-read.", targetID: targetID)
-            return
-        }
-        queueVerificationSweep(targetID, budget: .unlimited, restrictedTo: divergent)
-    }
-
     func queueVerificationSweep(
         _ targetID: UUID,
         budget: VerificationBudget = .sweep,
@@ -3996,25 +5512,55 @@ final class AppStore: ObservableObject {
                 .filter { $0.targetID == targetID && $0.state == .queued && $0.action == .verify }
                 .map(\.assetID)
         )
-        // Oldest verification first; never-verified replicas come first of all.
-        let candidates = replicaStates
-            .filter {
-                $0.targetID == targetID
-                    && ($0.state == .present || $0.state == .stale || $0.state == .drift)
-                    && !alreadyQueued.contains($0.assetID)
-                    && (assetIDs?.contains($0.assetID) ?? true)
-            }
-            .sorted { ($0.lastVerifiedAt ?? .distantPast) < ($1.lastVerifiedAt ?? .distantPast) }
+        let readable: (ReplicaFileState) -> Bool = {
+            $0 == .present || $0 == .stale || $0 == .drift
+        }
+        let eligible = replicaStates.filter {
+            $0.targetID == targetID
+                && readable($0.state)
+                && !alreadyQueued.contains($0.assetID)
+                && (assetIDs?.contains($0.assetID) ?? true)
+        }
+
+        // Every readable copy of those assets, on every device — not just this
+        // one. An asset's risk cannot be judged from the device being
+        // patrolled: a copy here that was read a year ago is harmless if the
+        // copy on the other drive was read yesterday, and that is exactly the
+        // file the old "oldest replica first" rule would have gone for.
+        let subjects = Set(eligible.map(\.assetID))
+        var siblings: [UUID: [PatrolScheduler.Replica]] = [:]
+        for replica in replicaStates
+        where subjects.contains(replica.assetID) && readable(replica.state) {
+            siblings[replica.assetID, default: []].append(PatrolScheduler.Replica(
+                assetID: replica.assetID,
+                targetID: replica.targetID,
+                sizeBytes: assetsByID[replica.assetID]?.fileSize ?? 0,
+                lastVerifiedAt: replica.lastVerifiedAt
+            ))
+        }
+
+        let selection = PatrolScheduler.next(
+            on: targetID,
+            candidates: eligible.map { replica in
+                PatrolScheduler.Replica(
+                    assetID: replica.assetID,
+                    targetID: replica.targetID,
+                    sizeBytes: assetsByID[replica.assetID]?.fileSize ?? 0,
+                    lastVerifiedAt: replica.lastVerifiedAt
+                )
+            },
+            allReplicasByAsset: siblings,
+            budget: budget
+        )
 
         var queued = 0
         var bytes: Int64 = 0
         do {
             try catalog.transaction {
-                for replica in candidates {
-                    if queued >= budget.maxFiles || bytes >= budget.maxBytes { break }
+                for replica in selection {
                     try enqueueTask(assetID: replica.assetID, targetID: targetID, action: .verify)
                     queued += 1
-                    bytes += assetsByID[replica.assetID]?.fileSize ?? 0
+                    bytes += replica.sizeBytes
                 }
             }
             guard queued > 0 else {
@@ -4025,12 +5571,16 @@ final class AppStore: ObservableObject {
                 }
                 return
             }
-            let remaining = candidates.count - queued
+            let remaining = eligible.count - queued
             audit(
                 .drive,
                 isPatrol
-                    ? "Background check on \(drive.name): reading \(queued) file(s) (~\(Formatters.bytes.string(fromByteCount: bytes))) least recently checked; \(remaining) still to come."
-                    : "Queued a file check of \(queued) file(s) (~\(Formatters.bytes.string(fromByteCount: bytes))) on \(drive.name)"
+                    // Says what it aimed at, because the aim is the design.
+                    // "Least recently checked" described the old rule and would
+                    // now be a lie: these are the photos with no recently-read
+                    // copy anywhere, which is a different and better set.
+                    ? "Background check on \(drive.name): reading \(Formatters.count(queued, "file")) (~\(Formatters.bytes.string(fromByteCount: bytes))) — the photos no copy of which has been read back recently; \(remaining) still to come."
+                    : "Queued a file check of \(Formatters.count(queued, "file")) (~\(Formatters.bytes.string(fromByteCount: bytes))) on \(drive.name)"
                         + (remaining > 0 ? "; \(remaining) more will follow in later sweeps." : "."),
                 targetID: targetID
             )
@@ -4224,7 +5774,7 @@ final class AppStore: ObservableObject {
             return
         }
         let label = residency == .appleCloud ? "Apple Cloud" : "this device's Photos library"
-        audit(.system, "Apple Photos index: \(items.count) item(s) in the library — \(added) added as \(label), \(linked) linked to photos the archive already holds.")
+        audit(.system, "Apple Photos index: \(Formatters.count(items.count, "item")) in the library — \(added) added as \(label), \(linked) linked to photos the archive already holds.")
         lastApplePhotosCheckSummary = "\(added.formatted()) added · \(linked.formatted()) linked"
         isIndexingApplePhotos = false
         loadAll()
@@ -4234,15 +5784,11 @@ final class AppStore: ObservableObject {
     /// app already holds. Nothing acts on this: it removes nothing, and it is
     /// here so the preconditions are visible rather than only written down.
     var reclamationPlan: ReclamationPlanner.Plan {
-        let agreeing = Set(targets.map(\.id).filter { targetID in
-            agreement(for: targetID).allSatisfy(\.agrees)
-        })
-        return ReclamationPlanner.plan(
+        ReclamationPlanner.plan(
             assets: assets,
             replicasByAssetID: replicasByAssetID,
             registeredTargetIDs: Set(targets.map(\.id)),
-            agreeingTargetIDs: agreeing,
-            policy: redundancyPolicy
+            desiredCopies: { [self] in desiredCopies(forAsset: $0) }
         )
     }
 
@@ -4479,8 +6025,8 @@ final class AppStore: ObservableObject {
         var parts: [String] = []
         if stagedCount > 0 { parts.append("\(stagedCount) copied in and queued for replication") }
         if mergedCount > 0 { parts.append("\(mergedCount) already held byte-for-byte, merged") }
-        if pairedCount > 0 { parts.append("\(pairedCount) Live Photo motion half(s) kept with their still") }
-        if failures > 0 { parts.append("\(failures) original(s) could not be exported") }
+        if pairedCount > 0 { parts.append("\(Formatters.count(pairedCount, "Live Photo motion half", "Live Photo motion halves")) kept with their still") }
+        if failures > 0 { parts.append("\(Formatters.count(failures, "original")) could not be exported") }
         if !parts.isEmpty {
             audit(.importEvent, "Photos library: " + parts.joined(separator: "; ") + ".")
         }
@@ -4495,13 +6041,30 @@ final class AppStore: ObservableObject {
         if remaining > 0 { importFromApplePhotosIfDue() }
     }
 
-    /// Every target owes a copy of content the archive has just taken on — the
-    /// same path any other Local asset takes.
+    /// Content the archive has just taken on owes `desiredCopies` copies, on
+    /// the devices placement picks — the same path any other Local asset takes.
+    ///
+    /// Devices already holding it are excluded, so re-running this is harmless
+    /// and a re-import never queues a copy of something already on the disk.
     private func queueReplicationOfNewlyHeld(_ assetID: UUID) throws {
-        for target in targets {
-            try enqueueTask(assetID: assetID, targetID: target.id, action: .copy)
+        let held = Set(
+            (replicasByAssetID[assetID] ?? [])
+                .filter { $0.state == .present }
+                .map(\.targetID)
+        )
+        let size = assetsByID[assetID]?.fileSize ?? 0
+        let policy = placementPolicy(forAsset: assetID)
+        let plans = PlacementPlanner.plan(
+            assets: [(id: assetID, sizeBytes: size)],
+            existingHolders: [assetID: held],
+            destinations: policy.destinations,
+            desiredCopies: policy.copies,
+            candidates: placementCandidates
+        )
+        for targetID in plans.first?.destinations ?? [] {
+            try enqueueTask(assetID: assetID, targetID: targetID, action: .copy)
             try catalog.upsertReplicaState(TargetReplicaState(
-                assetID: assetID, targetID: target.id,
+                assetID: assetID, targetID: targetID,
                 state: .pending, relativePath: nil, lastVerifiedAt: nil
             ))
         }
@@ -4593,7 +6156,7 @@ final class AppStore: ObservableObject {
             line = "Apple Photos check: none of \(requested) could be compared — their originals are not on this Mac (an optimised library with iCloud Photos off keeps previews, not originals)"
         }
         if found > 0 {
-            line += " — recorded as verified presence; the Local coexistence shows in Violations until migrated or reclaimed"
+            line += " — recorded as verified presence; the Local coexistence is listed under Safety until migrated or reclaimed"
         }
         if unsearchable > 0 { line += "; \(unsearchable) had no capture date to search by" }
         audit(.system, line + ".")
@@ -4658,7 +6221,7 @@ final class AppStore: ObservableObject {
         }
         openPolicyMigrations(placements)
         if sourceUpdates > 0 {
-            audit(.policy, "Re-applied rules: \(sourceUpdates) asset(s) changed between rule-assigned and default.")
+            audit(.policy, "Re-applied rules: \(Formatters.count(sourceUpdates, "asset")) changed between rule-assigned and default.")
         }
         if sourceUpdates > 0 { loadAll() }
     }
@@ -4684,7 +6247,7 @@ final class AppStore: ObservableObject {
                 )
                 try catalog.upsertMigrationJob(job)
                 migrationJobs.insert(job, at: 0)
-                audit(.policy, "Policy rules queued \(remaining.count) asset(s) for migration to \(domain.displayName) (pending).")
+                audit(.policy, "Policy rules queued \(Formatters.count(remaining.count, "asset")) for migration to \(domain.displayName) (pending).")
             } catch {
                 lastError = "Could not queue policy migration: \(error.localizedDescription)"
             }
@@ -4708,7 +6271,7 @@ final class AppStore: ObservableObject {
         do {
             let job = try MigrationService.createJob(assetIDs: assetIDs, from: source, to: target, note: note)
             try catalog.upsertMigrationJob(job)
-            audit(.migration, "Created migration \(source.displayName) → \(target.displayName) for \(assetIDs.count) asset(s).")
+            audit(.migration, "Created migration \(source.displayName) → \(target.displayName) for \(Formatters.count(assetIDs.count, "asset")).")
             loadAll()
         } catch {
             lastError = "Migration creation failed: \(error.localizedDescription)"

@@ -24,26 +24,67 @@ Nothing about system state depends on a target being attached.
 
 **Local is a logical domain held by replication targets.** A target is a
 device: either **this machine** (a folder on its own disk) or an **external
-volume**. How many there are and which they are is configuration —
-`desiredCopies` says how many copies the policy wants — and any number of them
-may be reachable at once, from none to all:
+volume**. Register as many as you like; any number may be reachable at once,
+from none to all.
+
+**You decide where each source lives.** A **source** is each thing you added —
+one folder, one Google export, one Apple Photos import. It carries its own
+settings: **how many copies, and which devices they live on.**
+
+> 2019 photos → 2 copies, on This Mac and Field Drive
+> Google export of 3 Mar → 2 copies, on Archive Drive and the NAS
+
+The app places copies on exactly the devices you named and nowhere else. It
+does not pick destinations for you, so **your devices are expected to hold
+different content** — that is the design, not drift, and nothing in the app
+treats it as a fault.
+
+Adding a source asks once, in a sheet prefilled with your last answer, so the
+tenth folder going to the same two places costs a click. Change a source's
+devices whenever you like; that opens a job that copies, verifies, and then
+tells you exactly what it will and will not delete.
+
+**A copy you already have counts.** If the source's files are already sitting
+on one of its destination devices — Takeout zips you downloaded straight onto
+Archive Drive — that *is* the copy on that device. It is hash-verified where
+it lies and nothing is transported. Only the difference is copied.
+
+**This machine is a device too.** On first launch the app registers a folder
+on this Mac, so it is available as a destination before any drive is plugged
+in and there is always something reachable to copy from. It is a device like
+any other: it holds what the sources you pointed at it hold, and nothing else.
+To keep it out of the archive entirely, **forget** it under Safety → Drives —
+that deletes nothing.
+
+A Takeout folder that already sits *inside* the host target's own folder is
+counted where it is, exactly as one on a drive is. A folder elsewhere on the
+Mac — `~/Pictures/OldBackup` — is **not yet** credited in place: it is copied
+into the managed folder, which writes a second copy on the one disk and buys
+no redundancy. That is a known gap, not the intended behavior; see *Next
+implementation steps*. Crediting it needs a replica form that can record an
+absolute path, because the existing `volume:` form is resolved relative to the
+target's root and would silently name a file that does not exist.
 
 - **Nothing reachable** — imports still work; files land in staging;
-  replication tasks queue per target.
+  replication tasks queue for the source's destination devices.
 - **Some reachable** — each is identified by a marker file written at
   registration (volume UUID as fallback for removable ones; never path alone).
   Their backlogs sync; absent targets keep accumulating backlog.
 - **Two targets on one device are refused at registration** — a copy on each
   does not survive that device failing, so the policy would count one copy as
   two.
+- **Devices holding different content is normal**, so nothing treats it as a
+  fault. What the app checks is whether each *photo* has its *k* copies, and
+  whether the bytes of each copy still match what was imported. Those are two
+  different questions and neither is "do these two drives look the same".
 
 **Protection state ≠ residency.** Local assets carry a computed protection
 state: `StagedOnly` → `ReplicatedToOneDrive` → `AwaitingFirstCheck` →
 `FullyReplicated`, plus `DriftDetected` (replica content diverged from catalog
 hash), `VerificationOverdue` (replica integrity not re-checked recently) and
 `NotApplicable` (asset is not Local-resident). `AwaitingFirstCheck` means the
-copies exist but none has been read back — it satisfies the redundancy policy,
-and is deliberately distinct from a check that has gone stale. An asset can
+copies exist but none has been read back — it satisfies what the asset's
+source asks for, and is deliberately distinct from a check that has gone stale. An asset can
 validly be residency=Local, protection=ReplicatedToOneDrive, present on Drive A,
 pending on Drive B — the model represents that directly.
 
@@ -66,7 +107,7 @@ like external volumes:
 hdiutil create -size 100m -fs APFS -volname HeykinnDriveA /tmp/HeykinnDriveA.dmg && hdiutil attach /tmp/HeykinnDriveA.dmg
 ```
 
-Mount it, register it in Storage & Health, and the backlog syncs to it; detach
+Mount it, register it under Safety → Drives, and the backlog syncs to it; detach
 (`hdiutil detach /Volumes/HeykinnDriveA`) mid-sync to see interruption handling,
 re-attach to see reconnect + auto-sync resume.
 
@@ -109,6 +150,10 @@ Sources/HeykinnClicks/
 │   ├── DuplicateDetector.swift  exact hash groups (perceptual matching = later phase)
 │   ├── StagingStore.swift       Mac staging/cache area
 │   ├── TargetMonitor.swift      volume enumeration, marker identity, mount notifications
+│   ├── AccessGrants.swift       remembered per-volume decisions + security-scoped
+│   │                            bookmarks; the store behind ⌘, → Access
+│   ├── PlacementPlanner.swift   places copies on the devices a source names;
+│   │                            free space validates, never chooses
 │   ├── ReplicationService.swift copy/verify/remove backlog execution (hash-verified,
 │   │                            temp-file + atomic rename; interruption-safe)
 │   ├── ExportPartRelay.swift    the Mac holding area; verified large-file copy
@@ -124,7 +169,8 @@ Sources/HeykinnClicks/
 └── UI/                          Overview (visual dashboard), Library (hover-plays
                                  Live Photos and video), Asset Detail, Storage &
                                  Health, Duplicates, Violations, Policies,
-                                 Migrations, Google Takeout, Activity, Settings (⌘,)
+                                 Migrations, Google Takeout, Activity,
+                                 Settings (⌘,: Automation · Safety · Access)
 ```
 
 ### Sync behavior
@@ -137,6 +183,40 @@ Sources/HeykinnClicks/
   unplugged mid-sync is detected between tasks. Either way the remaining
   backlog stays queued, so the next sync resumes exactly where this one
   stopped.
+
+### Finding damage when devices hold different things
+
+Two checks answer two different questions, and neither is "do these drives
+match".
+
+- **Does each photo still have its *k* copies?** The placement audit walks the
+  replica rows and counts, per photo, how many devices hold it. Fewer than *k*
+  means copies are placed and queued. This is exact, costs no disk access, and
+  has no false positives.
+- **Do the bytes still match what was imported?** Only reading finds that. A
+  size/mtime check on connect catches anything edited or deleted under an
+  intact path; the background rot patrol reads a small ration continuously,
+  because silent decay changes no timestamp and no cheap check will ever see
+  it.
+
+**The patrol reads by asset risk, not replica age.** A photo whose copy was
+read yesterday is safe however stale its other copy is — there is a known-good
+copy to restore from. A photo whose two copies were both read six months ago
+is in real danger, and under "oldest replica first" the patrol would never
+prioritise it, because neither copy is the oldest anything. So the queue is
+ordered by the age of each photo's **freshest** copy, with never-read-back
+sorting first, and within a photo the oldest reachable copy is the one read —
+it is the likeliest to be damaged and verifying it resets both clocks. The
+ration is measured in bytes rather than files, with a per-file cap, so one
+10 GB video cannot consume an entire run.
+
+A cross-device tree comparison used to sit here and was removed rather than
+adapted. Its leaves were the catalog's hashes on both sides, so two devices
+holding the same photo carried an identical digest by construction — it could
+never see damage, only which photos each device held. Under *k*-of-*n* that
+difference is the design. Scoping it to the overlap would have left a check
+guaranteed to report agreement forever, which is worse than no check: somebody
+reads "targets agree" and believes something was verified.
 
 ### Google Takeout support
 
@@ -293,6 +373,31 @@ claim redundancy that evaporates the moment the drives hold different subsets).
   gets only a quick checksum — nothing read those bytes back in full, and
   calling it verified would be a lie.
 
+### Every source says where its copies are
+
+Sources answers two questions about each place photos came from: how much of
+it made it into the archive, and **where those photos are now**. The second
+used to be answered only for Google exports, which reported per part which
+drive held them — a folder you added got a photo count and nothing else, even
+though the app had the replica states all along.
+
+Now both read the same way, off `replicaStates` and `replicationTasks`:
+
+- **Which devices hold it** — named, including this Mac, with the ones that
+  are attached distinguished from the ones that are not.
+- **What is still owed** — how many photos from this folder are not yet on
+  which device, and how many bytes that is.
+- **What is in transit** — content held on this Mac for a drive that is not
+  currently connected, so a corridor that is doing its job looks different
+  from one that is stuck.
+- **What is load-bearing** — photos this folder holds the archive's only copy
+  of, so emptying it in Finder would cost a copy.
+
+**Paths are shown whether or not the disk is attached.** Reachability decides
+whether *Show in Finder* is offered, not whether the path appears — "where is
+it?" is asked most often about something that is not currently plugged in. An
+unreachable path is rendered plainly with the disk it is on named.
+
 ### Real-library ingest: Live Photos, dates, and previews
 
 Google Takeout fights you, so these are import-path fixes rather than one-off
@@ -351,14 +456,34 @@ protected on three levels.
 `-wal` and `-shm` files beside it). A snapshot is an ordinary SQLite database —
 inspect one any time with `sqlite3 <snapshot> "SELECT count(*) FROM assets;"`.
 
-### Drive-connect prompt
+### Drive-connect prompt, and remembering the answer
 
 When an unmanaged external volume mounts, the app asks what it should be:
-register it as one of the two managed Local-storage drives (when a slot is
-free), just scan it for Takeout archives, or never ask again for that volume
-(persisted per volume identity). Managed drives skip the prompt — on connect
-they auto-sync their backlog and get an automatic Takeout sweep, so no manual
-scanning is needed.
+register it as managed Local storage (when a slot is free), just scan it for
+Takeout archives, or leave it alone. Managed drives skip the prompt — on
+connect they auto-sync their backlog and get an automatic Takeout sweep, so no
+manual scanning is needed.
+
+**Answer once.** Every choice in that prompt can be remembered against the
+volume's identity, including the *action*, not only the suppression: a drive
+you told to scan is scanned on every future mount without asking. The grant is
+stored with a security-scoped bookmark to the volume, so it survives quitting
+the app rather than being re-requested at each mount.
+
+**And take it back.** ⌘, → **Access** lists every disk the app has a
+remembered decision for — what was decided, when, and whether it is attached
+right now — each revocable. Revoking only forgets the decision: nothing on the
+disk is touched, and the next mount asks again. This is deliberately a pair;
+the previous "Don't ask again for this drive" wrote a key into preferences
+that no screen could remove.
+
+**The system prompt is a separate thing.** macOS itself gates access to
+removable volumes, and that grant is keyed to the app's code-signing identity.
+`Packaging/bundle.sh` signs ad-hoc by default, so the hash changes on every
+rebuild and macOS asks again — expected while developing, and fixed by a
+stable Developer ID signature rather than by anything in the app's code. If
+macOS is re-asking on every connect of a build you did not rebuild, check
+System Settings → Privacy & Security → Files and Folders.
 
 ### Safety behaviors implemented
 

@@ -72,7 +72,7 @@ enum MigrationService {
             job: advanced(job, to: .verifyingTarget),
             updatedAssets: updated,
             replicationTasks: [],
-            auditMessage: "Migration \(job.fromDomain.displayName) → \(job.toDomain.displayName): target copy reported complete for \(job.assetIDs.count) asset(s); overlap window open."
+            auditMessage: "Migration \(job.fromDomain.displayName) → \(job.toDomain.displayName): target copy reported complete for \(Formatters.count(job.assetIDs.count, "asset")); overlap window open."
         )
     }
 
@@ -129,11 +129,19 @@ enum MigrationService {
             updatedAssets.append(asset)
         }
 
+        // Built as a local rather than nested three deep inside the
+        // message: a string literal inside an interpolation inside a ternary
+        // inside an interpolation is legal Swift and unreadable prose.
+        let queuedNote = removeTasks.isEmpty
+            ? ""
+            : ", \(Formatters.count(removeTasks.count, "drive removal task")) queued"
         return TransitionEffect(
             job: advanced(job, to: .completed),
             updatedAssets: updatedAssets,
             replicationTasks: removeTasks,
-            auditMessage: "Migration \(job.fromDomain.displayName) → \(job.toDomain.displayName) completed for \(job.assetIDs.count) asset(s); source retention cleared\(removeTasks.isEmpty ? "" : ", \(removeTasks.count) drive removal task(s) queued")."
+            auditMessage: "Migration \(job.fromDomain.displayName) → \(job.toDomain.displayName) "
+                + "completed for \(Formatters.count(job.assetIDs.count, "asset")); "
+                + "source retention cleared\(queuedNote)."
         )
     }
 
