@@ -187,7 +187,8 @@ final class AppStore: ObservableObject {
                 )
                 return StorageGroup.Defaults(
                     desiredCopies: wanted,
-                    destinationTargetIDs: Array(targets.map(\.id).prefix(wanted))
+                    destinationTargetIDs: Array(targets.map(\.id).prefix(wanted)),
+                    destinationMode: .automatic
                 )
             }
             // A device forgotten since the default was saved is dropped rather
@@ -195,7 +196,8 @@ final class AppStore: ObservableObject {
             let live = Set(targets.map(\.id))
             return StorageGroup.Defaults(
                 desiredCopies: decoded.desiredCopies,
-                destinationTargetIDs: decoded.destinationTargetIDs.filter(live.contains)
+                destinationTargetIDs: decoded.destinationTargetIDs.filter(live.contains),
+                destinationMode: decoded.destinationMode
             )
         }
         set {
@@ -368,6 +370,25 @@ final class AppStore: ObservableObject {
         // build that still honours it should find the user's answer intact.
 
         loadAll()
+
+        // Above the background-work guard on purpose. Reading how a group's
+        // devices were arrived at touches the catalog and nothing else — no
+        // volume is enumerated and no drive is written to — and it is part of
+        // opening a catalog correctly rather than part of running the machine.
+        //
+        // It was below the guard first, which meant it did not run in the one
+        // harness built to check migrations against a real catalog. The check
+        // passed and the groups were untouched.
+        do {
+            let marked = try catalog.markUnchosenStorageGroupsAutomatic()
+            if marked > 0 {
+                loadAll()
+                audit(.system, "\(Formatters.count(marked, "storage group")) named every drive there was, so \(marked == 1 ? "it works its devices out" : "they work their devices out") from now on rather than keeping a fixed list. Nothing moved.")
+            }
+        } catch {
+            lastError = "Could not read how storage groups chose their devices: \(error.localizedDescription)"
+        }
+        resolveAutomaticDestinations()
 
         targetMonitor.rescanRequested = { [weak self] in
             self?.rescanTargets()
@@ -3013,14 +3034,27 @@ final class AppStore: ObservableObject {
     /// new copy exists and has been read back before the old one goes. So the
     /// departing devices are recorded on the source and the removals are
     /// queued by `releaseDepartedDevices` once the arrivals verify.
+    /// - Parameter mode: how the devices were arrived at, when the caller
+    ///   knows. `nil` keeps whatever the group already says, so adjusting the
+    ///   copy count does not quietly pin a worked-out group to the devices it
+    ///   happens to hold today.
+    ///
+    ///   Deliberately not inferred from the devices themselves. Inference works
+    ///   for a catalog written before the question existed, where nothing else
+    ///   survives to read — but not here, because the two cases are genuinely
+    ///   identical from the outside: picking "just Drive A" for a one-copy
+    ///   group is character-for-character what working it out produces. Only
+    ///   the caller knows whether a person opened the picker.
     func applyStorageGroupSettings(
         _ group: StorageGroup,
         desiredCopies: Int,
-        destinations: [UUID]
+        destinations: [UUID],
+        mode: StorageGroup.DestinationMode? = nil
     ) {
         var updated = group
         updated.desiredCopies = desiredCopies
         updated.destinationTargetIDs = destinations
+        updated.destinationMode = mode ?? group.destinationMode
         do {
             try catalog.upsertStorageGroup(updated)
         } catch {
@@ -3032,6 +3066,9 @@ final class AppStore: ObservableObject {
             "\(group.label) is now kept on \(deviceNames(destinations)) — \(Formatters.count(desiredCopies, "copy", "copies")) each. Copies to the new devices are queued; anything on a device it no longer uses stays until the new copy has been read back and matched."
         )
         loadAll()
+        // A worked-out group asking for more copies wants more devices, and the
+        // audit that follows can only place onto devices the group names.
+        resolveAutomaticDestinations()
         auditPlacement()
     }
 
@@ -3274,7 +3311,12 @@ final class AppStore: ObservableObject {
                 ? "New group"
                 : label.trimmingCharacters(in: .whitespacesAndNewlines),
             desiredCopies: settings.desiredCopies,
-            destinationTargetIDs: settings.destinationTargetIDs,
+            destinationTargetIDs: settings.destinationMode == .automatic
+                ? StorageGroup.automaticDestinations(
+                    copies: settings.desiredCopies, among: automaticEligibleDeviceIDs
+                  )
+                : settings.destinationTargetIDs,
+            destinationMode: settings.destinationMode,
             createdAt: Date()
         )
         do {
@@ -4973,6 +5015,11 @@ final class AppStore: ObservableObject {
             lastRotPatrol[targetID] = nil
             lastAnchorCheck[targetID] = nil
             loadAll()
+            // Before the audit, not after: a worked-out group was naming this
+            // device, and until it names a remaining one there is nothing for
+            // the audit to place onto. Reversed, the drive's photos would read
+            // as short with nowhere to go.
+            resolveAutomaticDestinations()
             // Its replicas went with it, so assets it was holding are now
             // short. Re-place them onto the devices that remain — this is the
             // path back from a failed drive, and leaving it to a later launch
@@ -5050,6 +5097,10 @@ final class AppStore: ObservableObject {
             // holds, so the audit that follows asks for what is genuinely
             // missing rather than queuing copies adoption then withdraws.
             rescanTargets()
+            // And before the audit for the same reason the rescan is: a group
+            // that works its devices out has to name this one before anything
+            // can be owed to it.
+            resolveAutomaticDestinations()
             let queued = auditPlacement()
             if queued > 0 {
                 audit(
@@ -5786,6 +5837,59 @@ final class AppStore: ObservableObject {
             loadAll()
         }
         return queued
+    }
+
+    /// Re-works-out the devices of every group that is not choosing its own.
+    ///
+    /// Cheap and idempotent, so it runs after anything that changes the set of
+    /// registered devices rather than being remembered about at each call site.
+    /// Writes only where the answer actually moved, so an ordinary launch does
+    /// no work and logs nothing.
+    ///
+    /// **Only external drives are eligible.** The host is the machine the
+    /// drives exist to survive, so it is never somewhere a group is merely
+    /// spread onto — counting it would let "2 copies" be satisfied by this Mac
+    /// plus one drive and report that as safe. Naming it stays possible, but
+    /// only as a `.chosen` device, which is a deliberate act.
+    /// The devices a worked-out group draws from, in the order it draws them.
+    var automaticEligibleDeviceIDs: [UUID] {
+        targets
+            .filter { $0.kind == .externalVolume }
+            .sorted { $0.registeredAt < $1.registeredAt }
+            .map(\.id)
+    }
+
+    @discardableResult
+    func resolveAutomaticDestinations() -> Int {
+        let eligible = automaticEligibleDeviceIDs
+        var changed = 0
+        for group in storageGroups where group.destinationMode == .automatic {
+            let resolved = StorageGroup.automaticDestinations(
+                copies: group.desiredCopies, among: eligible
+            )
+            guard resolved != group.destinationTargetIDs else { continue }
+            var updated = group
+            updated.destinationTargetIDs = resolved
+            do { try catalog.upsertStorageGroup(updated) } catch {
+                lastError = "Could not work out where \(group.label) is kept: \(error.localizedDescription)"
+                continue
+            }
+            changed += 1
+        }
+        if changed > 0 { loadAll() }
+        return changed
+    }
+
+    /// The devices a group would gain if it were allowed to use every drive.
+    ///
+    /// Drives a worked-out group is not using because it already has as many
+    /// copies as it asked for. This is what lets the UI offer — "you have three
+    /// drives and keep two copies" — instead of either guessing or saying
+    /// nothing, which is what happens today.
+    func idleDeviceCount(forStorageGroup group: StorageGroup) -> Int {
+        guard group.destinationMode == .automatic else { return 0 }
+        let externals = targets.filter { $0.kind == .externalVolume }.count
+        return max(0, externals - group.destinationTargetIDs.count)
     }
 
     /// Leftover rows that may be withdrawn when no group names the device.

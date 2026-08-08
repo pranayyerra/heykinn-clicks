@@ -36,6 +36,13 @@ extension CatalogStore {
             created_at REAL NOT NULL
         );
         """)
+        // Added after `storage_groups` shipped. Defaults to `chosen` so a row
+        // nobody has looked at behaves exactly as it did — the list it holds is
+        // treated as deliberate until something establishes otherwise.
+        try addColumnIfMissing(
+            table: "storage_groups", column: "destination_mode",
+            declaration: "TEXT NOT NULL DEFAULT 'chosen'"
+        )
         try addColumnIfMissing(table: "assets", column: "source_id", declaration: "TEXT")
         try addColumnIfMissing(table: "assets", column: "storage_group_id", declaration: "TEXT")
         try database.exec(
@@ -100,24 +107,27 @@ extension CatalogStore {
 
     func upsertStorageGroup(_ group: StorageGroup) throws {
         try database.run("""
-        INSERT INTO storage_groups (id, label, desired_copies, destination_ids_json, created_at)
-        VALUES (?,?,?,?,?)
+        INSERT INTO storage_groups
+            (id, label, desired_copies, destination_ids_json, created_at, destination_mode)
+        VALUES (?,?,?,?,?,?)
         ON CONFLICT(id) DO UPDATE SET
             label = excluded.label,
             desired_copies = excluded.desired_copies,
-            destination_ids_json = excluded.destination_ids_json;
+            destination_ids_json = excluded.destination_ids_json,
+            destination_mode = excluded.destination_mode;
         """, [
             .text(group.id.uuidString),
             .text(group.label),
             .int(Int64(group.desiredCopies)),
             .text(Self.encodeJSON(group.destinationTargetIDs.map(\.uuidString))),
             .real(group.createdAt.timeIntervalSince1970),
+            .text(group.destinationMode.rawValue),
         ])
     }
 
     func fetchStorageGroups() throws -> [StorageGroup] {
         try database.query("""
-        SELECT id, label, desired_copies, destination_ids_json, created_at
+        SELECT id, label, desired_copies, destination_ids_json, created_at, destination_mode
         FROM storage_groups ORDER BY created_at DESC;
         """) { row in
             StorageGroup(
@@ -126,6 +136,7 @@ extension CatalogStore {
                 desiredCopies: Int(row.int(2)),
                 destinationTargetIDs: (Self.decodeJSON([String].self, from: row.text(3)) ?? [])
                     .compactMap(UUID.init(uuidString:)),
+                destinationMode: StorageGroup.DestinationMode(rawValue: row.text(5)) ?? .chosen,
                 createdAt: Date(timeIntervalSince1970: row.real(4))
             )
         }
@@ -174,6 +185,40 @@ extension CatalogStore {
     ///
     /// Keyed on the source's own id so it is idempotent: a second run finds the
     /// group already there and the assets already pointing at it.
+    /// Marks as worked-out every group whose devices were never a choice.
+    ///
+    /// Before `destination_mode` existed, a group stored a plain list and there
+    /// was no way to ask how it got there. This reads the answer off the
+    /// evidence: a group naming *every* external drive was not choosing between
+    /// them — there was nothing to choose. A group naming some but not all was,
+    /// and is left alone.
+    ///
+    /// The host device is excluded from the comparison on purpose. It is the
+    /// machine the drives exist to survive, so it is never one of the devices a
+    /// group is simply spread across, and a group that names it named it
+    /// deliberately.
+    ///
+    /// Conservative in the direction that matters: getting this wrong towards
+    /// `chosen` leaves a group behaving exactly as it does today, while getting
+    /// it wrong towards `automatic` could move somebody's deliberate placement.
+    @discardableResult
+    func markUnchosenStorageGroupsAutomatic() throws -> Int {
+        let externals = Set(try database.query(
+            "SELECT id FROM drives WHERE kind = ?;", [.text(TargetKind.externalVolume.rawValue)]
+        ) { $0.text(0) })
+        guard !externals.isEmpty else { return 0 }
+
+        var marked = 0
+        for group in try fetchStorageGroups() where group.destinationMode == .chosen {
+            guard Set(group.destinationTargetIDs.map(\.uuidString)) == externals else { continue }
+            var updated = group
+            updated.destinationMode = .automatic
+            try upsertStorageGroup(updated)
+            marked += 1
+        }
+        return marked
+    }
+
     func migrateSourcePoliciesIntoStorageGroups() throws -> Int {
         let existing = Set(try fetchStorageGroups().map(\.id))
         struct Legacy { let id: UUID; let label: String; let copies: Int; let json: String; let at: Double }
