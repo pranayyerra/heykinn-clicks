@@ -2847,6 +2847,126 @@ final class AppStore: ObservableObject {
         )
     }
 
+    // MARK: - Managing storage groups
+
+    /// A new group with nothing in it yet.
+    ///
+    /// The thing the single-row model could not do. A group born from an import
+    /// inherits that import's name and its photos; this one has neither, and is
+    /// the starting point for "these ten go somewhere different from the rest of
+    /// the download they came in".
+    @discardableResult
+    func createStorageGroup(label: String, from defaults: StorageGroup.Defaults? = nil) -> StorageGroup? {
+        let settings = defaults ?? newSourceDefaults
+        let group = StorageGroup(
+            id: UUID(),
+            label: label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "New group"
+                : label.trimmingCharacters(in: .whitespacesAndNewlines),
+            desiredCopies: settings.desiredCopies,
+            destinationTargetIDs: settings.destinationTargetIDs,
+            createdAt: Date()
+        )
+        do {
+            try catalog.upsertStorageGroup(group)
+        } catch {
+            lastError = "Could not make that group: \(error.localizedDescription)"
+            return nil
+        }
+        audit(
+            .policy,
+            "Added the group \(group.label), set to keep its photos on \(deviceNames(group.destinationTargetIDs)) — \(Formatters.count(group.desiredCopies, "copy", "copies")) each. It has no photos in it yet."
+        )
+        loadAll()
+        return group
+    }
+
+    func renameStorageGroup(_ groupID: UUID, to label: String) {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard var group = storageGroupsByID[groupID], !trimmed.isEmpty,
+              trimmed != group.label else { return }
+        let previous = group.label
+        group.label = trimmed
+        do {
+            try catalog.upsertStorageGroup(group)
+        } catch {
+            lastError = "Could not rename \(previous): \(error.localizedDescription)"
+            return
+        }
+        audit(.policy, "Renamed the group \(previous) to \(trimmed).")
+        loadAll()
+    }
+
+    /// Moves photos into a group, and queues whatever that now owes.
+    ///
+    /// Membership is a partition, so this takes them out of wherever they were.
+    /// Copies to the devices the new group names are queued; copies on devices
+    /// only the old group named are **not** deleted here — that waits on proof,
+    /// through `releaseDepartedDevices`, exactly as a retarget does. Moving a
+    /// photo between groups must never be a faster route to deleting a copy
+    /// than changing a group's settings is.
+    @discardableResult
+    func moveToStorageGroup(_ groupID: UUID, assetIDs: [UUID]) -> Int {
+        guard let group = storageGroupsByID[groupID], !assetIDs.isEmpty else { return 0 }
+        let moving = assetIDs.filter { storageGroupIDByAsset[$0] != groupID }
+        guard !moving.isEmpty else { return 0 }
+        let vacated = Set(moving.compactMap { storageGroupIDByAsset[$0] })
+
+        do {
+            try catalog.assignStorageGroup(groupID, toAssets: moving)
+        } catch {
+            lastError = "Could not move those photos into \(group.label): \(error.localizedDescription)"
+            return 0
+        }
+        audit(
+            .policy,
+            "Moved \(Formatters.count(moving.count, "photo")) into \(group.label), which keeps its photos on \(deviceNames(group.destinationTargetIDs)) — \(Formatters.count(group.desiredCopies, "copy", "copies")) each. Copies to any new device are queued; nothing already on a device was deleted."
+        )
+        loadAll()
+        auditPlacement()
+        // The groups they left may now be owed removals, on the same proof the
+        // retarget path requires.
+        for groupID in vacated { releaseDepartedDevices(for: groupID) }
+        return moving.count
+    }
+
+    /// Forgets a group. Its photos stay and fall back to the defaults.
+    ///
+    /// Refused while it still holds photos unless somewhere is named to put
+    /// them: a group is how the app knows where a photo belongs, and dropping
+    /// that silently would leave them answering to whatever the add sheet last
+    /// remembered.
+    func deleteStorageGroup(_ groupID: UUID, movingPhotosTo destinationID: UUID? = nil) {
+        guard let group = storageGroupsByID[groupID] else { return }
+        let members = assets.filter { storageGroupIDByAsset[$0.id] == groupID }.map(\.id)
+
+        if !members.isEmpty, let destinationID, storageGroupsByID[destinationID] != nil {
+            guard moveToStorageGroup(destinationID, assetIDs: members) > 0 else { return }
+        } else if !members.isEmpty {
+            lastError = "\(group.label) still holds \(Formatters.count(members.count, "photo")). Choose a group to move them to first — deleting it would leave them with no setting of their own."
+            return
+        }
+
+        do {
+            try catalog.deleteStorageGroup(id: groupID)
+        } catch {
+            lastError = "Could not remove \(group.label): \(error.localizedDescription)"
+            return
+        }
+        audit(.policy, "Removed the group \(group.label). No photo was deleted.")
+        loadAll()
+    }
+
+    /// How many photos are in each group — the count the management UI shows.
+    var photoCountByStorageGroup: [UUID: Int] {
+        var counts: [UUID: Int] = [:]
+        for asset in assets where !asset.isLivePhotoMotion {
+            guard let groupID = storageGroupIDByAsset[asset.id] else { continue }
+            counts[groupID, default: 0] += 1
+        }
+        return counts
+    }
+
     /// Where a group's photos came from, when they all came from one place.
     ///
     /// The group carries no path of its own — it is policy, not history — so

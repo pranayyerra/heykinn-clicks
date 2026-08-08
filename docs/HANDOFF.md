@@ -234,10 +234,17 @@ group. `applySourceSettings` became `applyStorageGroupSettings`,
 `EditSourceSheet` became `EditStorageGroupSheet`, and `retargetPlan` /
 `releaseDepartedDevices` take a group.
 
-Still to do on top of it: **a way to create a group not born from an import,
-and a Library action to move a selection into it.** The model supports it now —
-`testAGroupCanExistWithNoProvenance` covers a group with no source behind it —
-but nothing in the UI can make one.
+Groups are now first-class in the UI: `StorageGroupsList` on the Policies
+screen lists every group with its settings and photo count, and creates,
+renames, edits and removes them. Removing one that still holds photos names
+somewhere for them to go rather than dropping them to the defaults. The store
+side is `createStorageGroup`, `renameStorageGroup`, `moveToStorageGroup` and
+`deleteStorageGroup(_:movingPhotosTo:)`.
+
+Still to do: **a Library action to move a selection into a group.**
+`moveToStorageGroup` already takes arbitrary asset ids and is tested, so this
+is UI only — but the Library has no multi-select at all today, so it needs
+selection state before it can have the action.
 
 ### 7. Small things the UI check turned up
 

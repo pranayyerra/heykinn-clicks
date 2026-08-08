@@ -24,20 +24,11 @@ struct PoliciesView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textCase(nil)
             }
-            // The copies stepper used to be the first thing on this screen, so
-            // this is where somebody looking for it will come. Say where it
-            // went rather than leaving them to find Sources on their own.
-            Section {
-                Label(
-                    "How many copies of your photos to keep, and which devices hold them, is set for each source under Sources — next to the photos it governs.",
-                    systemImage: "square.stack.3d.up"
-                )
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-            } header: {
-                Text("How many copies")
-            }
+            // The copies stepper used to be the first thing on this screen.
+            // What replaced it is not a pointer elsewhere but the groups
+            // themselves: one archive-wide number became one per set of
+            // photos, and this is where they live.
+            StorageGroupsList()
         }
         .navigationTitle("Policies")
         .toolbar {

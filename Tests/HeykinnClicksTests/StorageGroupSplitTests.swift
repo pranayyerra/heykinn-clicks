@@ -222,6 +222,134 @@ final class StorageGroupSplitTests: XCTestCase {
         )
     }
 
+    // MARK: - Managing groups
+
+    /// The thing the single-row model could not do: a group with no import
+    /// behind it.
+    func testAGroupCanBeMadeFromNothing() throws {
+        let (store, _) = try makeStoreReturningDirectory()
+        let driveID = UUID()
+
+        let group = try XCTUnwrap(store.createStorageGroup(
+            label: "Cold storage",
+            from: StorageGroup.Defaults(desiredCopies: 1, destinationTargetIDs: [driveID])
+        ))
+
+        XCTAssertEqual(store.storageGroupsByID[group.id]?.label, "Cold storage")
+        XCTAssertEqual(group.desiredCopies, 1)
+        XCTAssertEqual(store.photoCountByStorageGroup[group.id] ?? 0, 0, "and it starts empty")
+    }
+
+    /// Moving photos between groups changes what they owe, and takes them out
+    /// of where they were — membership is a partition.
+    func testMovingPhotosIntoAGroupChangesWhatTheyOwe() throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let side = try catalog(at: directory)
+        let driveID = UUID()
+
+        let origin = try XCTUnwrap(store.createStorageGroup(
+            label: "Everything",
+            from: StorageGroup.Defaults(desiredCopies: 1, destinationTargetIDs: [driveID])
+        ))
+        let cold = try XCTUnwrap(store.createStorageGroup(
+            label: "Cold storage",
+            from: StorageGroup.Defaults(desiredCopies: 3, destinationTargetIDs: [driveID])
+        ))
+
+        let moving = (0..<2).map { _ in UUID() }
+        let staying = UUID()
+        for id in moving + [staying] {
+            try side.upsertAsset(asset(id: id))
+            try side.assignStorageGroup(origin.id, toAssets: [id])
+        }
+        store.loadAll()
+
+        XCTAssertEqual(store.moveToStorageGroup(cold.id, assetIDs: moving), 2)
+
+        for id in moving {
+            XCTAssertEqual(store.storageGroupIDByAsset[id], cold.id)
+            XCTAssertEqual(store.desiredCopies(forAsset: id), 3)
+        }
+        XCTAssertEqual(store.storageGroupIDByAsset[staying], origin.id, "the rest stayed put")
+        XCTAssertEqual(store.desiredCopies(forAsset: staying), 1)
+        XCTAssertEqual(store.photoCountByStorageGroup[cold.id], 2)
+        XCTAssertEqual(store.photoCountByStorageGroup[origin.id], 1)
+    }
+
+    /// Moving is idempotent: photos already in the group are not moved again.
+    func testMovingPhotosAlreadyInTheGroupDoesNothing() throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let side = try catalog(at: directory)
+        let group = try XCTUnwrap(store.createStorageGroup(label: "Only one"))
+        let assetID = UUID()
+        try side.upsertAsset(asset(id: assetID))
+        try side.assignStorageGroup(group.id, toAssets: [assetID])
+        store.loadAll()
+
+        XCTAssertEqual(store.moveToStorageGroup(group.id, assetIDs: [assetID]), 0)
+    }
+
+    /// A group holding photos is not deleted out from under them.
+    func testAGroupHoldingPhotosIsNotDeletedWithoutSomewhereToPutThem() throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let side = try catalog(at: directory)
+        let group = try XCTUnwrap(store.createStorageGroup(label: "Busy"))
+        let assetID = UUID()
+        try side.upsertAsset(asset(id: assetID))
+        try side.assignStorageGroup(group.id, toAssets: [assetID])
+        store.loadAll()
+
+        store.deleteStorageGroup(group.id)
+
+        XCTAssertNotNil(store.storageGroupsByID[group.id], "refused")
+        XCTAssertNotNil(store.lastError)
+        XCTAssertEqual(store.storageGroupIDByAsset[assetID], group.id)
+    }
+
+    /// With somewhere named, the photos go there and the group goes.
+    func testAGroupIsDeletedOnceItsPhotosHaveSomewhereToGo() throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let side = try catalog(at: directory)
+        let doomed = try XCTUnwrap(store.createStorageGroup(label: "Doomed"))
+        let keeper = try XCTUnwrap(store.createStorageGroup(label: "Keeper"))
+        let assetID = UUID()
+        try side.upsertAsset(asset(id: assetID))
+        try side.assignStorageGroup(doomed.id, toAssets: [assetID])
+        store.loadAll()
+
+        store.deleteStorageGroup(doomed.id, movingPhotosTo: keeper.id)
+
+        XCTAssertNil(store.storageGroupsByID[doomed.id])
+        XCTAssertEqual(store.storageGroupIDByAsset[assetID], keeper.id)
+        XCTAssertEqual(store.assets.count, 1, "the photo is still here")
+    }
+
+    /// An empty group goes without ceremony.
+    func testAnEmptyGroupIsDeletedOutright() throws {
+        let (store, _) = try makeStoreReturningDirectory()
+        let group = try XCTUnwrap(store.createStorageGroup(label: "Spare"))
+
+        store.deleteStorageGroup(group.id)
+
+        XCTAssertNil(store.storageGroupsByID[group.id])
+    }
+
+    func testRenamingAGroupKeepsItsSettings() throws {
+        let (store, _) = try makeStoreReturningDirectory()
+        let driveID = UUID()
+        let group = try XCTUnwrap(store.createStorageGroup(
+            label: "Old name",
+            from: StorageGroup.Defaults(desiredCopies: 2, destinationTargetIDs: [driveID])
+        ))
+
+        store.renameStorageGroup(group.id, to: "New name")
+
+        let renamed = try XCTUnwrap(store.storageGroupsByID[group.id])
+        XCTAssertEqual(renamed.label, "New name")
+        XCTAssertEqual(renamed.desiredCopies, 2)
+        XCTAssertEqual(renamed.destinationTargetIDs, [driveID])
+    }
+
     // MARK: - Fixtures
 
     private func asset(id: UUID) -> Asset {
