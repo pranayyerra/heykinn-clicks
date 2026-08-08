@@ -18,6 +18,7 @@ final class CatalogStore {
         // come through here — see `CatalogStore+Sources.swift`.
         try createSourceSchema()
         try createMetadataSchema()
+        try createTagSchema()
     }
 
     private func createSchema() throws {

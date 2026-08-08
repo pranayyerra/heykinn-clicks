@@ -158,6 +158,83 @@ final class MetadataProjectionTests: XCTestCase {
         XCTAssertEqual(resolved, fromPhotosLibrary)
     }
 
+    // MARK: - What a photo is called
+
+    /// Album membership is a directory, never a field — so the path is the only
+    /// way back to it, and capturing payloads without it would still have lost
+    /// every album.
+    func testAlbumMembershipComesFromTheDirectory() {
+        let photo = UUID()
+        let tags = MetadataProjection.tags(
+            forRecordAt: "Takeout/Google Photos/Trip to Kolkata/IMG_1.jpg.json",
+            payload: #"{"title":"IMG_1.jpg"}"#,
+            assetID: photo,
+            albumTitlesByDirectory: ["Takeout/Google Photos/Trip to Kolkata": "Trip to Kolkata"]
+        )
+        XCTAssertEqual(tags, [AssetTag(assetID: photo, kind: .album, value: "Trip to Kolkata")])
+    }
+
+    /// A year bucket is not an album. Which directories are albums comes from
+    /// Google having written a `metadata.json` into them, not from the folder
+    /// name looking album-ish.
+    func testAYearBucketIsNotAnAlbum() {
+        let tags = MetadataProjection.tags(
+            forRecordAt: "Takeout/Google Photos/Photos from 2017/IMG_1.jpg.json",
+            payload: #"{"title":"IMG_1.jpg"}"#,
+            assetID: UUID(),
+            albumTitlesByDirectory: ["Takeout/Google Photos/Trip to Kolkata": "Trip to Kolkata"]
+        )
+        XCTAssertTrue(tags.isEmpty)
+    }
+
+    /// An album renamed since the export still resolves, because the title
+    /// comes from the payload rather than the folder.
+    func testTheAlbumTitleComesFromItsPayloadNotItsFolderName() {
+        let photo = UUID()
+        let tags = MetadataProjection.tags(
+            forRecordAt: "Takeout/Google Photos/old-folder-name/IMG_1.jpg.json",
+            payload: #"{"title":"IMG_1.jpg"}"#,
+            assetID: photo,
+            albumTitlesByDirectory: ["Takeout/Google Photos/old-folder-name": "Wednesday night in Northgate"]
+        )
+        XCTAssertEqual(tags.first?.value, "Wednesday night in Northgate")
+    }
+
+    func testPeopleAreReadFromThePayload() {
+        let photo = UUID()
+        let tags = MetadataProjection.tags(
+            forRecordAt: "Takeout/Google Photos/Photos from 2017/IMG_1.jpg.json",
+            payload: #"{"title":"IMG_1.jpg","people":[{"name":"Alex Doe"},{"name":"Sam"}]}"#,
+            assetID: photo,
+            albumTitlesByDirectory: [:]
+        )
+        XCTAssertEqual(
+            Set(tags.map(\.value)), ["Alex Doe", "Sam"],
+            "a photo has as many people in it as it has"
+        )
+        XCTAssertTrue(tags.allSatisfy { $0.kind == .person })
+    }
+
+    /// A photo in an album *and* with people in it gets both — which is the
+    /// difference between a tag and a storage group: many answers are fine.
+    func testAPhotoCanCarryAnAlbumAndPeopleAtOnce() {
+        let photo = UUID()
+        let tags = MetadataProjection.tags(
+            forRecordAt: "Takeout/Google Photos/Trip to Kolkata/IMG_1.jpg.json",
+            payload: #"{"title":"IMG_1.jpg","people":[{"name":"Alex Doe"}]}"#,
+            assetID: photo,
+            albumTitlesByDirectory: ["Takeout/Google Photos/Trip to Kolkata": "Trip to Kolkata"]
+        )
+        XCTAssertEqual(tags.count, 2)
+        XCTAssertEqual(Set(tags.map(\.kind)), [.album, .person])
+    }
+
+    func testAPayloadWithNoPeopleYieldsNone() {
+        XCTAssertTrue(MetadataProjection.peopleNames(in: #"{"title":"x"}"#).isEmpty)
+        XCTAssertTrue(MetadataProjection.peopleNames(in: #"{"people":[]}"#).isEmpty)
+        XCTAssertTrue(MetadataProjection.peopleNames(in: #"{"people":[{"name":"  "}]}"#).isEmpty)
+    }
+
     // MARK: - What a payload is about
 
     /// An export carries files describing the export rather than anything in

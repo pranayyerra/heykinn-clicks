@@ -87,7 +87,76 @@ extension CatalogStore {
     /// photograph however many imports found it, so a picture that came from
     /// the Photos library and also sits in a Google export had its description
     /// filed under a source its asset does not belong to.
-    static let currentProjectionVersion = 3
+    /// 4: albums and people are derived into `asset_tags`. Album membership
+    /// is a directory in an export rather than a field, so it comes from
+    /// `origin_path` — which is why that was captured.
+    static let currentProjectionVersion = 4
+
+    /// What a photo is *called* by, as opposed to where it is kept.
+    ///
+    /// Many-to-many on purpose, and carrying no behaviour: a photo is in as
+    /// many albums and has as many people in it as it has, and none of that
+    /// decides where its bytes live. That is the line between a tag and a
+    /// storage group — a policy needs one answer per photo, and "this is in
+    /// three albums" has three.
+    ///
+    /// Entirely derived from `metadata_records`, and rebuilt rather than
+    /// migrated whenever the projection changes its mind.
+    func createTagSchema() throws {
+        try database.exec("""
+        CREATE TABLE IF NOT EXISTS asset_tags (
+            asset_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            value TEXT NOT NULL,
+            PRIMARY KEY (asset_id, kind, value)
+        );
+        """)
+        // "show me everyone in this album" and "show me every photo of this
+        // person" are the two questions, and both start from the tag.
+        try database.exec(
+            "CREATE INDEX IF NOT EXISTS idx_tags_lookup ON asset_tags(kind, value);"
+        )
+    }
+
+    func addTag(_ tag: AssetTag) throws {
+        try database.run("""
+        INSERT INTO asset_tags (asset_id, kind, value) VALUES (?,?,?)
+        ON CONFLICT(asset_id, kind, value) DO NOTHING;
+        """, [.text(tag.assetID.uuidString), .text(tag.kind.rawValue), .text(tag.value)])
+    }
+
+    /// Throws away every derived tag, for a rebuild.
+    func deleteAllTags() throws {
+        try database.run("DELETE FROM asset_tags;", [])
+    }
+
+    func fetchTags(forAsset assetID: UUID) throws -> [AssetTag] {
+        try database.query("""
+        SELECT asset_id, kind, value FROM asset_tags WHERE asset_id = ? ORDER BY kind, value;
+        """, [.text(assetID.uuidString)]) { row in
+            AssetTag(
+                assetID: row.uuid(0),
+                kind: AssetTag.Kind(rawValue: row.text(1)) ?? .album,
+                value: row.text(2)
+            )
+        }
+    }
+
+    /// Every value of one kind, with how many photos carry it — the album list
+    /// and the people list.
+    func fetchTagSummary(kind: AssetTag.Kind) throws -> [(value: String, count: Int)] {
+        try database.query("""
+        SELECT value, count(*) FROM asset_tags WHERE kind = ?
+        GROUP BY value ORDER BY count(*) DESC, value;
+        """, [.text(kind.rawValue)]) { row in (row.text(0), Int(row.int(1))) }
+    }
+
+    func fetchAssetIDs(taggedWith kind: AssetTag.Kind, value: String) throws -> [UUID] {
+        try database.query(
+            "SELECT asset_id FROM asset_tags WHERE kind = ? AND value = ?;",
+            [.text(kind.rawValue), .text(value)]
+        ) { $0.uuid(0) }
+    }
 
     // MARK: - Records
 

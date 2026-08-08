@@ -911,6 +911,26 @@ final class AppStore: ObservableObject {
         var resolved = 0
         var reclassified = 0
         var examined = 0
+        var tagged = 0
+
+        // Which directories are albums, and what each is called. Taken from the
+        // album payloads themselves rather than from folder names, so
+        // `Photos from 2017` is not an album and a renamed one still is.
+        var albumTitlesByDirectory: [String: String] = [:]
+        for source in sources {
+            let albums = (try? catalog.fetchMetadataRecords(forSource: source.id, scope: .album)) ?? []
+            for album in albums {
+                guard let title = MetadataProjection.albumTitle(in: album.payload) else { continue }
+                albumTitlesByDirectory[(album.originPath as NSString).deletingLastPathComponent] = title
+            }
+        }
+
+        // Tags are derived, so a run that revisits everything rebuilds them
+        // from scratch rather than layering new ones over stale. A partial run
+        // — a fresh import, say — adds without disturbing what is there.
+        let total = (try? catalog.metadataRecordCount()) ?? 0
+        let awaiting = (try? catalog.metadataRecordsAwaitingProjection()) ?? 0
+        if awaiting == total, total > 0 { try? catalog.deleteAllTags() }
 
         // Every photo, indexed by name, built once.
         //
@@ -958,6 +978,20 @@ final class AppStore: ObservableObject {
                         try catalog.applyProjection(
                             to: record.id, assetID: assetID ?? record.assetID, scope: scope
                         )
+
+                        // What the photo is called, as opposed to where it is
+                        // kept. Only possible once it is known which photo.
+                        if let subject = assetID ?? record.assetID {
+                            for tag in MetadataProjection.tags(
+                                forRecordAt: record.originPath,
+                                payload: record.payload,
+                                assetID: subject,
+                                albumTitlesByDirectory: albumTitlesByDirectory
+                            ) {
+                                try catalog.addTag(tag)
+                                tagged += 1
+                            }
+                        }
                     }
                 }
             }
@@ -970,6 +1004,11 @@ final class AppStore: ObservableObject {
         var message = "Worked out what \(Formatters.count(examined, "description")) refer to: \(Formatters.count(resolved, "description")) newly matched to a photo."
         if reclassified > 0 {
             message += " \(Formatters.count(reclassified, "description")) turned out to describe the download itself rather than a photo."
+        }
+        if tagged > 0 {
+            let albums = (try? catalog.fetchTagSummary(kind: .album).count) ?? 0
+            let people = (try? catalog.fetchTagSummary(kind: .person).count) ?? 0
+            message += " Recovered \(Formatters.count(albums, "album")) and \(Formatters.count(people, "person", "people")) from what Google wrote."
         }
         let stillLoose = ((try? catalog.database.query(
             "SELECT count(*) FROM metadata_records WHERE asset_id IS NULL AND scope = 'asset';"

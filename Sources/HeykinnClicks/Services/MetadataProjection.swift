@@ -74,6 +74,59 @@ enum MetadataProjection {
         return Date(timeIntervalSince1970: value)
     }
 
+    /// What a photo is called, read back out of what the provider sent.
+    ///
+    /// **Album membership is not a field.** Google expresses it by putting the
+    /// photo's sidecar in a directory, so the only way back to it is the path —
+    /// which is why `origin_path` is captured and why capturing payloads alone
+    /// would still have lost every album.
+    ///
+    /// Which directories are albums is answered by evidence rather than by
+    /// guessing at names: an album folder is one Google wrote a `metadata.json`
+    /// into, and that file's `title` is what the album is called. Reading the
+    /// folder name instead would make `Photos from 2017` an album and would
+    /// miss any album renamed since.
+    static func tags(
+        forRecordAt originPath: String,
+        payload: String,
+        assetID: UUID,
+        albumTitlesByDirectory: [String: String]
+    ) -> [AssetTag] {
+        var tags: [AssetTag] = []
+
+        let directory = (originPath as NSString).deletingLastPathComponent
+        if let album = albumTitlesByDirectory[directory] {
+            tags.append(AssetTag(assetID: assetID, kind: .album, value: album))
+        }
+
+        for name in peopleNames(in: payload) {
+            tags.append(AssetTag(assetID: assetID, kind: .person, value: name))
+        }
+        return tags
+    }
+
+    /// Who the provider says is in the picture — `[{"name":"…"}]`.
+    static func peopleNames(in payload: String) -> [String] {
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let people = object["people"] as? [[String: Any]]
+        else { return [] }
+        return people.compactMap { $0["name"] as? String }
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+    }
+
+    /// The title an album `metadata.json` gives itself.
+    static func albumTitle(in payload: String) -> String? {
+        guard let data = payload.data(using: .utf8),
+              let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let title = (object["title"] as? String)?
+                  .trimmingCharacters(in: .whitespacesAndNewlines),
+              !title.isEmpty
+        else { return nil }
+        return title
+    }
+
     /// What a payload is about, once it is clear it is about no photo.
     ///
     /// An export carries files that describe the export rather than anything in
