@@ -5788,6 +5788,25 @@ final class AppStore: ObservableObject {
         return queued
     }
 
+    /// Leftover rows that may be withdrawn when no group names the device.
+    ///
+    /// Both of these assert the device holds nothing, which is the whole reason
+    /// they are safe to drop: withdrawing them forgets an expectation, never a
+    /// file. `present` and `drift` are excluded for the same reason inverted —
+    /// a file really is on that disk, and forgetting the row would lose track
+    /// of a copy that exists. `copying` and `stale` are mid-flight and left to
+    /// finish or fail on their own.
+    ///
+    /// `missing` is here because gating on `pending` alone left a hole a real
+    /// archive fell into. Withdrawal was written for placements the user
+    /// revokes, and revoked copies start out `pending` — but a scan that runs
+    /// first looks where the row claims, finds nothing, and marks it `missing`.
+    /// From there withdrawal could never see it again, so twelve rows sat
+    /// reading as absent files on a device that had correctly been told to hold
+    /// nothing. What makes a row withdrawable is that nobody asked for it; the
+    /// state it happens to be sitting in is incidental.
+    static let withdrawableStates: Set<ReplicaFileState> = [.pending, .missing]
+
     /// Withdraws intentions to copy onto devices no source names.
     ///
     /// A `pending` replica row is not a copy — it is an intention, and an
@@ -5803,13 +5822,14 @@ final class AppStore: ObservableObject {
     /// the part — so a device holding no part keeps rows whose tasks are gone,
     /// and reports work waiting that nothing will ever perform.
     ///
-    /// Deliberately narrow: only `pending`, only where the device is not named.
-    /// A `present` row is bytes on a disk and is `releaseDepartedDevices`'s
-    /// business; `copying` is in flight and belongs to the sync that started it.
+    /// Deliberately narrow: only rows asserting the device holds nothing, and
+    /// only where the device is not named. A `present` row is bytes on a disk
+    /// and is `releaseDepartedDevices`'s business; `copying` is in flight and
+    /// belongs to the sync that started it. See `withdrawableStates`.
     @discardableResult
     func withdrawUnnamedPlacements() -> Int {
         var staleReplicas: [(assetID: UUID, targetID: UUID)] = []
-        for replica in replicaStates where replica.state == .pending {
+        for replica in replicaStates where Self.withdrawableStates.contains(replica.state) {
             let named = Set(placementPolicy(forAsset: replica.assetID).destinations)
             guard !named.contains(replica.targetID) else { continue }
             staleReplicas.append((replica.assetID, replica.targetID))

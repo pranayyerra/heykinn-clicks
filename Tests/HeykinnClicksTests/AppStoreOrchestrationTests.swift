@@ -1298,3 +1298,70 @@ final class NewSourceDefaultsTests: XCTestCase {
         XCTAssertEqual(unchanged.destinationTargetIDs, [deviceID])
     }
 }
+
+/// Withdrawing copies to devices nobody named any more.
+extension AppStoreOrchestrationTests {
+
+    /// The hole the first fix left, found on a real archive.
+    ///
+    /// A device was added as an extra destination and revoked minutes later.
+    /// Withdrawal cleared what was still `pending` — but a scan had already run
+    /// against twelve of those rows, looked where they claimed, found nothing,
+    /// and marked them `missing`. Withdrawal was gated on `pending`, so from
+    /// that moment it could never see them again. Twelve rows sat reading as
+    /// absent files on a device that had correctly been told to hold nothing,
+    /// and every audit re-counted them.
+    ///
+    /// A row is withdrawable because nobody asked for it. What state it is
+    /// sitting in is incidental.
+    func testARevokedCopyAlreadyScannedAndMarkedMissingIsStillWithdrawn() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Kept")
+        let asset = makeAsset(hash: "book1")
+        try store.catalog.upsertAsset(asset)
+
+        // A device no group names — the revoked one.
+        let revoked = UUID()
+        let seed = try catalog(at: directory)
+        for state in [ReplicaFileState.pending, .missing] {
+            try seed.upsertReplicaState(TargetReplicaState(
+                assetID: asset.id, targetID: revoked, state: state,
+                relativePath: nil, lastVerifiedAt: nil
+            ))
+            store.loadAll()
+            XCTAssertEqual(store.withdrawUnnamedPlacements(), 1, "\(state) should be withdrawn")
+            XCTAssertFalse(
+                try seed.fetchReplicaStates().contains { $0.targetID == revoked },
+                "\(state) row on a device nobody names must not survive"
+            )
+        }
+    }
+
+    /// The other half, and the reason this cannot simply drop every row on an
+    /// unnamed device: a `present` row is a file that really is on that disk.
+    /// Forgetting it would lose track of a copy that exists, which is the one
+    /// thing this archive must never do — reclaiming it is a separate decision
+    /// the user gets to make.
+    func testACopyThatIsActuallyOnAnUnnamedDeviceIsNotForgotten() throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Kept")
+        let asset = makeAsset(hash: "book2")
+        try store.catalog.upsertAsset(asset)
+
+        let unnamed = UUID()
+        let seed = try catalog(at: directory)
+        try seed.upsertReplicaState(TargetReplicaState(
+            assetID: asset.id, targetID: unnamed, state: .present,
+            relativePath: "8a/book2.png", lastVerifiedAt: Date()
+        ))
+        store.loadAll()
+
+        XCTAssertEqual(store.withdrawUnnamedPlacements(), 0)
+        XCTAssertTrue(
+            try seed.fetchReplicaStates().contains { $0.targetID == unnamed && $0.state == .present },
+            "bytes on a disk stay known even when no group asks for them"
+        )
+    }
+}
