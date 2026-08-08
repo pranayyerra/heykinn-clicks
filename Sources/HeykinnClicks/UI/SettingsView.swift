@@ -194,7 +194,7 @@ private struct SafetySettings: View {
                     .foregroundStyle(.secondary)
             }
             Section("Catalog backup") {
-                Text("The media survives on the targets, but residency, replica state, duplicate grouping, and import history exist only in the catalog. Verified snapshots are written to each connected drive so losing the Mac does not lose the metadata.")
+                Text("The photos survive on the drives, but everything this app knows about them lives only in the catalog: which drives hold what, how copies were verified, how duplicates were grouped, and the descriptions, albums and people read out of your exports — that last part only exists here now. Verified snapshots ride along on each connected drive, so losing the Mac does not lose any of it. The newest \(CatalogBackupService.retainCount) are kept on each drive.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 HStack {

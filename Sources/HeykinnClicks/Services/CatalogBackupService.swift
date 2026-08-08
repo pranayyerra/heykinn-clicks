@@ -26,7 +26,16 @@ enum CatalogBackupService {
     /// remove the backups.
     static let directoryName = ReplicationTarget.appFolderName + "/CatalogBackups"
     /// Snapshots retained per drive; older ones are pruned oldest-first.
-    static let retainCount = 5
+    ///
+    /// Three rather than more because a snapshot is only written when a drive
+    /// is actually connected and the newest on it is over an hour old — so
+    /// three is roughly three times the drive was plugged in, not three hours.
+    /// On a real archive the five held spanned a day and a half.
+    ///
+    /// What retention buys is a way back from a catalog that went wrong without
+    /// anyone noticing. It does not buy safety from losing the Mac: any one
+    /// good snapshot does that, and there is a copy on every drive.
+    static let retainCount = 3
 
     enum BackupError: Error, LocalizedError {
         case verificationFailed(String)
