@@ -554,3 +554,8 @@ Earned against a real 248 GB archive; the stories are in git history.
     on a one-cable setup is no part, ever — so an archive could sit for years
     reporting "not checked against the other copy yet" with no way to ever
     check it, and the message read as pending rather than impossible.
+42. Copies and photos are two numbers, and the gap between them is the size of
+    the archive. Counting replica rows and calling the total "assets" told a
+    user with 24,639 photos that 49,236 had been checked — twice their whole
+    archive. Nothing false was claimed about the checking; the label was simply
+    on the wrong noun, which under invariant 2 is the same defect.

@@ -811,7 +811,8 @@ final class AppStore: ObservableObject {
         Task { @MainActor in
             var agreed = 0
             var disagreed: [String] = []
-            var assetsConfirmed = 0
+            var copiesConfirmed = 0
+            var assetsConfirmed = Set<UUID>()
             var awaitingOtherCopy = 0
 
             for (index, part) in candidates.enumerated() {
@@ -853,7 +854,9 @@ final class AppStore: ObservableObject {
                 }
 
                 if Set(checksums.values).count == 1 {
-                    assetsConfirmed += markPartVerified(part, onTargets: Set(checksums.keys))
+                    let verified = markPartVerified(part, onTargets: Set(checksums.keys))
+                    copiesConfirmed += verified.copies
+                    assetsConfirmed.formUnion(verified.assetIDs)
                     agreed += 1
                 } else {
                     disagreed.append(part.displayName)
@@ -861,7 +864,7 @@ final class AppStore: ObservableObject {
                 }
             }
 
-            var message = "Spot check: \(Formatters.count(agreed, "export part")) matched across targets on length and sampled content, covering \(Formatters.count(assetsConfirmed, "asset")). This is a fast check, not a full byte-for-byte comparison."
+            var message = "Spot check: \(Formatters.count(agreed, "export part")) matched across targets on length and sampled content — \(Formatters.count(copiesConfirmed, "copy", "copies")) of \(Formatters.count(assetsConfirmed.count, "photo")) confirmed. This is a fast check, not a full byte-for-byte comparison."
             if awaitingOtherCopy > 0 {
                 message += " \(Formatters.count(awaitingOtherCopy, "part")) \(awaitingOtherCopy == 1 ? "was" : "were") read on the drive that is here; connect the other and run this again to complete the comparison."
             }
@@ -905,7 +908,8 @@ final class AppStore: ObservableObject {
         Task { @MainActor in
             var verifiedParts = 0
             var mismatchedParts: [String] = []
-            var assetsConfirmed = 0
+            var copiesConfirmed = 0
+            var assetsConfirmed = Set<UUID>()
             var awaitingOtherCopy = 0
 
             for (index, part) in candidates.enumerated() {
@@ -937,7 +941,9 @@ final class AppStore: ObservableObject {
                 }
 
                 if Set(hashes.values).count == 1 {
-                    assetsConfirmed += markPartVerified(part, onTargets: Set(hashes.keys))
+                    let verified = markPartVerified(part, onTargets: Set(hashes.keys))
+                    copiesConfirmed += verified.copies
+                    assetsConfirmed.formUnion(verified.assetIDs)
                     verifiedParts += 1
                 } else {
                     // Same name and size, different bytes: one copy is damaged
@@ -948,7 +954,7 @@ final class AppStore: ObservableObject {
                 }
             }
 
-            var message = "Checksum check: \(Formatters.count(verifiedParts, "export part")) confirmed identical across targets, covering \(Formatters.count(assetsConfirmed, "asset"))."
+            var message = "Checksum check: \(Formatters.count(verifiedParts, "export part")) confirmed identical across targets — \(Formatters.count(copiesConfirmed, "copy", "copies")) of \(Formatters.count(assetsConfirmed.count, "photo")) confirmed."
             if awaitingOtherCopy > 0 {
                 message += " \(Formatters.count(awaitingOtherCopy, "part")) \(awaitingOtherCopy == 1 ? "was" : "were") read on the drive that is here; connect the other and run this again to complete the comparison."
             }
@@ -961,12 +967,26 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// What a verified part confirms: copies, and the photos they are copies of.
+    ///
+    /// Two numbers because they are two facts and the difference is large. A
+    /// part held on two drives confirms two copies of each photo inside it, so
+    /// counting rows and calling the total "assets" reported an archive of
+    /// 24,639 photos as 49,236 of them — twice its own size, which is the sort
+    /// of number a reader either disbelieves or, worse, believes.
+    struct PartVerification {
+        var copies = 0
+        var assetIDs: Set<UUID> = []
+    }
+
     /// Records that every replica backed by this part has been confirmed.
     @discardableResult
-    private func markPartVerified(_ part: ExportPart, onTargets targetIDs: Set<UUID>) -> Int {
+    private func markPartVerified(
+        _ part: ExportPart, onTargets targetIDs: Set<UUID>
+    ) -> PartVerification {
         let stem = part.displayName
         let now = Date()
-        var confirmed = 0
+        var result = PartVerification()
         do {
             try catalog.transaction {
                 for replica in replicaStates where targetIDs.contains(replica.targetID)
@@ -975,13 +995,14 @@ final class AppStore: ObservableObject {
                     var updated = replica
                     updated.lastVerifiedAt = now
                     try catalog.upsertReplicaState(updated)
-                    confirmed += 1
+                    result.copies += 1
+                    result.assetIDs.insert(replica.assetID)
                 }
             }
         } catch {
             lastError = "Could not record checksum verification: \(error.localizedDescription)"
         }
-        return confirmed
+        return result
     }
 
     /// Flags replicas whose part disagrees between targets, so the difference

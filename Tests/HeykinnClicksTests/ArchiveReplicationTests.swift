@@ -342,6 +342,32 @@ final class ArchiveReplicationTests: XCTestCase {
         )
     }
 
+    /// Copies and photos are two different numbers, and confusing them reports
+    /// an archive as twice its own size.
+    ///
+    /// A part held on two drives confirms two copies of each photo inside it.
+    /// Counting replica rows and calling the total "assets" told a user with
+    /// 24,639 photos that 49,236 had been checked — a number they either
+    /// disbelieve or, worse, believe.
+    func testCopiesAndPhotosAreCountedSeparately() {
+        let here = UUID(), away = UUID()
+        let photo = UUID()
+        // One photo, two copies, both backed by the same export part.
+        let replicas = [here, away].map {
+            TargetReplicaState(
+                assetID: photo, targetID: $0, state: .present,
+                relativePath: ReplicationService.archivePartPrefix + "takeout-set-1",
+                lastVerifiedAt: nil
+            )
+        }
+        let copies = replicas.count
+        let photos = Set(replicas.map(\.assetID)).count
+
+        XCTAssertEqual(copies, 2)
+        XCTAssertEqual(photos, 1, "two copies of one photo is not two photos")
+        XCTAssertNotEqual(copies, photos, "which is exactly why they are reported apart")
+    }
+
     func testMissingPartsAreTheOnlyWorkReported() {
         let a = UUID(), b = UUID()
         var archives: [TakeoutArchive] = []
