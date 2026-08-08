@@ -183,6 +183,9 @@ struct ExportCard: View {
                         Button("Read what Google wrote beside the photos") {
                             store.backfillExportMetadata()
                         }
+                        Button("Work out which photo each description is about") {
+                            store.projectCapturedMetadata()
+                        }
                         Divider()
                         Button("Spot-check that the copies match") {
                             store.spotCheckExportParts()

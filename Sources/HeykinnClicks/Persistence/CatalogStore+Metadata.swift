@@ -78,7 +78,11 @@ extension CatalogStore {
     /// below it are stale and can be re-derived in the background, which is the
     /// property the whole design rests on: being wrong about interpretation is
     /// cheap as long as the raw payload was kept.
-    static let currentProjectionVersion = 1
+    /// 2: matching a sidecar to its photo allows a timezone's difference
+    /// between the provider's UTC timestamp and a capture date read from EXIF,
+    /// which carries no zone. Version 1 compared them exactly and missed every
+    /// photo whose camera clock was not on UTC.
+    static let currentProjectionVersion = 2
 
     // MARK: - Records
 
@@ -208,6 +212,29 @@ extension CatalogStore {
             .text(record.originPath),
             .text(record.payload),
             .real(record.capturedAt.timeIntervalSince1970),
+        ])
+    }
+
+    /// Applies what a projection worked out, without touching the payload.
+    ///
+    /// The raw layer is append-only in spirit: what arrived is never rewritten,
+    /// only what was concluded about it. Which is what makes a wrong conclusion
+    /// a re-run rather than a loss.
+    func applyProjection(
+        to recordID: UUID,
+        assetID: UUID?,
+        scope: MetadataRecord.Scope,
+        version: Int = CatalogStore.currentProjectionVersion
+    ) throws {
+        try database.run("""
+        UPDATE metadata_records
+        SET asset_id = ?, scope = ?, projected_version = ?
+        WHERE id = ?;
+        """, [
+            assetID.map { SQLValue.text($0.uuidString) } ?? .null,
+            .text(scope.rawValue),
+            .int(Int64(version)),
+            .text(recordID.uuidString),
         ])
     }
 

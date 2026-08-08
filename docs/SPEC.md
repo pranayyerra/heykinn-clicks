@@ -572,3 +572,10 @@ Earned against a real 248 GB archive; the stories are in git history.
     everything it had already written whenever the tool exited non-zero, so a
     failure two thirds of the way through a part produced nothing at all — the
     status was treated as the answer, when the answer was on disk.
+45. A capture date and a provider's timestamp are not the same clock. Google
+    writes `photoTakenTime` in UTC; a date read from a photo's own EXIF carries
+    no timezone at all, so the two differ by whatever the camera was set to.
+    Matching them exactly looked right, passed its tests, and missed every
+    photo whose clock was not on UTC — on a real archive, most of them.
+    Anything within fourteen hours is explicable as a timezone rather than as a
+    different photograph.

@@ -899,6 +899,79 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Works out what the captured payloads are about.
+    ///
+    /// Separate from reading them, and re-runnable, which is the whole point of
+    /// keeping payloads whole: capture is the expensive part that needs the
+    /// zips, and this is the cheap part that can be done again whenever the app
+    /// learns something. Bump `CatalogStore.currentProjectionVersion` and
+    /// everything queues itself.
+    @discardableResult
+    func projectCapturedMetadata() -> Int {
+        var resolved = 0
+        var reclassified = 0
+        var examined = 0
+
+        // Candidates by source, built once: the payloads are walked in
+        // batches, and rebuilding this per batch would make the pass quadratic
+        // in the size of the archive.
+        var candidatesBySource: [UUID: [(id: UUID, filename: String, captureDate: Date?)]] = [:]
+        for asset in assets {
+            guard let sourceID = sourceIDByAsset[asset.id] else { continue }
+            candidatesBySource[sourceID, default: []].append(
+                (asset.id, asset.originalFilename, asset.captureDate)
+            )
+        }
+
+        do {
+            while true {
+                let batch = try catalog.fetchMetadataRecordsNeedingProjection()
+                guard !batch.isEmpty else { break }
+                try catalog.transaction {
+                    for record in batch {
+                        examined += 1
+                        let sidecarName = (record.originPath as NSString).lastPathComponent
+                        let assetID = record.scope == .album
+                            ? nil
+                            : MetadataProjection.resolveAsset(
+                                forSidecarNamed: sidecarName,
+                                payload: record.payload,
+                                candidates: candidatesBySource[record.sourceID] ?? []
+                              )
+                        let scope = MetadataProjection.scope(
+                            forSidecarNamed: sidecarName,
+                            resolvedAsset: assetID,
+                            currentScope: record.scope
+                        )
+                        if assetID != nil, record.assetID == nil { resolved += 1 }
+                        if scope != record.scope { reclassified += 1 }
+                        try catalog.applyProjection(
+                            to: record.id, assetID: assetID ?? record.assetID, scope: scope
+                        )
+                    }
+                }
+            }
+        } catch {
+            lastError = "Could not work out what the descriptions refer to: \(error.localizedDescription)"
+            return resolved
+        }
+
+        guard examined > 0 else { return 0 }
+        var message = "Worked out what \(Formatters.count(examined, "description")) refer to: \(Formatters.count(resolved, "description")) newly matched to a photo."
+        if reclassified > 0 {
+            message += " \(Formatters.count(reclassified, "description")) turned out to describe the download itself rather than a photo."
+        }
+        let stillLoose = ((try? catalog.database.query(
+            "SELECT count(*) FROM metadata_records WHERE asset_id IS NULL AND scope = 'asset';"
+        ) { Int($0.int(0)) }) ?? []).first ?? 0
+        if stillLoose > 0 {
+            message += " \(Formatters.count(stillLoose, "description")) still \(stillLoose == 1 ? "names a photo" : "name photos") this archive cannot tell apart, and \(stillLoose == 1 ? "is" : "are") held rather than guessed at."
+        }
+        audit(.system, message)
+        loadAll()
+        return resolved
+    }
+
     /// Photos of one source by filename, keeping only names that identify
     /// exactly one.
     ///
