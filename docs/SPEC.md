@@ -600,3 +600,26 @@ Earned against a real 248 GB archive; the stories are in git history.
     spent in both its endpoints. What is not understood stays in the payload
     for a projection that understands it, which is the whole reason payloads
     are kept verbatim.
+
+49. A backup is not complete because the photos are in it. Snapshot
+    verification checked `integrity_check` and the asset count, which was the
+    whole catalog when it was written. A snapshot taken later held all 24,639
+    assets and none of the 24,417 provider payloads captured beside them —
+    `asset_tags` was not even present — and was logged as verified. The test is
+    now the general one: no table the live catalog holds rows in may be empty
+    or absent in the copy, with the tables read from the schema so one added
+    later is covered without anybody remembering to. Counts are not compared;
+    tables legitimately shrink, and a whole category going missing is the
+    failure that matters.
+
+50. A row is withdrawable because nobody asked for it. Withdrawal of copies to
+    revoked devices was gated on `pending`, the state a revoked copy starts in.
+    But a scan reaching the row first looks where it claims, finds nothing, and
+    marks it `missing` — after which withdrawal could never see it again.
+    Twelve rows sat on a real archive reading as absent files on a device
+    correctly told to hold nothing. The state a leftover is sitting in is
+    incidental; what matters is whether anyone named that device. The one
+    distinction worth keeping is between rows that assert nothing is there
+    (`pending`, `missing`, withdrawable) and rows that assert bytes are on a
+    disk (`present`, `drift`, never forgotten — releasing them is a separate
+    decision the user makes).
