@@ -3299,10 +3299,30 @@ final class AppStore: ObservableObject {
 
     func placementPolicy(forAsset assetID: UUID) -> (destinations: [UUID], copies: Int) {
         guard let group = storageGroup(forAsset: assetID) else {
+            // A photo in no group. The only policy that is not a group's, and
+            // it is a stop-gap rather than a setting: placing nothing would
+            // quietly stop protecting content that was protected yesterday,
+            // which is the worse failure of the two.
+            //
+            // Reachable — an import that goes through no source flow (the
+            // connect-time adoption sweep) names no group — so it is surfaced
+            // by `ungroupedAssetIDs` and fixable on the Policies screen rather
+            // than left as a silent answer nobody can see. Every photo owing
+            // its copies to a group the user can read is the point of the
+            // model; a preference standing in for one is not.
             let fallback = newSourceDefaults
             return (fallback.destinationTargetIDs, fallback.desiredCopies)
         }
         return (group.destinationTargetIDs, group.desiredCopies)
+    }
+
+    /// Photos in no group, and so following the add-sheet defaults rather than
+    /// anything the user set. Nothing is wrong with them; nobody has said where
+    /// they belong.
+    var ungroupedAssetIDs: [UUID] {
+        assets
+            .filter { !$0.isLivePhotoMotion && storageGroupIDByAsset[$0.id] == nil }
+            .map(\.id)
     }
 
     /// Groups assets by the policy that applies to them, so a batch is planned

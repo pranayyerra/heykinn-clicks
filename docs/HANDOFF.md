@@ -271,11 +271,17 @@ Policies list now carries each group's provenance ("from Recovered import
 (Google Takeout)"), because it has to supply the context the source card used
 to.
 
-Options weighed and not taken: policy as a per-asset attribute with no groups at
-all (simplest model, but no living set that new photos inherit from); one tag
-mechanism with priority-resolved policy (rejected — it makes "how many copies
-does this photo want" a computation, which the archive's central promise should
-not be).
+Options weighed and **refused**, recorded so they are not reopened: policy as a
+per-asset attribute with no groups at all — rejected outright as chaos, since it
+leaves no object to read a set's answer off; and one tag mechanism with
+priority-resolved policy — rejected because it makes "how many copies does this
+photo want" a computation, which the archive's central promise should not be.
+
+Policy is a storage group's and nothing else's. `Asset` has no copy count and no
+destinations and must not gain them; this is now part of SPEC invariant 4. The
+single exception, a photo in no group following the add-sheet defaults, is a
+stop-gap kept only so nothing stops being protected, and it is surfaced on the
+Policies screen with a "Put them in a group…" action rather than left silent.
 
 ### 7. Small things the UI check turned up
 

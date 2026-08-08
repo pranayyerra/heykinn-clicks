@@ -457,6 +457,52 @@ final class StorageGroupSplitTests: XCTestCase {
         XCTAssertEqual(store.desiredCopies(forAsset: leaving), 1, "the photo that left is untouched")
     }
 
+    // MARK: - Nothing but a group carries policy
+
+    /// An `Asset` has no copies and no destinations of its own. Policy is a
+    /// group's, and only a group's — per-asset storage would make "what does
+    /// this photo want" answerable 24,639 different ways.
+    func testAnImportThatNamesNoGroupIsSurfacedRatherThanSilentlyDefaulted() async throws {
+        let (store, _) = try makeStoreReturningDirectory()
+        let folder = try makeDirectory("photos")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("p.jpg"))
+
+        // The path connect-time adoption uses: no source flow, so nothing names
+        // a group for what it brings in.
+        store.importFolders([folder])
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let subject = try XCTUnwrap(store.assets.first)
+
+        XCTAssertNil(store.storageGroupIDByAsset[subject.id])
+        XCTAssertEqual(store.ungroupedAssetIDs, [subject.id], "and it is reported, not hidden")
+        XCTAssertEqual(
+            store.desiredCopies(forAsset: subject.id),
+            store.newSourceDefaults.desiredCopies,
+            "it still owes copies — placing nothing would stop protecting it"
+        )
+    }
+
+    /// And putting them in a group clears the state and makes the group the
+    /// answer.
+    func testPuttingStrandedPhotosInAGroupClearsTheState() async throws {
+        let (store, _) = try makeStoreReturningDirectory()
+        let folder = try makeDirectory("photos")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("p.jpg"))
+        store.importFolders([folder])
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+
+        let driveID = UUID()
+        let group = try XCTUnwrap(store.createStorageGroup(
+            label: "Everything else",
+            from: StorageGroup.Defaults(desiredCopies: 3, destinationTargetIDs: [driveID])
+        ))
+        _ = store.moveToStorageGroup(group.id, assetIDs: store.ungroupedAssetIDs)
+
+        XCTAssertTrue(store.ungroupedAssetIDs.isEmpty)
+        let subject = try XCTUnwrap(store.assets.first)
+        XCTAssertEqual(store.desiredCopies(forAsset: subject.id), 3)
+    }
+
     // MARK: - Fixtures
 
     private func asset(id: UUID) -> Asset {

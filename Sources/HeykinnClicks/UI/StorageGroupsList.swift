@@ -13,6 +13,7 @@ struct StorageGroupsList: View {
     @State private var renameText = ""
     @State private var deleting: StorageGroup?
     @State private var moveDestination: UUID?
+    @State private var placingStranded = false
 
     private var counts: [UUID: Int] { store.photoCountByStorageGroup }
 
@@ -25,6 +26,30 @@ struct StorageGroupsList: View {
                 Text("No groups yet. One is made for you each time you add photos.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
+            }
+            // Photos nobody has placed. Said out loud rather than left to the
+            // defaults in silence: a photo whose copies are decided by a
+            // remembered UI answer is the one case where the archive's storage
+            // does not come from something the user can read.
+            if !store.ungroupedAssetIDs.isEmpty {
+                let stranded = store.ungroupedAssetIDs
+                HStack(spacing: 10) {
+                    Image(systemName: "questionmark.square.dashed")
+                        .foregroundStyle(.orange)
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("\(Formatters.count(stranded.count, "photo")) in no group")
+                            .font(.callout.weight(.medium))
+                        Text("They follow whatever was last chosen in the add sheet until you put them somewhere.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Spacer(minLength: 8)
+                    Button("Put them in a group…") { placingStranded = true }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                }
+                .padding(.vertical, 2)
             }
             Button {
                 let made = store.createStorageGroup(label: "New group")
@@ -42,6 +67,9 @@ struct StorageGroupsList: View {
                 .textCase(nil)
         }
         .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
+        .sheet(isPresented: $placingStranded) {
+            MoveToStorageGroupSheet(assetIDs: store.ungroupedAssetIDs)
+        }
         .alert("Rename group", isPresented: Binding(
             get: { renaming != nil },
             set: { if !$0 { renaming = nil } }

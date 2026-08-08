@@ -242,6 +242,20 @@ Apple frameworks only — zero third-party dependencies.
    group made by hand has policy and no provenance, which is the case the
    single-row model could not represent without inventing a history.
 
+   **Policy is a storage group's, and nothing else's.** Not the archive's, not
+   a source's, and never an asset's: `Asset` carries no copy count and no
+   destinations, and must not gain them. Per-asset storage was considered and
+   refused — it makes "what does this photo want" answerable as many ways as
+   there are photos, with no object to read the answer off, and no way to say
+   what a set of photos is for. A group is the smallest thing policy may attach
+   to, and a group of one is still a group.
+
+   The one exception is a stop-gap and is treated as one: a photo in *no* group
+   follows the add-sheet defaults, because placing nothing would stop protecting
+   content that was protected yesterday. That state is reachable (an import
+   through no source flow names no group), so it is surfaced on the Policies
+   screen and fixable there — never left as a silent answer nobody can see.
+
    **There is no archive-wide copy count.** Not as a policy, and not as a
    default that binds anything: the only surviving global is
    `newSourceDefaults`, which prefills the add-a-source sheet with the last
@@ -502,3 +516,8 @@ Earned against a real 248 GB archive; the stories are in git history.
     edit at all; deleting that affordance deleted the rule, the question "does
     this override that?", and the class of bug underneath both. One setting,
     one place to change it.
+39. Policy needs an object to hang on. Per-asset storage sounds like the
+    simplest model right up to the first question about a *set* of photos —
+    what do these want, why, and what else shares that answer — at which point
+    there is nothing to ask. A group of one costs nothing and keeps the
+    question answerable.
