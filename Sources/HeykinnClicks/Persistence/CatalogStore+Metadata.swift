@@ -82,7 +82,12 @@ extension CatalogStore {
     /// between the provider's UTC timestamp and a capture date read from EXIF,
     /// which carries no zone. Version 1 compared them exactly and missed every
     /// photo whose camera clock was not on UTC.
-    static let currentProjectionVersion = 2
+    /// 3: a description is matched against every photo in the archive, not
+    /// only those from its own source. The archive keeps one row per
+    /// photograph however many imports found it, so a picture that came from
+    /// the Photos library and also sits in a Google export had its description
+    /// filed under a source its asset does not belong to.
+    static let currentProjectionVersion = 3
 
     // MARK: - Records
 

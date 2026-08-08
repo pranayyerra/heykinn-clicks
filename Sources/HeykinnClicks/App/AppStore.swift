@@ -912,13 +912,21 @@ final class AppStore: ObservableObject {
         var reclassified = 0
         var examined = 0
 
-        // Candidates by source, built once: the payloads are walked in
-        // batches, and rebuilding this per batch would make the pass quadratic
-        // in the size of the archive.
-        var candidatesBySource: [UUID: [(id: UUID, filename: String, captureDate: Date?)]] = [:]
+        // Every photo, indexed by name, built once.
+        //
+        // Not scoped to the record's own source, which was the first version's
+        // mistake. A description is about a *photograph*, and the archive keeps
+        // one row per photograph however many imports found it — so a picture
+        // that arrived from the Photos library and also sits in a Google export
+        // has its Google description filed under a source its asset does not
+        // belong to. Restricting to the source missed exactly the deduplicated
+        // ones, which is the case worth catching.
+        //
+        // Indexed rather than filtered per record: 24,417 payloads against
+        // 24,639 photos is a scan nobody should do 24,417 times.
+        var candidatesByName: [String: [(id: UUID, filename: String, captureDate: Date?)]] = [:]
         for asset in assets {
-            guard let sourceID = sourceIDByAsset[asset.id] else { continue }
-            candidatesBySource[sourceID, default: []].append(
+            candidatesByName[asset.originalFilename, default: []].append(
                 (asset.id, asset.originalFilename, asset.captureDate)
             )
         }
@@ -936,7 +944,9 @@ final class AppStore: ObservableObject {
                             : MetadataProjection.resolveAsset(
                                 forSidecarNamed: sidecarName,
                                 payload: record.payload,
-                                candidates: candidatesBySource[record.sourceID] ?? []
+                                candidates: candidatesByName[
+                                    TakeoutMetadataBackfill.mediaFilename(forSidecar: sidecarName)
+                                ] ?? []
                               )
                         let scope = MetadataProjection.scope(
                             forSidecarNamed: sidecarName,

@@ -141,6 +141,23 @@ final class MetadataProjectionTests: XCTestCase {
         XCTAssertEqual(resolved, wanted)
     }
 
+    /// A description is about a *photograph*, and the archive keeps one row per
+    /// photograph however many imports found it. A picture that arrived from
+    /// the Photos library and also sits in a Google export must still get its
+    /// Google description — the first version scoped candidates to the record's
+    /// own source and missed exactly those.
+    func testAPhotoThatArrivedFromAnotherSourceIsStillMatched() {
+        let fromPhotosLibrary = UUID()
+        let resolved = MetadataProjection.resolveAsset(
+            forSidecarNamed: "IMG_2958.PNG.supplemental-metadata.json",
+            payload: payload(takenAt: 1_500_986_614, title: "IMG_2958.PNG"),
+            // The caller now passes every photo of that name, whatever source
+            // its asset belongs to.
+            candidates: [(fromPhotosLibrary, "IMG_2958.PNG", nil)]
+        )
+        XCTAssertEqual(resolved, fromPhotosLibrary)
+    }
+
     // MARK: - What a payload is about
 
     /// An export carries files describing the export rather than anything in

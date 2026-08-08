@@ -235,7 +235,29 @@ ran on real data.
    exactly this, and `(source_id, origin_path)` uniqueness makes a re-run
    harmless. And the media file a sidecar names is matched **by filename within
    the export**, not by hash, since the zips are not being extracted.
-3. **Surfacing the census** — a screen or a diagnostics section over
+3. ~~Projections.~~ **Built** — `MetadataProjection` +
+   `AppStore.projectCapturedMetadata()`, on the export card's menu.
+
+   Three versions in an hour, each a wrong assumption that only real data
+   exposed, and each re-run costing about a minute over payloads already held:
+
+   | v | assumption that failed |
+   |---|---|
+   | 1 | a filename identifies a photo |
+   | 2 | `photoTakenTime` and the asset's capture date agree exactly |
+   | 3 | a description's photo belongs to the description's own source |
+
+   v2 is the interesting one: the provider writes UTC and a date read from EXIF
+   carries no timezone, so they differ by the camera's offset. v3: the archive
+   keeps one row per photograph however many imports found it, so scoping
+   candidates to a source missed exactly the deduplicated ones.
+
+   **Result on the real archive: 24,030 of 24,386 linked (98.5%).** Of the
+   remainder, 224 name a photo the archive does not hold and 132 are several
+   photos of one name taken the same day — genuinely indistinguishable, and
+   held rather than guessed at. No unexplained misses.
+
+4. **Surfacing the census** — a screen or a diagnostics section over
    `fetchMetadataSchemas()`, so an unfamiliar shape is something a person sees.
 4. **Projections and tags** (layers 2 and 3), including album membership
    projected from `origin_path`.
