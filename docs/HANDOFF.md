@@ -210,10 +210,14 @@ ran on real data.
    the sidecar names. Album `metadata.json` files land as `scope: .album` with
    no asset.
 
-   Two things to get right. It reads ~127 GB across two drives, so it must be
-   resumable — `capturedOriginPaths(forSource:)` exists so a re-run skips what
-   it already has. And the media file a sidecar names is matched by filename
-   within the export, not by hash, since the zips are not being extracted.
+   Three things to get right. **One drive at a time** — SPEC invariant 12: the
+   user has one cable, and each drive holds all 12 parts anyway, so the backfill
+   reads whatever is connected and records progress. It must never wait for
+   both. It must be **resumable**, since ~127 GB is not a job anybody can
+   promise not to interrupt — `capturedOriginPaths(forSource:)` exists for
+   exactly this, and `(source_id, origin_path)` uniqueness makes a re-run
+   harmless. And the media file a sidecar names is matched **by filename within
+   the export**, not by hash, since the zips are not being extracted.
 3. **Surfacing the census** — a screen or a diagnostics section over
    `fetchMetadataSchemas()`, so an unfamiliar shape is something a person sees.
 4. **Projections and tags** (layers 2 and 3), including album membership

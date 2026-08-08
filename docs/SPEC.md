@@ -307,6 +307,15 @@ Apple frameworks only — zero third-party dependencies.
     full boot disk simply stops being chosen for new content, and the drives
     take it. Forgetting the host target remains the way to keep the archive
     off this Mac entirely.
+12. **No operation may require two devices connected at once.** One cable and
+    two drives is the ordinary setup, not an exotic one. Work that needs both
+    is work that never runs: it does not fail, it reports "nothing to do" for
+    ever, which is the most expensive kind of wrong. Everything is per-device
+    and resumable, and anything comparative reads what is here, records it, and
+    meets the other reading in a later session — which is a fact about drives,
+    not a weakening of the evidence (invariant 2 still applies: two readings
+    are still two readings, whenever they were taken).
+
 11. **Devices are compared only where they overlap, and only by reading.**
     Nothing may infer damage from two devices holding different content: that
     is the normal steady state. A cross-device check whose inputs are both
@@ -540,3 +549,8 @@ Earned against a real 248 GB archive; the stories are in git history.
     reading "Recovered import (Google Takeout) — from Recovered import (Google
     Takeout)". A concept introduced before it does any work is a concept read
     as noise.
+41. Requiring two drives at once is requiring a second cable. The export
+    comparison checks filtered for parts whose every copy was readable, which
+    on a one-cable setup is no part, ever — so an archive could sit for years
+    reporting "not checked against the other copy yet" with no way to ever
+    check it, and the message read as pending rather than impossible.

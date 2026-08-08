@@ -783,15 +783,28 @@ final class AppStore: ObservableObject {
         // compare to, and running one over a lone file would report agreement
         // with itself.
         let plan = archivePlan
+        // Read what is here; compare when the other copy has been read too.
+        //
+        // This used to require every copy of a part to be readable at once,
+        // which sounds like caution and is really an assumption about cabling.
+        // With one cable and two drives — the ordinary case, not an exotic one
+        // — no part ever qualified, so the check reported "nothing to compare"
+        // for ever and the export could never be verified at all.
+        //
+        // Nothing weaker is being claimed. A fingerprint is taken from bytes
+        // read off a disk, and two of them are compared only when both exist.
+        // The change is that the two readings may happen in different sessions,
+        // which is a fact about drives rather than about evidence.
         let candidates = plan.partsMeetingPolicy.filter { part in
             part.copies.count >= copiesNeededToCompare(
                 forCopies: plan.copiesRequired(forSet: part.setID)
             )
-                && part.copies.values.contains { $0.kind == .zip }
-                && part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+                && part.copies.values.contains {
+                    $0.kind == .zip && FileManager.default.fileExists(atPath: $0.path)
+                }
         }
         guard !candidates.isEmpty else {
-            audit(.replication, "Spot check: no export part has two connected copies to compare.")
+            audit(.replication, "Spot check: no copy of any export part is on a connected drive.")
             return
         }
 
@@ -799,6 +812,7 @@ final class AppStore: ObservableObject {
             var agreed = 0
             var disagreed: [String] = []
             var assetsConfirmed = 0
+            var awaitingOtherCopy = 0
 
             for (index, part) in candidates.enumerated() {
                 takeoutActivity = TakeoutActivity(
@@ -812,6 +826,11 @@ final class AppStore: ObservableObject {
                 for (targetID, archiveConst) in part.copies where archiveConst.kind == .zip {
                     var archive = archiveConst
                     if archive.quickChecksum == nil {
+                        // Only a copy on a connected drive can be read. One
+                        // that is away keeps whatever was recorded the last
+                        // time it was here, which is what lets the two readings
+                        // meet across sessions.
+                        guard FileManager.default.fileExists(atPath: archive.path) else { continue }
                         guard let value = try? await Task.detached(priority: .utility, operation: {
                             try HashingService.quickChecksum(of: archive.url)
                         }).value else { continue }
@@ -825,7 +844,13 @@ final class AppStore: ObservableObject {
                 }
                 guard checksums.count >= copiesNeededToCompare(
                     forCopies: plan.copiesRequired(forSet: part.setID)
-                ) else { continue }
+                ) else {
+                    // Read here, with nothing yet to hold it against. Not a
+                    // failure and not a pass: the other copy has simply not
+                    // been plugged in since.
+                    awaitingOtherCopy += 1
+                    continue
+                }
 
                 if Set(checksums.values).count == 1 {
                     assetsConfirmed += markPartVerified(part, onTargets: Set(checksums.keys))
@@ -837,6 +862,9 @@ final class AppStore: ObservableObject {
             }
 
             var message = "Spot check: \(Formatters.count(agreed, "export part")) matched across targets on length and sampled content, covering \(Formatters.count(assetsConfirmed, "asset")). This is a fast check, not a full byte-for-byte comparison."
+            if awaitingOtherCopy > 0 {
+                message += " \(Formatters.count(awaitingOtherCopy, "part")) \(awaitingOtherCopy == 1 ? "was" : "were") read on the drive that is here; connect the other and run this again to complete the comparison."
+            }
             if !disagreed.isEmpty {
                 message += " \(Formatters.count(disagreed.count, "part")) DIFFER and are flagged: \(disagreed.joined(separator: ", "))."
             }
@@ -856,17 +884,21 @@ final class AppStore: ObservableObject {
     func verifyExportPartsByChecksum() {
         guard takeoutActivity == nil, !isImporting else { return }
         archivePlan = makeArchivePlan()
-        // Only parts whose copies are all reachable can be compared now — and
-        // only parts that have a second copy to be compared against at all.
+        // Any part with a copy on a connected drive, and a second copy
+        // somewhere to eventually hold it against. The two readings need not
+        // happen in the same session — see `spotCheckExportParts`, which had
+        // the same assumption about cabling baked into it.
         let plan = archivePlan
         let candidates = plan.partsMeetingPolicy.filter { part in
             part.copies.count >= copiesNeededToCompare(
                 forCopies: plan.copiesRequired(forSet: part.setID)
             )
-                && part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
+                && part.copies.values.contains {
+                    $0.kind == .zip && FileManager.default.fileExists(atPath: $0.path)
+                }
         }
         guard !candidates.isEmpty else {
-            audit(.replication, "Checksum check: no export part has two connected copies to compare.")
+            audit(.replication, "Checksum check: no copy of any export part is on a connected drive.")
             return
         }
 
@@ -874,6 +906,7 @@ final class AppStore: ObservableObject {
             var verifiedParts = 0
             var mismatchedParts: [String] = []
             var assetsConfirmed = 0
+            var awaitingOtherCopy = 0
 
             for (index, part) in candidates.enumerated() {
                 takeoutActivity = TakeoutActivity(
@@ -888,12 +921,20 @@ final class AppStore: ObservableObject {
                     // Folders have no single-file checksum; this compares parts
                     // stored as archives.
                     guard archive.kind == .zip else { continue }
+                    // A copy already hashed keeps its value whether or not its
+                    // drive is here; one that is away and never hashed simply
+                    // waits for the session it is plugged in.
+                    if archive.contentHash == nil,
+                       !FileManager.default.fileExists(atPath: archive.path) { continue }
                     guard let hash = await fingerprintZipIfNeeded(archive) else { continue }
                     hashes[targetID] = hash
                 }
                 guard hashes.count >= copiesNeededToCompare(
                     forCopies: plan.copiesRequired(forSet: part.setID)
-                ) else { continue }
+                ) else {
+                    awaitingOtherCopy += 1
+                    continue
+                }
 
                 if Set(hashes.values).count == 1 {
                     assetsConfirmed += markPartVerified(part, onTargets: Set(hashes.keys))
@@ -908,6 +949,9 @@ final class AppStore: ObservableObject {
             }
 
             var message = "Checksum check: \(Formatters.count(verifiedParts, "export part")) confirmed identical across targets, covering \(Formatters.count(assetsConfirmed, "asset"))."
+            if awaitingOtherCopy > 0 {
+                message += " \(Formatters.count(awaitingOtherCopy, "part")) \(awaitingOtherCopy == 1 ? "was" : "were") read on the drive that is here; connect the other and run this again to complete the comparison."
+            }
             if !mismatchedParts.isEmpty {
                 message += " \(Formatters.count(mismatchedParts.count, "part")) DIFFER between targets and are flagged: \(mismatchedParts.joined(separator: ", "))."
             }

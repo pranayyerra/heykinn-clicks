@@ -292,6 +292,56 @@ final class ArchiveReplicationTests: XCTestCase {
         )
     }
 
+    /// Two drives and one cable is the ordinary case, not an exotic one.
+    ///
+    /// The comparison checks required every copy of a part to be readable at
+    /// once, which reads as caution and is really an assumption about cabling.
+    /// A part whose copies live on drives that are never plugged in together
+    /// could never be compared, so an archive on that setup could never be
+    /// verified at all — while the card said the files "have not been checked
+    /// against the other copy yet", a state that was permanent rather than
+    /// pending.
+    func testAPartIsComparableFromReadingsTakenInDifferentSessions() {
+        let here = UUID(), away = UUID()
+        var onHere = archive(part: 1, drive: here, size: 100)
+        var onAway = archive(part: 1, drive: away, size: 100)
+
+        // Neither has been read yet: nothing to compare, and the grade says so
+        // rather than claiming agreement.
+        var part = ExportPart(setID: "set", partNumber: 1, copies: [here: onHere, away: onAway])
+        XCTAssertFalse(part.hashesAgree)
+        XCTAssertEqual(part.redundancy(acrossTargets: [here, away], copiesRequired: 2), .redundantUnverified)
+
+        // Session one: the drive that is here gets read.
+        onHere.contentHash = "abc"
+        part = ExportPart(setID: "set", partNumber: 1, copies: [here: onHere, away: onAway])
+        XCTAssertFalse(part.hashesAgree, "one reading is not an agreement")
+
+        // Session two, weeks later, the other drive. The readings meet.
+        onAway.contentHash = "abc"
+        part = ExportPart(setID: "set", partNumber: 1, copies: [here: onHere, away: onAway])
+        XCTAssertTrue(part.hashesAgree)
+        XCTAssertEqual(
+            part.redundancy(acrossTargets: [here, away], copiesRequired: 2), .redundantVerified
+        )
+    }
+
+    /// And two readings that disagree still disagree across sessions — the
+    /// point is when they are taken, not what they are allowed to say.
+    func testReadingsTakenApartStillCatchADifference() {
+        let here = UUID(), away = UUID()
+        var onHere = archive(part: 1, drive: here, size: 100)
+        var onAway = archive(part: 1, drive: away, size: 100)
+        onHere.contentHash = "abc"
+        onAway.contentHash = "def"
+
+        let part = ExportPart(setID: "set", partNumber: 1, copies: [here: onHere, away: onAway])
+        XCTAssertFalse(part.hashesAgree)
+        XCTAssertNotEqual(
+            part.redundancy(acrossTargets: [here, away], copiesRequired: 2), .redundantVerified
+        )
+    }
+
     func testMissingPartsAreTheOnlyWorkReported() {
         let a = UUID(), b = UUID()
         var archives: [TakeoutArchive] = []
