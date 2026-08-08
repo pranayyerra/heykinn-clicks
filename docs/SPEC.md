@@ -242,6 +242,19 @@ Apple frameworks only — zero third-party dependencies.
    group made by hand has policy and no provenance, which is the case the
    single-row model could not represent without inventing a history.
 
+   **A source is its own first group.** Adding a folder or an export creates
+   one group carrying the source's id and name, so a person meets *one* thing —
+   a name, where it came from, and a rule — rather than two rows that happen to
+   agree. "Group" only becomes a separate idea when a second one exists, which
+   is the moment it is worth learning. Every route that makes a source does
+   this; it was true of the migration and of exports and coincidental for
+   folders, which is the worst of the three states to be in.
+
+   The two stay distinct in what they *mean*, and diverge the moment anything
+   is regrouped or renamed. Sharing an id is not sharing a row: provenance is
+   still immutable, policy is still the user's to change, and a group can
+   outlive the source it was named after or belong to no source at all.
+
    **Policy is a storage group's, and nothing else's.** Not the archive's, not
    a source's, and never an asset's: `Asset` carries no copy count and no
    destinations, and must not gain them. Per-asset storage was considered and
@@ -521,3 +534,9 @@ Earned against a real 248 GB archive; the stories are in git history.
     what do these want, why, and what else shares that answer — at which point
     there is nothing to ask. A group of one costs nothing and keeps the
     question answerable.
+40. One thing at first contact, two when the second one exists. Sources and
+    their groups are 1:1 until something is regrouped, and showing both from
+    the start taught a distinction nobody had made yet — down to a Policies row
+    reading "Recovered import (Google Takeout) — from Recovered import (Google
+    Takeout)". A concept introduced before it does any work is a concept read
+    as noise.

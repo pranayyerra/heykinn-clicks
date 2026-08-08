@@ -105,10 +105,12 @@ struct StorageGroupsList: View {
                 // group is edited, so it has to say what it is about to change
                 // — a group and the import that made it share a name until
                 // something is regrouped, and then the name stops being enough.
-                Text(store.provenanceSummary(forStorageGroup: group.id))
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
+                if let provenance = store.provenanceSummary(forStorageGroup: group.id) {
+                    Text(provenance)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
             }
             Spacer(minLength: 8)
             Text(Formatters.count(held, "photo"))

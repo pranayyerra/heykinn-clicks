@@ -133,7 +133,7 @@ final class StorageGroupSplitTests: XCTestCase {
         let subject = try XCTUnwrap(store.assets.first)
         let source = try XCTUnwrap(store.sources.first { $0.label == "Scans" })
         let group = try XCTUnwrap(store.storageGroup(forAsset: subject.id))
-        XCTAssertNotEqual(source.id, group.id, "two rows, not one wearing two hats")
+        XCTAssertEqual(source.id, group.id, "a source is its own first group")
 
         store.applyStorageGroupSettings(group, desiredCopies: 2, destinations: [driveID])
 
@@ -501,6 +501,72 @@ final class StorageGroupSplitTests: XCTestCase {
         XCTAssertTrue(store.ungroupedAssetIDs.isEmpty)
         let subject = try XCTUnwrap(store.assets.first)
         XCTAssertEqual(store.desiredCopies(forAsset: subject.id), 3)
+    }
+
+    // MARK: - A source is its own first group
+
+    /// Every route that makes a source makes its first group with the same id.
+    /// It was true of the migration and of exports and coincidental for
+    /// folders, which is the worst of the three states to be in.
+    func testEveryRouteGivesASourceItsOwnIdForItsFirstGroup() async throws {
+        let (store, _) = try makeStoreReturningDirectory()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        // Route 1: a folder added through the sheet.
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans", desiredCopies: 1, destinationTargetIDs: [driveID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let folderSource = try XCTUnwrap(store.sources.first { $0.label == "Scans" })
+        XCTAssertNotNil(store.storageGroupsByID[folderSource.id])
+
+        // Route 2: an export.
+        let export = try XCTUnwrap(store.sourceForExportSet("SET", label: "Export"))
+        XCTAssertEqual(export.source.id, export.group.id)
+    }
+
+    /// The group list says nothing about provenance while the group still *is*
+    /// the import it was born as — an echo of its own name reads as two things
+    /// that happen to agree rather than one thing.
+    func testProvenanceIsOnlyReportedWhenItAddsSomething() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans", desiredCopies: 1, destinationTargetIDs: [driveID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let group = try XCTUnwrap(store.storageGroups.first { $0.label == "Scans" })
+
+        XCTAssertNil(
+            store.provenanceSummary(forStorageGroup: group.id),
+            "still the import it was born as"
+        )
+
+        // Rename it and the line earns its place: the name no longer says
+        // where these came from.
+        store.renameStorageGroup(group.id, to: "Cold storage")
+        XCTAssertEqual(store.provenanceSummary(forStorageGroup: group.id), "from Scans")
+
+        // A group holding photos from nowhere in particular says so.
+        let side = try catalog(at: directory)
+        let orphan = UUID()
+        try side.upsertAsset(asset(id: orphan))
+        store.loadAll()
+        let made = try XCTUnwrap(store.createStorageGroup(label: "Hand made"))
+        _ = store.moveToStorageGroup(made.id, assetIDs: [orphan])
+        XCTAssertEqual(
+            store.provenanceSummary(forStorageGroup: made.id),
+            "from photos with no import recorded"
+        )
     }
 
     // MARK: - Fixtures

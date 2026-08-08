@@ -2474,8 +2474,17 @@ final class AppStore: ObservableObject {
             originPath: setup.urls.count == 1 ? setup.urls[0].path : nil,
             addedAt: Date()
         )
+        // The source *is* its first group: same id, same starting name. A
+        // person adding a folder should meet one thing with a name, a place it
+        // came from and a rule — not two rows that happen to agree. "Group"
+        // only becomes a separate idea when a second one exists, which is
+        // exactly when it is worth learning.
+        //
+        // The migration and the export path already did this; the folder flow
+        // minted a fresh id, so the same relationship was true in two places
+        // and coincidental in the third.
         let group = StorageGroup(
-            id: UUID(),
+            id: source.id,
             label: setup.label,
             desiredCopies: setup.desiredCopies,
             destinationTargetIDs: setup.destinationTargetIDs,
@@ -2964,7 +2973,7 @@ final class AppStore: ObservableObject {
     /// made it start with the same name, and stay indistinguishable until
     /// something is regrouped — at which point the name alone stops being
     /// enough to know what you are about to change.
-    func provenanceSummary(forStorageGroup groupID: UUID) -> String {
+    func provenanceSummary(forStorageGroup groupID: UUID) -> String? {
         var labels = Set<String>()
         var withoutSource = 0
         for asset in assets where storageGroupIDByAsset[asset.id] == groupID {
@@ -2978,7 +2987,12 @@ final class AppStore: ObservableObject {
             return withoutSource > 0 ? "from photos with no import recorded" : "nothing in it yet"
         }
         if labels.count == 1, withoutSource == 0 {
-            return "from \(labels.first!)"
+            // Nothing to say when the group still *is* the import it was born
+            // as. "Recovered import (Google Takeout) — from Recovered import
+            // (Google Takeout)" is an echo, and an echo reads as two things
+            // that happen to share a name rather than one thing.
+            let only = labels.first!
+            return only == storageGroupsByID[groupID]?.label ? nil : "from \(only)"
         }
         return "from \(Formatters.count(labels.count, "import"))"
             + (withoutSource > 0 ? ", and some with none recorded" : "")
