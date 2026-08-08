@@ -199,7 +199,24 @@ ran on real data.
    paths do it, since a folder somebody points at may be an unpacked export.
    Covered end to end by
    `MetadataCaptureTests.testImportingAFolderWithSidecarsCapturesThem`.
-2. **The backfill from the 12 zips — the next thing to build.** The step that
+2. ~~The backfill from the 12 zips.~~ **Built.**
+   `TakeoutMetadataBackfill` + `AppStore.backfillExportMetadata()`, on the
+   export card's menu as "Read what Google wrote beside the photos".
+
+   Reads one drive's worth at a time (invariant 12) and skips what it already
+   holds, so a re-run does the work it has not done. Pulls only `*.json` out of
+   each zip — one `unzip` per part rather than one per sidecar, since a part
+   holds ~2,000 of about 640 bytes each. Album `metadata.json` lands as
+   `scope: .album` with no asset.
+
+   **Linking is deliberately partial.** About a sixth of a real archive's
+   filenames repeat and the catalog does not record which folder inside the
+   export each photo came from, so a repeated name is left unlinked rather than
+   guessed at. The payload and its path are captured regardless — settling the
+   link on better evidence (capture time, size) is a projection, which is what
+   `projected_version` is for.
+
+   ~~The backfill from the 12 zips — the next thing to build.~~ The step that
    buys metadata independence for the 24,639 photos imported before capture
    existed. Nothing captures for them today; only new imports do.
 

@@ -766,6 +766,145 @@ final class AppStore: ObservableObject {
         }
     }
 
+    // MARK: - Backfilling provider metadata
+
+    /// How much of the export's metadata is held, and how much is still only
+    /// in the zips.
+    var exportMetadataProgress: (captured: Int, partsWithZipHere: Int, partsTotal: Int) {
+        let captured = (try? catalog.metadataRecordCount()) ?? 0
+        let parts = archivePlan.parts
+        let here = parts.filter { part in
+            part.copies.values.contains {
+                $0.kind == .zip && FileManager.default.fileExists(atPath: $0.path)
+            }
+        }
+        return (captured, here.count, parts.count)
+    }
+
+    /// Reads the metadata Google wrote beside the photos, out of the zips.
+    ///
+    /// Capture only began when it was built, so photos imported before that
+    /// have their descriptions in the archive and nowhere else. This is the
+    /// pass that fixes it, and the last piece that needs the zips to still
+    /// exist.
+    ///
+    /// One drive at a time, by construction (invariant 12): it reads whatever
+    /// part has a zip on a connected drive and leaves the rest. Run it again
+    /// with the other drive and it does what is left — or nothing, if each
+    /// drive holds the whole export, which is the usual case.
+    ///
+    /// Resumable, because a 127 GB read is not something anybody can promise
+    /// not to interrupt. Progress is the records themselves: a sidecar already
+    /// held is skipped, and `(source_id, origin_path)` uniqueness means a
+    /// re-run cannot double anything even if the skip list is stale.
+    func backfillExportMetadata() {
+        guard takeoutActivity == nil, !isImporting, !isSyncing else { return }
+
+        // Only parts whose zip is on a drive that is here.
+        let readable = archivePlan.parts.compactMap { part -> (part: ExportPart, url: URL)? in
+            guard let zip = part.copies.values.first(where: {
+                $0.kind == .zip && FileManager.default.fileExists(atPath: $0.path)
+            }) else { return nil }
+            return (part, zip.url)
+        }
+        guard !readable.isEmpty else {
+            lastError = "No part of your Google download is on a drive that is connected. Plug one in and try again."
+            return
+        }
+
+        let workspace = staging.rootURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("MetadataWork", isDirectory: true)
+        try? FileManager.default.createDirectory(at: workspace, withIntermediateDirectories: true)
+
+        Task { @MainActor in
+            defer {
+                takeoutActivity = nil
+                try? FileManager.default.removeItem(at: workspace)
+            }
+            var captured = 0
+            var alreadyHeld = 0
+            var unreadable = 0
+            var albums = 0
+            var linked = 0
+
+            for (index, entry) in readable.enumerated() {
+                takeoutActivity = TakeoutActivity(
+                    phase: .fingerprinting,
+                    detail: entry.part.displayName,
+                    stepIndex: index + 1,
+                    stepCount: readable.count,
+                    note: "reading what Google wrote beside the photos"
+                )
+
+                // Resolved per part, because both can change while this runs.
+                let sourceID = sources.first { $0.exportSetID == entry.part.setID }?.id
+                    ?? sourceIDByAsset.values.first
+                guard let sourceID else { continue }
+                let held = (try? catalog.capturedOriginPaths(forSource: sourceID)) ?? []
+                let byFilename = unambiguousAssetIDsByFilename(forSource: sourceID)
+
+                let zipURL = entry.url
+                let result = await Task.detached(priority: .utility) {
+                    TakeoutMetadataBackfill.capture(
+                        fromZip: zipURL,
+                        sourceID: sourceID,
+                        skipping: held,
+                        assetIDsByFilename: byFilename,
+                        workspace: workspace
+                    )
+                }.value
+
+                do {
+                    try catalog.transaction {
+                        for record in result.captured {
+                            try catalog.upsertMetadataRecord(record)
+                        }
+                    }
+                } catch {
+                    lastError = "Could not store the metadata from \(entry.part.displayName): \(error.localizedDescription)"
+                    return
+                }
+                captured += result.captured.count
+                alreadyHeld += result.alreadyHeld
+                unreadable += result.unreadable
+                albums += result.captured.filter { $0.scope == .album }.count
+                linked += result.captured.filter { $0.assetID != nil }.count
+            }
+
+            var message = "Read what Google wrote beside your photos: \(Formatters.count(captured, "description")) kept whole, from \(Formatters.count(readable.count, "download file")) on the drives connected."
+            if albums > 0 {
+                message += " \(Formatters.count(albums, "album")) among them."
+            }
+            message += " \(Formatters.count(linked, "description")) could be matched to a photo by name; the rest are held with the folder they came from, which is what a later pass matches on."
+            if alreadyHeld > 0 {
+                message += " \(Formatters.count(alreadyHeld, "was", "were")) already held and left alone."
+            }
+            if unreadable > 0 {
+                message += " \(Formatters.count(unreadable, "file")) could not be read."
+            }
+            audit(.importEvent, message)
+            loadAll()
+        }
+    }
+
+    /// Photos of one source by filename, keeping only names that identify
+    /// exactly one.
+    ///
+    /// About a sixth of a real archive's filenames repeat, and the catalog does
+    /// not record which folder inside an export a photo came from — so a
+    /// repeated name cannot be resolved here and is left out rather than
+    /// guessed. Its payload is still captured; only the link waits.
+    private func unambiguousAssetIDsByFilename(forSource sourceID: UUID) -> [String: UUID] {
+        var counts: [String: Int] = [:]
+        var byName: [String: UUID] = [:]
+        for asset in assets where sourceIDByAsset[asset.id] == sourceID {
+            counts[asset.originalFilename, default: 0] += 1
+            byName[asset.originalFilename] = asset.id
+        }
+        return byName.filter { counts[$0.key] == 1 }
+    }
+
     /// Compares export parts by a fast partial checksum: a few megabytes
     /// sampled from each copy rather than every byte.
     ///

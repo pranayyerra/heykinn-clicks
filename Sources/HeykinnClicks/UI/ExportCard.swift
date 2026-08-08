@@ -177,6 +177,13 @@ struct ExportCard: View {
                                 store.extractTakeoutZips(export.extractableZips.map(\.id))
                             }
                         }
+                        // Reading the descriptions is not checking the copies,
+                        // so it sits above the divider with the other things
+                        // that read the download rather than judge it.
+                        Button("Read what Google wrote beside the photos") {
+                            store.backfillExportMetadata()
+                        }
+                        Divider()
                         Button("Spot-check that the copies match") {
                             store.spotCheckExportParts()
                         }
