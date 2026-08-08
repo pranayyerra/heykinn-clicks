@@ -198,6 +198,15 @@ struct DriveContentBreakdown: Equatable {
     var pendingPhotos = 0
     var driftPhotos = 0
 
+    /// Held, but never once read back and matched.
+    ///
+    /// A count the drive screen had no way to show, which let *held* and
+    /// *proven* be the same number on screen when they are very different
+    /// facts. A drive holding 24,639 photos of which 90 have ever been verified
+    /// is not the drive it looks like beside one where all of them have.
+    var neverChecked = 0
+    var neverCheckedPhotos = 0
+
     /// Everything the target is meant to end up holding.
     var expected: Int { present + pending + drift }
     var expectedPhotos: Int { presentPhotos + pendingPhotos + driftPhotos }

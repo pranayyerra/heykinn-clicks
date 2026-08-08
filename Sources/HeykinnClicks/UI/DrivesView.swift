@@ -41,6 +41,33 @@ struct DrivesView: View {
         }
     }
 
+    /// Two copies that can be lost by one action.
+    ///
+    /// The photos here are not short of anything — on a real archive all 18,136
+    /// of them sit on both drives, and every check the app runs says so. What
+    /// they share is *how* they would go: their copies are the same Takeout
+    /// files on each drive, so deleting those files, on both, loses photos that
+    /// every other screen reports as safely duplicated.
+    ///
+    /// Said plainly rather than as a warning colour, because nothing is wrong
+    /// yet and there is nothing to fix — the app counts photos inside those
+    /// files rather than storing a second copy, which is what keeps the archive
+    /// from doubling in size. It is a fact about the shape of the archive, and
+    /// the only place it can be read.
+    @ViewBuilder
+    private var archiveBackedNote: some View {
+        if store.archiveBackedOnlyCount > 0 {
+            Label {
+                Text("\(store.archiveBackedOnlyCount.formatted()) of them are inside your Google Takeout files rather than copied out of them. Those are the same files on each drive, so deleting them is the one thing that would lose photos the app otherwise counts as safe.")
+                    .fixedSize(horizontal: false, vertical: true)
+            } icon: {
+                Image(systemName: "shippingbox")
+            }
+            .font(.callout)
+            .foregroundStyle(.secondary)
+        }
+    }
+
     private func verdictHeadline(damaged: Int, short: Int, holders: Int) -> String {
         if store.assets.isEmpty { return "Nothing in the archive yet." }
         if holders == 0 { return "No drive is holding your photos yet." }
@@ -49,6 +76,17 @@ struct DrivesView: View {
         }
         if short > 0 {
             return "\(short.formatted()) of \(store.protectionStates.count.formatted()) photos are not yet on all the drives they are meant to be on."
+        }
+        // Answers how many *places*, not whether the bookkeeping balances. A
+        // photo alone on one drive satisfies a one-copy group, so "on all the
+        // drives it is meant to be on" reads as reassurance while describing
+        // the least safe arrangement there is.
+        if let fewest = store.leastCopiesAnywhere {
+            switch fewest {
+            case 0: return "Some photos are not on any drive."
+            case 1: return "Some photos are on one drive only."
+            default: return "Every photo is on \(Formatters.count(fewest, "drive"))."
+            }
         }
         return "Yes — every photo is on all the drives it is meant to be on."
     }
@@ -76,10 +114,9 @@ struct DrivesView: View {
 
                 verdict
 
-                ArchiveMapView(
-                    photoCount: photoCount,
-                    fileCount: store.assets.count,
-                    byteCount: store.localArchiveBytes,
+                archiveBackedNote
+
+                ArchivePlaceList(
                     places: places,
                     selection: $selectedPlace,
                     onActivateEmpty: activate
@@ -199,12 +236,6 @@ struct DrivesView: View {
         }
     }
 
-    /// Photos, not files: a Live Photo is one photo though it is a still and a
-    /// movie on disk, and leading with the file count overstates the library.
-    private var photoCount: Int {
-        store.assets.filter { !$0.isLivePhotoMotion }.count
-    }
-
     private var selectedTarget: ReplicationTarget? {
         selectedPlace.flatMap { id in store.targets.first { $0.id == id } }
     }
@@ -246,6 +277,9 @@ struct DrivesView: View {
                 state: state,
                 isReachable: reachable,
                 detail: detail(for: state, reachable: reachable, target: target),
+                heldPhotos: breakdown.presentPhotos,
+                heldBytes: breakdown.presentBytes,
+                neverCheckedPhotos: breakdown.neverCheckedPhotos,
                 target: target
             )
         }

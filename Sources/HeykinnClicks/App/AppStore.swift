@@ -1711,6 +1711,26 @@ final class AppStore: ObservableObject {
 
     // MARK: - Catalog backup
 
+    /// How many photos sit on how many drives, keyed by the number of drives.
+    ///
+    /// The distribution rather than a total, because a total cannot say whether
+    /// the archive is safe: "49,278 copies" is the same number whether every
+    /// photo has two or half of them have three and the rest one.
+    @Published private(set) var copyCoverage: [Int: Int] = [:]
+
+    /// Photos whose every copy is inside a Takeout file.
+    ///
+    /// These are not short of copies — on a real archive all 18,136 of them sit
+    /// on both drives — which is exactly why nothing flagged them. What they
+    /// share is a way of being lost: the copies are the *same* zip files on
+    /// each drive, so deleting those, or one of them going bad in the same way,
+    /// takes both at once. Two copies inside one failure is the thing this
+    /// number exists to say out loud.
+    @Published private(set) var archiveBackedOnlyCount: Int = 0
+
+    /// The fewest drives any photo is on, or nil when the archive is empty.
+    var leastCopiesAnywhere: Int? { copyCoverage.keys.min() }
+
     /// Snapshots per drive, newest first — surfaced under Keep safe.
     @Published private(set) var catalogSnapshots: [UUID: [CatalogSnapshot]] = [:]
 
@@ -1933,6 +1953,10 @@ final class AppStore: ObservableObject {
                 breakdown.present += 1
                 breakdown.presentBytes += asset?.fileSize ?? 0
                 if isPhoto { breakdown.presentPhotos += 1 }
+                if replica.lastVerifiedAt == nil {
+                    breakdown.neverChecked += 1
+                    if isPhoto { breakdown.neverCheckedPhotos += 1 }
+                }
             case .pending, .copying, .stale:
                 breakdown.pending += 1
                 if isPhoto { breakdown.pendingPhotos += 1 }
@@ -1945,6 +1969,26 @@ final class AppStore: ObservableObject {
             breakdowns[replica.targetID] = breakdown
         }
         driveBreakdowns = breakdowns
+
+        // How many drives hold each photo, and how many photos have no copy
+        // outside a Takeout file.
+        //
+        // Both are questions about photos rather than about drives, which is
+        // why neither could be read off `driveBreakdowns`. "Every photo is on
+        // all the drives it is meant to be on" is a bookkeeping answer — a
+        // photo in one place satisfies a one-copy group and reads as fine.
+        // "Every photo is on two drives" is the safety answer, and it is the
+        // one somebody opens this screen to get.
+        var drivesHolding: [UUID: Set<UUID>] = [:]
+        var outsideAnArchive: Set<UUID> = []
+        for replica in replicaStates where replica.state == .present {
+            drivesHolding[replica.assetID, default: []].insert(replica.targetID)
+            if replica.relativePath?.hasPrefix(ReplicationService.archivePartPrefix) != true {
+                outsideAnArchive.insert(replica.assetID)
+            }
+        }
+        copyCoverage = drivesHolding.values.reduce(into: [:]) { $0[$1.count, default: 0] += 1 }
+        archiveBackedOnlyCount = drivesHolding.keys.filter { !outsideAnArchive.contains($0) }.count
 
         // A Merkle tree per target used to be built here so two targets could
         // be compared by their roots. Both trees took their leaf digests from
