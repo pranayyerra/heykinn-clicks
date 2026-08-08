@@ -497,3 +497,8 @@ Earned against a real 248 GB archive; the stories are in git history.
     group holding a different export's photos and changed those too. Membership
     moves and ids do not, so resolving a group by the id it was created with
     goes wrong exactly when it matters.
+38. Two doors into one room is the whole cost. The elaborate rule about when a
+    source's card could safely edit a group existed only because the card could
+    edit at all; deleting that affordance deleted the rule, the question "does
+    this override that?", and the class of bug underneath both. One setting,
+    one place to change it.

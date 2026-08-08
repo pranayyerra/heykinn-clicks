@@ -11,9 +11,8 @@ import SwiftUI
 /// the mechanism rather than under the place the photos came from.
 struct FolderSourceList: View {
     @EnvironmentObject private var store: AppStore
+    @EnvironmentObject private var commands: AppCommandBus
     @State private var opened: UUID?
-    /// The source whose settings are being changed, if any.
-    @State private var editing: StorageGroup?
 
     /// Folder imports, newest first.
     ///
@@ -60,33 +59,25 @@ struct FolderSourceList: View {
                 unaccountedRow
             }
         }
-        .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
     }
 
     /// The source a batch's photos belong to, so its settings can be edited
     /// from where its photos are shown. Nil for photos imported before sources
     /// existed and not yet backfilled.
-    /// Only offered when changing it affects this folder's photos and nothing
-    /// else — a folder does not own its group any more than an export does.
-    private func editableGroup(for batch: ImportBatch) -> StorageGroup? {
-        guard let assetID = store.assets.first(where: { $0.importBatchID == batch.id })?.id,
-              let sourceID = store.sourceIDByAsset[assetID]
-        else { return nil }
-        return store.groupPlacement(forSource: sourceID).exclusiveGroup
-    }
-
-    /// What to say when it is not offered.
-    private func sharedGroupNote(for batch: ImportBatch) -> String? {
+    /// What keeps this folder's photos, said plainly.
+    private func storageNote(for batch: ImportBatch) -> String? {
         guard let assetID = store.assets.first(where: { $0.importBatchID == batch.id })?.id,
               let sourceID = store.sourceIDByAsset[assetID]
         else { return nil }
         switch store.groupPlacement(forSource: sourceID) {
-        case .exclusive, .none:
+        case .none:
             return nil
+        case .exclusive(let group):
+            return "Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))."
         case .shared(let group, let otherPhotos):
-            return "Kept in the group \(group.label), which also holds \(Formatters.count(otherPhotos, "photo")) from elsewhere. Change it under Policies."
+            return "Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs)), in the group \(group.label) — which also holds \(Formatters.count(otherPhotos, "photo")) from elsewhere."
         case .split(let groups, _):
-            return "These photos are kept in \(Formatters.count(groups.count, "different group")). Each is under Policies."
+            return "These photos are kept in \(Formatters.count(groups.count, "group")): \(groups.map(\.label).joined(separator: ", "))."
         }
     }
 
@@ -226,26 +217,21 @@ struct FolderSourceList: View {
             if status.total > 0 {
                 Divider()
                 SourceCopyStatusView(status: status)
-                // Changing where these photos live belongs next to the report
-                // of where they are, not in a settings screen the reader would
-                // have to go looking for.
-                if let note = sharedGroupNote(for: batch) {
-                    Text(note)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .padding(.top, 2)
-                }
-                if let group = editableGroup(for: batch) {
-                    Button {
-                        editing = group
-                    } label: {
-                        Label("Change where these are kept", systemImage: "slider.horizontal.3")
+                // Reported, not edited. Two screens writing one setting is
+                // what made "does this override that?" a question anybody had
+                // to ask; Policies is the single place it is answered.
+                HStack(alignment: .firstTextBaseline, spacing: 6) {
+                    if let note = storageNote(for: batch) {
+                        Text(note)
                             .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
-                    .buttonStyle(.link)
-                    .padding(.top, 2)
+                    Button("Change under Policies") { commands.requestedPage = .policies }
+                        .buttonStyle(.link)
+                        .font(.caption)
                 }
+                .padding(.top, 2)
             }
 
             if assets.isEmpty {

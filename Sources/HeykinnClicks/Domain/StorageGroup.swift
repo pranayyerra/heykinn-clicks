@@ -52,11 +52,12 @@ struct StorageGroup: Identifiable, Hashable {
 
 /// How one source's photos sit in storage groups.
 ///
-/// The question a source's card has to answer before it offers to change
-/// anything. A source does not *own* a group — its photos merely happen to be
-/// in one — and the card was treating the two as the same thing. Once some
-/// photos had moved, "change where these are kept" on an export's card could
-/// reach a group holding a different export's photos and change those too.
+/// Purely descriptive: what a source's card *reports*, never a decision about
+/// what it may change. A source does not own a group — its photos merely happen
+/// to be in one — and while the card could edit, it had to work out whether
+/// doing so was safe, and got it wrong when a group held another export's
+/// photos too. There is one editing surface now, so the only job left here is
+/// saying what is true.
 enum SourceGroupPlacement {
     /// Every photo of this source is in one group, and that group holds
     /// nothing else. Changing it here changes exactly these photos and no
@@ -72,8 +73,9 @@ enum SourceGroupPlacement {
     /// Nothing of this source is in the archive yet.
     case none
 
-    /// The group to edit when doing so affects only this source's photos.
-    var exclusiveGroup: StorageGroup? {
+    /// The one group this source's photos are in, when there is exactly one and
+    /// it holds nothing else. For describing, not for granting an edit.
+    var soleGroup: StorageGroup? {
         if case .exclusive(let group) = self { return group }
         return nil
     }

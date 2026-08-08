@@ -256,6 +256,27 @@ archive: two photos moved out of the 21,117-photo Takeout group into a new
 these photos came from Cold storage, or that the Takeout export is kept as Cold
 storage. Both are false.
 
+### 6b. One editing surface for storage
+
+Settled after a round of "this is getting complicated". Storage groups stay, and
+**Policies is the only place they are edited**. Source cards — the export card
+and the folder list — report where their photos are kept and link to Policies;
+they no longer open a settings sheet.
+
+That removes the question the model kept raising ("if I change the import, does
+it override the group?") by removing the second door rather than by explaining
+it. `SourceGroupPlacement` survives as description only: one group of its own,
+sharing a group with others, split across several, or nothing imported. The
+Policies list now carries each group's provenance ("from Recovered import
+(Google Takeout)"), because it has to supply the context the source card used
+to.
+
+Options weighed and not taken: policy as a per-asset attribute with no groups at
+all (simplest model, but no living set that new photos inherit from); one tag
+mechanism with priority-resolved policy (rejected — it makes "how many copies
+does this photo want" a computation, which the archive's central promise should
+not be).
+
 ### 7. Small things the UI check turned up
 
 - **A leftover import batch for the app's own folder.** The live catalog has an

@@ -141,8 +141,7 @@ struct ExportCard: View {
     let export: ExportSummary
     @Binding var importRequest: TakeoutImportRequest?
     @EnvironmentObject private var store: AppStore
-    /// The source whose settings are being changed, if any.
-    @State private var editing: StorageGroup?
+    @EnvironmentObject private var commands: AppCommandBus
 
     private var driveNames: [UUID: String] {
         Dictionary(uniqueKeysWithValues: store.targets.map { ($0.id, $0.name) })
@@ -235,59 +234,42 @@ struct ExportCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(6)
         }
-        .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
     }
 
-    /// What keeps this export's photos, and whether this card may change it.
+    /// What keeps this export's photos. Reported, never edited here.
     ///
-    /// A source does not own a group. Offering "change where these are kept"
-    /// whenever a group could be found reached, once photos had moved, a group
-    /// holding a *different* export's photos — and changed those too. The card
-    /// now says which of the four situations it is in and only offers the
-    /// shortcut when taking it affects nothing else.
+    /// This card used to offer "change where these are kept", which meant two
+    /// screens could write the same setting. Everything that went wrong went
+    /// wrong there: a source does not own a group, so the card had to work out
+    /// whether editing was safe, and got it wrong when a group held another
+    /// export's photos too. There is one editing surface now — Policies, where
+    /// a group's whole membership is visible — and this says what is true and
+    /// points at it.
     @ViewBuilder
     private var storageLine: some View {
-        switch placement {
-        case .exclusive(let group):
-            HStack(spacing: 6) {
+        HStack(alignment: .firstTextBaseline, spacing: 6) {
+            switch store.groupPlacement(forExportSet: export.setID) {
+            case .exclusive(let group):
                 Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))")
                     .font(.caption)
                     .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
-                Button {
-                    editing = group
-                } label: {
-                    Label("Change where these are kept", systemImage: "slider.horizontal.3")
-                        .font(.caption)
-                }
-                .buttonStyle(.link)
-            }
-
-        case .shared(let group, let otherPhotos):
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs)), in the group \(group.label)")
+            case .shared(let group, let otherPhotos):
+                Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs)), in the group \(group.label) — which also holds \(Formatters.count(otherPhotos, "photo")) from elsewhere.")
                     .font(.caption)
                     .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("That group also holds \(Formatters.count(otherPhotos, "photo")) from elsewhere, so changing it here would change those too. Change it under Policies → \(group.label).")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-        case .split(let groups, let photoCount):
-            VStack(alignment: .leading, spacing: 2) {
-                Text("These \(Formatters.count(photoCount, "photo")) are kept in \(Formatters.count(groups.count, "different group")): \(ExportSummary.list(groups.map(\.label))).")
+            case .split(let groups, let photoCount):
+                Text("These \(Formatters.count(photoCount, "photo")) are kept in \(Formatters.count(groups.count, "group")): \(ExportSummary.list(groups.map(\.label))).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text("There is no single setting to show. Each group is under Policies.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+            case .none:
+                EmptyView()
             }
-
-        case .none:
-            EmptyView()
+            Button("Change under Policies") { commands.requestedPage = .policies }
+                .buttonStyle(.link)
+                .font(.caption)
         }
     }
 

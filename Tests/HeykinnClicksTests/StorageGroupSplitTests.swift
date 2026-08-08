@@ -352,12 +352,14 @@ final class StorageGroupSplitTests: XCTestCase {
 
     // MARK: - A source does not own its group
 
-    /// The situation the source's card must not offer to edit: every photo of
-    /// one export sits in a group that also holds another export's.
+    /// A group holding two exports' photos is reported as shared by both, and
+    /// claimed as neither's own.
     ///
-    /// It did offer it. Both exports' cards resolved to the shared group, so
-    /// "change where export A is kept" set export B's photos to 9 copies.
-    func testASourceWhoseGroupHoldsOthersPhotosIsNotEditableFromItsCard() throws {
+    /// While the source's card could edit, this was the shape that broke it:
+    /// both exports resolved to the shared group, so "change where export A is
+    /// kept" set export B's photos to 9 copies. The card only reports now, but
+    /// the distinction still has to be drawn — it is what the card says.
+    func testAGroupHoldingTwoExportsIsClaimedByNeither() throws {
         let (store, directory) = try makeStoreReturningDirectory()
         let side = try catalog(at: directory)
 
@@ -381,7 +383,7 @@ final class StorageGroupSplitTests: XCTestCase {
             }
             XCTAssertEqual(group.id, shared.id)
             XCTAssertEqual(otherPhotos, 1, "one photo in the group is not this export's")
-            XCTAssertNil(store.groupPlacement(forExportSet: setID).exclusiveGroup)
+            XCTAssertNil(store.groupPlacement(forExportSet: setID).soleGroup)
         }
     }
 
@@ -407,11 +409,12 @@ final class StorageGroupSplitTests: XCTestCase {
         }
         XCTAssertEqual(groups.count, 2)
         XCTAssertEqual(photoCount, 2)
-        XCTAssertNil(store.groupPlacement(forExportSet: "SET").exclusiveGroup)
+        XCTAssertNil(store.groupPlacement(forExportSet: "SET").soleGroup)
     }
 
-    /// The ordinary case keeps the shortcut: one group, nothing else in it.
-    func testASourceWithAGroupOfItsOwnIsStillEditableFromItsCard() throws {
+    /// The ordinary case: one group, nothing else in it, so the card can state
+    /// its settings as the source's own.
+    func testASourceWithAGroupOfItsOwnReportsItAsSole() throws {
         let (store, directory) = try makeStoreReturningDirectory()
         let side = try catalog(at: directory)
         let source = try XCTUnwrap(store.sourceForExportSet("SET", label: "Export"))
@@ -422,7 +425,7 @@ final class StorageGroupSplitTests: XCTestCase {
         try side.assignStorageGroup(source.group.id, toAssets: [assetID])
         store.loadAll()
 
-        let editable = try XCTUnwrap(store.groupPlacement(forExportSet: "SET").exclusiveGroup)
+        let editable = try XCTUnwrap(store.groupPlacement(forExportSet: "SET").soleGroup)
         XCTAssertEqual(editable.id, source.group.id)
     }
 

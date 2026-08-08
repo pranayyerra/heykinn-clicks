@@ -73,6 +73,14 @@ struct StorageGroupsList: View {
                     .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+                // Where its photos came from. This screen is the only place a
+                // group is edited, so it has to say what it is about to change
+                // — a group and the import that made it share a name until
+                // something is regrouped, and then the name stops being enough.
+                Text(store.provenanceSummary(forStorageGroup: group.id))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
             }
             Spacer(minLength: 8)
             Text(Formatters.count(held, "photo"))

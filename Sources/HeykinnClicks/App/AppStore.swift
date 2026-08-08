@@ -2957,6 +2957,33 @@ final class AppStore: ObservableObject {
         loadAll()
     }
 
+    /// Where a group's photos came from, in the words the Policies screen uses.
+    ///
+    /// Policies is the only place a group is edited now, so it has to carry the
+    /// context the source's card used to supply. A group and the import that
+    /// made it start with the same name, and stay indistinguishable until
+    /// something is regrouped — at which point the name alone stops being
+    /// enough to know what you are about to change.
+    func provenanceSummary(forStorageGroup groupID: UUID) -> String {
+        var labels = Set<String>()
+        var withoutSource = 0
+        for asset in assets where storageGroupIDByAsset[asset.id] == groupID {
+            if let sourceID = sourceIDByAsset[asset.id], let source = sourcesByID[sourceID] {
+                labels.insert(source.label)
+            } else {
+                withoutSource += 1
+            }
+        }
+        if labels.isEmpty {
+            return withoutSource > 0 ? "from photos with no import recorded" : "nothing in it yet"
+        }
+        if labels.count == 1, withoutSource == 0 {
+            return "from \(labels.first!)"
+        }
+        return "from \(Formatters.count(labels.count, "import"))"
+            + (withoutSource > 0 ? ", and some with none recorded" : "")
+    }
+
     /// How many photos are in each group — the count the management UI shows.
     var photoCountByStorageGroup: [UUID: Int] {
         var counts: [UUID: Int] = [:]
