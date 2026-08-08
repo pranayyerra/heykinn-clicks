@@ -170,6 +170,25 @@ Uniqueness is `(source_id, origin_path)`, so re-reading an export you already
 have replaces payloads rather than doubling them, and two exports may hold the
 same relative path.
 
+Two long-term properties were added before any rows exist, being much cheaper
+now than after 24,639 of them:
+
+- **One whole payload kept per shape** (`metadata_schemas.example_payload`), not
+  just a path. A path goes stale when a drive is reorganised; the payload is a
+  permanent corpus of every format the app has ever met, and the regression
+  suite for one that changes on somebody else's schedule.
+- **`metadata_records.projected_version`**, with
+  `CatalogStore.currentProjectionVersion`. Bump the constant and every payload
+  requeues itself for re-reading. This is the property the whole design rests
+  on: being wrong about interpretation is cheap *because* the raw payload was
+  kept. Replacing a payload resets it to 0 — new bytes have been read by
+  nothing.
+
+The census count is **derived** at read time rather than tallied, so it cannot
+drift from the records it counts. A tally over-counted the moment a payload was
+replaced rather than added; both bugs were caught by tests before any of this
+ran on real data.
+
 **What is left, in order:**
 
 1. **Import-path writes.** `TakeoutImporter` already locates each sidecar

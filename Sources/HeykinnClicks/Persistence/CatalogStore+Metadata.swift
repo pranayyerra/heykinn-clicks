@@ -22,7 +22,8 @@ extension CatalogStore {
             origin_path TEXT NOT NULL,
             captured_at REAL NOT NULL,
             schema_fingerprint TEXT NOT NULL,
-            payload TEXT NOT NULL
+            payload TEXT NOT NULL,
+            projected_version INTEGER NOT NULL DEFAULT 0
         );
         """)
         // The lookup that happens on every asset detail. Without it, opening
@@ -45,12 +46,39 @@ extension CatalogStore {
             provider TEXT NOT NULL,
             scope TEXT NOT NULL,
             keys_json TEXT NOT NULL,
-            record_count INTEGER NOT NULL,
             example_path TEXT NOT NULL,
+            example_payload TEXT NOT NULL DEFAULT '',
             first_seen_at REAL NOT NULL
         );
         """)
+        // Both added after the tables shipped, so they cannot go in the CREATEs
+        // above: an installed catalog keeps the table it already has.
+        try addMetadataColumnIfMissing(
+            table: "metadata_records", column: "projected_version",
+            declaration: "INTEGER NOT NULL DEFAULT 0"
+        )
+        try addMetadataColumnIfMissing(
+            table: "metadata_schemas", column: "example_payload",
+            declaration: "TEXT NOT NULL DEFAULT ''"
+        )
     }
+
+    private func addMetadataColumnIfMissing(
+        table: String, column: String, declaration: String
+    ) throws {
+        let existing = try database.query("PRAGMA table_info(\(table));") { $0.text(1) }
+        guard !existing.contains(column) else { return }
+        try database.exec("ALTER TABLE \(table) ADD COLUMN \(column) \(declaration);")
+    }
+
+    /// How the app currently reads a payload.
+    ///
+    /// Bumped whenever the projection logic changes its mind — a field read
+    /// differently, a new one acted on, a bug in how albums were derived. Rows
+    /// below it are stale and can be re-derived in the background, which is the
+    /// property the whole design rests on: being wrong about interpretation is
+    /// cheap as long as the raw payload was kept.
+    static let currentProjectionVersion = 1
 
     // MARK: - Records
 
@@ -73,7 +101,10 @@ extension CatalogStore {
             provider = excluded.provider,
             captured_at = excluded.captured_at,
             schema_fingerprint = excluded.schema_fingerprint,
-            payload = excluded.payload;
+            payload = excluded.payload,
+            -- New bytes have been read by nothing, whatever was true of the
+            -- ones they replace.
+            projected_version = 0;
         """, [
             .text(record.id.uuidString),
             record.assetID.map { SQLValue.text($0.uuidString) } ?? .null,
@@ -151,20 +182,69 @@ extension CatalogStore {
             .flatMap { $0 as? [String: Any] }
             .map { $0.keys.sorted() } ?? []
 
+        // One whole payload per shape, kept forever.
+        //
+        // A path goes stale the moment a drive is reorganised, and then the
+        // census can tell you a shape exists but not what it looked like. A few
+        // KB buys a permanent corpus of every shape the app has ever seen —
+        // which is the regression suite for a format that changes on somebody
+        // else's schedule, and the evidence when a projection looks wrong.
+        // Nothing is counted here. A tally kept beside the thing it counts
+        // drifts the moment a payload is replaced rather than added — re-read
+        // an export and the census claims more records than exist. The count is
+        // taken from the records themselves at read time, so it cannot be
+        // wrong; this table holds only what a count cannot give you.
         try database.run("""
         INSERT INTO metadata_schemas
-            (fingerprint, provider, scope, keys_json, record_count, example_path, first_seen_at)
-        VALUES (?,?,?,?,1,?,?)
-        ON CONFLICT(fingerprint) DO UPDATE SET
-            record_count = record_count + 1;
+            (fingerprint, provider, scope, keys_json, example_path,
+             example_payload, first_seen_at)
+        VALUES (?,?,?,?,?,?,?)
+        ON CONFLICT(fingerprint) DO NOTHING;
         """, [
             .text(record.schemaFingerprint),
             .text(record.provider),
             .text(record.scope.rawValue),
             .text(Self.encodeJSON(keys)),
             .text(record.originPath),
+            .text(record.payload),
             .real(record.capturedAt.timeIntervalSince1970),
         ])
+    }
+
+    /// Payloads the current projection logic has not been over.
+    ///
+    /// The re-derivation queue. Batched rather than fetched whole: the point of
+    /// keeping raw is that a re-read of 24,639 payloads is *possible*, not that
+    /// it should happen in one allocation.
+    func fetchMetadataRecordsNeedingProjection(
+        below version: Int = CatalogStore.currentProjectionVersion,
+        limit: Int = 500
+    ) throws -> [MetadataRecord] {
+        try database.query("""
+        SELECT id, asset_id, source_id, scope, provider, origin_path, captured_at,
+               schema_fingerprint, payload
+        FROM metadata_records WHERE projected_version < ? LIMIT ?;
+        """, [.int(Int64(version)), .int(Int64(limit))], row: decodeMetadataRecord)
+    }
+
+    /// Marks payloads as read by the current projection logic.
+    func markProjected(_ recordIDs: [UUID], version: Int = CatalogStore.currentProjectionVersion) throws {
+        for id in recordIDs {
+            try database.run(
+                "UPDATE metadata_records SET projected_version = ? WHERE id = ?;",
+                [.int(Int64(version)), .text(id.uuidString)]
+            )
+        }
+    }
+
+    /// How many payloads are waiting to be re-read.
+    func metadataRecordsAwaitingProjection(
+        below version: Int = CatalogStore.currentProjectionVersion
+    ) throws -> Int {
+        try database.query(
+            "SELECT count(*) FROM metadata_records WHERE projected_version < ?;",
+            [.int(Int64(version))]
+        ) { Int($0.int(0)) }.first ?? 0
     }
 
     /// Every payload shape seen, commonest first.
@@ -174,8 +254,11 @@ extension CatalogStore {
     /// count and one example path to go and read.
     func fetchMetadataSchemas() throws -> [MetadataSchema] {
         try database.query("""
-        SELECT fingerprint, provider, scope, keys_json, record_count, example_path, first_seen_at
-        FROM metadata_schemas ORDER BY record_count DESC;
+        SELECT s.fingerprint, s.provider, s.scope, s.keys_json,
+               (SELECT count(*) FROM metadata_records r
+                 WHERE r.schema_fingerprint = s.fingerprint) AS record_count,
+               s.example_path, s.example_payload, s.first_seen_at
+        FROM metadata_schemas s ORDER BY record_count DESC;
         """) { row in
             MetadataSchema(
                 fingerprint: row.text(0),
@@ -184,7 +267,8 @@ extension CatalogStore {
                 keys: Self.decodeJSON([String].self, from: row.text(3)) ?? [],
                 recordCount: Int(row.int(4)),
                 examplePath: row.text(5),
-                firstSeenAt: Date(timeIntervalSince1970: row.real(6))
+                examplePayload: row.text(6),
+                firstSeenAt: Date(timeIntervalSince1970: row.real(7))
             )
         }
     }

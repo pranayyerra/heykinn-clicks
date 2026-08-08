@@ -202,6 +202,98 @@ final class MetadataCaptureTests: XCTestCase {
         XCTAssertEqual(schemas.first?.fingerprint, "unparsed")
     }
 
+    /// The census keeps a whole payload per shape, not just a path — a path
+    /// goes stale when a drive is reorganised, and then it can say a shape
+    /// exists but not what it looked like.
+    func testTheCensusKeepsOnePayloadPerShapeForever() throws {
+        let catalog = try makeCatalog()
+        let sourceID = UUID()
+        try catalog.upsertMetadataRecord(record(payload: assetPayload, sourceID: sourceID))
+
+        let schema = try XCTUnwrap(try catalog.fetchMetadataSchemas().first)
+        XCTAssertEqual(schema.examplePayload, assetPayload)
+        XCTAssertTrue(schema.examplePayload.contains("googlePhotosOrigin"))
+    }
+
+    // MARK: - Being wrong about interpretation, cheaply
+
+    /// The property the whole design rests on: payloads the current projection
+    /// logic has not read are findable, so learning something new about the
+    /// format is a re-run rather than a re-download.
+    func testPayloadsAwaitingProjectionAreFindable() throws {
+        let catalog = try makeCatalog()
+        let sourceID = UUID()
+        for index in 0..<3 {
+            try catalog.upsertMetadataRecord(record(
+                payload: assetPayload, sourceID: sourceID,
+                path: "Takeout/Google Photos/Photos from 2017/IMG_000\(index).json"
+            ))
+        }
+
+        XCTAssertEqual(try catalog.metadataRecordsAwaitingProjection(), 3, "nothing read yet")
+        let batch = try catalog.fetchMetadataRecordsNeedingProjection()
+        XCTAssertEqual(batch.count, 3)
+
+        try catalog.markProjected(batch.map(\.id))
+        XCTAssertEqual(try catalog.metadataRecordsAwaitingProjection(), 0)
+        XCTAssertTrue(try catalog.fetchMetadataRecordsNeedingProjection().isEmpty)
+    }
+
+    /// And bumping the version makes every payload stale again — one number
+    /// changed, and 24,639 rows queue themselves for re-reading.
+    func testBumpingTheVersionRequeuesEverything() throws {
+        let catalog = try makeCatalog()
+        let sourceID = UUID()
+        try catalog.upsertMetadataRecord(record(payload: assetPayload, sourceID: sourceID))
+        let batch = try catalog.fetchMetadataRecordsNeedingProjection()
+        try catalog.markProjected(batch.map(\.id))
+        XCTAssertEqual(try catalog.metadataRecordsAwaitingProjection(), 0)
+
+        let next = CatalogStore.currentProjectionVersion + 1
+        XCTAssertEqual(try catalog.metadataRecordsAwaitingProjection(below: next), 1)
+        XCTAssertEqual(try catalog.fetchMetadataRecordsNeedingProjection(below: next).count, 1)
+    }
+
+    /// Re-reading an export must not silently mark its payloads as already
+    /// projected — a fresh payload has not been read by anything.
+    func testAReplacedPayloadIsQueuedAgain() throws {
+        let catalog = try makeCatalog()
+        let sourceID = UUID()
+        let path = "Takeout/Google Photos/Photos from 2017/IMG_0001.json"
+        try catalog.upsertMetadataRecord(record(payload: assetPayload, sourceID: sourceID, path: path))
+        try catalog.markProjected(try catalog.fetchMetadataRecordsNeedingProjection().map(\.id))
+        XCTAssertEqual(try catalog.metadataRecordsAwaitingProjection(), 0)
+
+        let revised = assetPayload.replacingOccurrences(of: "\"imageViews\":\"10\"", with: "\"imageViews\":\"11\"")
+        try catalog.upsertMetadataRecord(record(payload: revised, sourceID: sourceID, path: path))
+
+        XCTAssertEqual(
+            try catalog.metadataRecordsAwaitingProjection(), 1,
+            "new bytes have been read by nothing"
+        )
+    }
+
+    /// The census count is taken from the records, so it cannot drift from
+    /// them. A tally kept alongside would over-count the moment a payload was
+    /// replaced rather than added.
+    func testTheCensusCountCannotDriftFromTheRecords() throws {
+        let catalog = try makeCatalog()
+        let sourceID = UUID()
+        let path = "Takeout/Google Photos/Photos from 2017/IMG_0001.json"
+
+        // Same path, read three times — one record, not three.
+        for views in ["10", "11", "12"] {
+            let payload = assetPayload.replacingOccurrences(
+                of: "\"imageViews\":\"10\"", with: "\"imageViews\":\"\(views)\""
+            )
+            try catalog.upsertMetadataRecord(record(payload: payload, sourceID: sourceID, path: path))
+        }
+
+        XCTAssertEqual(try catalog.metadataRecordCount(), 1)
+        let schema = try XCTUnwrap(try catalog.fetchMetadataSchemas().first)
+        XCTAssertEqual(schema.recordCount, 1, "counted from the records themselves")
+    }
+
     // MARK: - Staying out of the way
 
     /// It must not be reachable from the bulk asset read. ~24,600 payloads in

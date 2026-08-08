@@ -103,6 +103,13 @@ struct MetadataSchema: Identifiable, Hashable {
     var recordCount: Int
     /// One path carrying this shape, to go and look at.
     var examplePath: String
+    /// One whole payload of this shape, kept forever.
+    ///
+    /// The path alone goes stale when a drive is reorganised, and then the
+    /// census can say a shape exists but not what it looked like. This is a few
+    /// KB per shape and is the permanent record of every format the app has
+    /// met.
+    var examplePayload: String
     var firstSeenAt: Date
 
     var id: String { fingerprint }
