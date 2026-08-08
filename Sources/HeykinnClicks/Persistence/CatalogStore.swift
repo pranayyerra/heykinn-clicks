@@ -203,6 +203,30 @@ final class CatalogStore {
         try database.exec("VACUUM INTO '\(escaped)';")
     }
 
+    /// Every table currently holding at least one row.
+    ///
+    /// Asked of the schema rather than listed by hand, because a hand-written
+    /// list is a list somebody forgets to add to. A table added next year is
+    /// covered the day it holds anything.
+    func nonEmptyTables() throws -> Set<String> {
+        let names = try database.query(
+            """
+            SELECT name FROM sqlite_master
+             WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
+             ORDER BY name;
+            """
+        ) { $0.text(0) }
+        var populated: Set<String> = []
+        for name in names {
+            // Identifier, not a bindable value, so it is quoted rather than
+            // parameterised — and it came from `sqlite_master`, not from input.
+            let escaped = name.replacingOccurrences(of: "\"", with: "\"\"")
+            let count = try database.query("SELECT count(*) FROM \"\(escaped)\";") { $0.int(0) }
+            if (count.first ?? 0) > 0 { populated.insert(name) }
+        }
+        return populated
+    }
+
     /// Groups writes into one atomic unit; see `SQLiteDatabase.transaction`.
     func transaction<T>(_ body: () throws -> T) throws -> T {
         try database.transaction(body)

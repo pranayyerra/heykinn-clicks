@@ -176,3 +176,105 @@ final class CatalogBackupTests: XCTestCase {
         XCTAssertEqual(try catalog.fetchAssets().count, 22)
     }
 }
+
+/// What "complete" has to mean now that the catalog holds more than the
+/// photos' own records.
+extension CatalogBackupTests {
+
+    private func makeRecord(assetID: UUID?, sourceID: UUID) -> MetadataRecord {
+        let payload = #"{"title":"a.jpg","description":"by the lake"}"#
+        return MetadataRecord(
+            id: UUID(), assetID: assetID, sourceID: sourceID, scope: .asset,
+            provider: "google", originPath: "Takeout/\(UUID().uuidString).json",
+            capturedAt: Date(), schemaFingerprint: MetadataRecord.fingerprint(of: payload),
+            payload: payload
+        )
+    }
+
+    /// The failure this was written for, reproduced.
+    ///
+    /// A snapshot taken on a real archive held every one of its 24,639 assets
+    /// and not one of the 24,417 provider payloads captured beside them. It
+    /// passed `integrity_check`, it passed the asset count, and it went into
+    /// the audit log as "verified" — while missing the only part of the catalog
+    /// that cannot be rebuilt without re-reading 127 GB of export zips.
+    ///
+    /// A backup is not complete because the photos are in it.
+    func testASnapshotMissingCapturedMetadataIsNotVerified() throws {
+        let (catalog, _) = try makePopulatedCatalog(assets: 3)
+        let source = UUID()
+        try catalog.upsertMetadataRecord(makeRecord(assetID: nil, sourceID: source))
+
+        let mount = try makeTempDirectory()
+        let snapshot = try CatalogBackupService.writeSnapshot(
+            from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 3
+        )
+
+        // Empty the payloads out of the copy, exactly as the real snapshot was.
+        let doctored = try SQLiteDatabase(path: snapshot.url.path)
+        try doctored.exec("DELETE FROM metadata_records;")
+
+        XCTAssertNoThrow(
+            try CatalogBackupService.verify(snapshotAt: snapshot.url, expectedAssetCount: 3),
+            "the premise: the old check saw nothing wrong with this file"
+        )
+        XCTAssertThrowsError(
+            try CatalogBackupService.verify(
+                snapshotAt: snapshot.url,
+                expectedAssetCount: 3,
+                mustHoldRowsIn: ["assets", "metadata_records"]
+            )
+        ) { error in
+            guard case CatalogBackupService.BackupError.incomplete(let tables) = error else {
+                return XCTFail("Expected incomplete, got \(error)")
+            }
+            XCTAssertEqual(tables, ["metadata_records"])
+            XCTAssertTrue(error.localizedDescription.contains("metadata_records"))
+        }
+    }
+
+    /// A table added after the backup code was written must be covered without
+    /// anybody remembering to add it. `asset_tags` did not exist when snapshots
+    /// were built, and was absent from the real snapshot entirely — not empty,
+    /// missing — which a check that only counts rows in known tables would step
+    /// straight past.
+    func testTablesAreDiscoveredFromTheSchemaRatherThanListedByHand() throws {
+        let (catalog, _) = try makePopulatedCatalog(assets: 2)
+        let source = UUID()
+        try catalog.upsertMetadataRecord(makeRecord(assetID: nil, sourceID: source))
+
+        let populated = try catalog.nonEmptyTables()
+        XCTAssertTrue(populated.contains("assets"))
+        XCTAssertTrue(
+            populated.contains("metadata_records"),
+            "a table holding rows must be found without being named anywhere"
+        )
+        XCTAssertFalse(
+            populated.contains("asset_tags"),
+            "and a table holding nothing is nothing to lose, so it is not demanded"
+        )
+    }
+
+    /// A snapshot a few rows behind a catalog that is still being written to is
+    /// a good snapshot. Only a whole category going missing is a failure, so
+    /// counts are not compared.
+    func testASnapshotTakenWhileTheCatalogGrowsIsStillComplete() throws {
+        let (catalog, _) = try makePopulatedCatalog(assets: 3)
+        let source = UUID()
+        try catalog.upsertMetadataRecord(makeRecord(assetID: nil, sourceID: source))
+
+        let mount = try makeTempDirectory()
+        let snapshot = try CatalogBackupService.writeSnapshot(
+            from: catalog, toMount: mount, targetID: nil, expectedAssetCount: 3
+        )
+        // The catalog moves on after the copy was taken.
+        try catalog.upsertMetadataRecord(makeRecord(assetID: nil, sourceID: source))
+        try catalog.upsertAsset(makeAsset())
+
+        XCTAssertNoThrow(try CatalogBackupService.verify(
+            snapshotAt: snapshot.url,
+            expectedAssetCount: 3,
+            mustHoldRowsIn: try catalog.nonEmptyTables()
+        ))
+    }
+}

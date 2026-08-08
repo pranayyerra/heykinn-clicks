@@ -30,12 +30,19 @@ enum CatalogBackupService {
 
     enum BackupError: Error, LocalizedError {
         case verificationFailed(String)
+        case incomplete(tables: [String])
         case accessBlocked(volumeName: String, underlying: String)
 
         var errorDescription: String? {
             switch self {
             case .verificationFailed(let detail):
                 return "Catalog snapshot failed verification: \(detail)"
+            case .incomplete(let tables):
+                return """
+                Catalog snapshot is missing everything this archive knows about \
+                \(tables.joined(separator: ", ")). The copy is readable and holds the photos' \
+                records, so it would have looked fine — it simply does not contain that.
+                """
             case .accessBlocked(let volumeName, let underlying):
                 return """
                 Could not write to \(volumeName): the volume is mounted and has room, but this app \
@@ -104,12 +111,19 @@ enum CatalogBackupService {
 
         // VACUUM INTO takes a consistent snapshot even while the catalog is in
         // use, and compacts it in the process.
+        // Asked before the copy, so the snapshot is measured against what the
+        // catalog actually held rather than against a list written once.
+        let populated = (try? catalog.nonEmptyTables()) ?? []
         do {
             try catalog.vacuumInto(path: temporaryURL.path)
         } catch {
             throw classify(error, writingInto: directory, mountURL: mountURL)
         }
-        try verify(snapshotAt: temporaryURL, expectedAssetCount: expectedAssetCount)
+        try verify(
+            snapshotAt: temporaryURL,
+            expectedAssetCount: expectedAssetCount,
+            mustHoldRowsIn: populated
+        )
         try FileManager.default.moveItem(at: temporaryURL, to: finalURL)
 
         let size = Int64((try? finalURL.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0)
@@ -119,7 +133,25 @@ enum CatalogBackupService {
 
     /// Opens the snapshot as a database and confirms it is intact and complete.
     /// A backup that has never been read back is only a hope.
-    static func verify(snapshotAt url: URL, expectedAssetCount: Int) throws {
+    ///
+    /// "Complete" once meant the right number of assets, which was true when the
+    /// catalog was assets and replicas. It stopped being true. A real snapshot
+    /// passed this check today holding all 24,639 assets and **none** of the
+    /// 24,417 provider payloads captured beside them — the `asset_tags` table
+    /// was not even present — and was written into the audit log as verified.
+    /// The one part of the catalog that cannot be rebuilt without re-reading
+    /// 127 GB of export zips was the part nobody was checking for.
+    ///
+    /// So the test is now the general one: **no kind of knowledge may go
+    /// missing.** Any table the live catalog holds rows in must hold rows here
+    /// too. Row counts are deliberately not compared — tables legitimately
+    /// shrink, and a snapshot that is a few rows behind a moving catalog is
+    /// fine. A whole category silently absent is not.
+    static func verify(
+        snapshotAt url: URL,
+        expectedAssetCount: Int,
+        mustHoldRowsIn populated: Set<String> = []
+    ) throws {
         // Read-only: verification must never write to the backup.
         let probe = try SQLiteDatabase(path: url.path, readOnly: true)
         let integrity = try probe.query("PRAGMA integrity_check;") { $0.text(0) }
@@ -132,6 +164,18 @@ enum CatalogBackupService {
                 "holds \(counted) assets, expected at least \(expectedAssetCount)"
             )
         }
+
+        let present = Set(try probe.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table';"
+        ) { $0.text(0) })
+        var missing: [String] = []
+        for table in populated.sorted() {
+            guard present.contains(table) else { missing.append(table); continue }
+            let escaped = table.replacingOccurrences(of: "\"", with: "\"\"")
+            let rows = try probe.query("SELECT count(*) FROM \"\(escaped)\";") { $0.int(0) }
+            if (rows.first ?? 0) == 0 { missing.append(table) }
+        }
+        guard missing.isEmpty else { throw BackupError.incomplete(tables: missing) }
     }
 
     static func listSnapshots(onMount mountURL: URL, targetID: UUID?) -> [CatalogSnapshot] {
