@@ -63,7 +63,9 @@ struct StorageGroupDetail: View {
     private var whereTheyAre: some View {
         let holdings = store.holdings(forStorageGroup: group.id)
         VStack(alignment: .leading, spacing: 6) {
-            SectionCaption("Where they are")
+            // No "Where they are" caption. This panel opens directly beneath
+            // the row that is where they are, and a heading naming the thing
+            // the reader just clicked is a line spent saying nothing.
             // The policy, then the observation. They agree here and will not
             // always, and the difference is the whole reason both are shown —
             // a copy count is what was asked for, not what is.
@@ -93,9 +95,10 @@ struct StorageGroupDetail: View {
                         .frame(width: 16)
                     Text(store.targetsByID[holding.targetID]?.name ?? "A device that is gone")
                     Spacer(minLength: 8)
-                    Text(Formatters.count(holding.photos, "photo"))
-                        .foregroundStyle(.secondary)
-                        .monospacedDigit()
+                    // The count is on the cell directly above this panel, in
+                    // the column with the device's name on it. Repeating it a
+                    // line later is how a detail view comes to be mostly things
+                    // the reader has already read.
                 }
                 .font(.callout)
                 // Where on that drive, one folder per line and each one a way
@@ -135,22 +138,36 @@ struct StorageGroupDetail: View {
         let stranded = form.onlyInsideDownload
 
         VStack(alignment: .leading, spacing: 7) {
+            // The finding stays on screen; the paragraph explaining it goes
+            // behind the mark, which is the bargain the rest of the app makes.
+            // This panel had drifted into four stacked sentences saying
+            // overlapping things, under a table that had already said the
+            // numbers.
             if stranded > 0 {
-                Text("If the Google download went, \(Formatters.count(stranded, "photo")) here would be lost")
-                    .font(.callout.weight(.medium))
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(form.copiedOut > 0
-                     ? "They have their copies, but every one is inside the same .zip files. The other \(form.copiedOut.formatted()) have a file of their own and would survive."
-                     : "They have their copies, but every one is inside the same .zip files.")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .fixedSize(horizontal: false, vertical: true)
+                HStack(spacing: 6) {
+                    Text("If the Google download went, \(Formatters.count(stranded, "photo")) here would be lost")
+                        .font(.callout.weight(.medium))
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ExplainerMark(
+                        subject: "this",
+                        help: form.copiedOut > 0
+                            ? "They have their copies, but every one is inside the same .zip files, so one deletion reaches them all. The other \(form.copiedOut.formatted()) have a file of their own and would survive."
+                            : "They have their copies, but every one is inside the same .zip files, so one deletion reaches them all."
+                    )
+                    Spacer(minLength: 0)
+                }
             }
-            Text("\(export.title) — \(verdict.text.prefix(1).lowercased() + verdict.text.dropFirst())")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: 6) {
+                Text(export.title)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ExplainerMark(
+                    subject: export.title,
+                    help: verdict.text
+                )
+                Spacer(minLength: 0)
+            }
             // Twelve numbered chips and a colour key, for an answer already
             // given in the sentence above. Shown only when a part is missing or
             // unchecked, which is when per-part detail is the thing you came
@@ -173,29 +190,17 @@ struct StorageGroupDetail: View {
             // Where a drive is holding the same export twice.
             ForEach(store.exportFormAudits(forSet: setID), id: \.targetID) { held in
                 VStack(alignment: .leading, spacing: 5) {
-                    Label(
-                        "\(held.driveName) holds this export twice — the original zips and their unpacked copies, "
-                        + "\(Formatters.bytes.string(fromByteCount: held.bytesByForm.values.reduce(0, +))) between them. "
-                        + "Either one alone holds every photo.",
-                        systemImage: "doc.on.doc"
-                    )
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-                    HStack(spacing: 10) {
-                        ForEach(ExportForm.allCases, id: \.self) { form in
-                            if let plan = store.exportFormRemovalPlan(
-                                removing: form, setID: setID, onTarget: held.targetID
-                            ) {
-                                Button("Remove \(form.displayName)…") { removingForm = plan }
-                                    .font(.caption)
-                            }
-                        }
-                        if store.reachablePaths[held.targetID] == nil {
-                            Text("Plug it in to choose.")
-                                .font(.caption)
-                                .foregroundStyle(.tertiary)
-                        }
+                    HStack(spacing: 6) {
+                        Label(
+                            "\(held.driveName) holds it twice — \(Formatters.bytes.string(fromByteCount: held.bytesByForm.values.reduce(0, +)))",
+                            systemImage: "doc.on.doc"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        ExplainerMark(
+                            subject: "holding it twice",
+                            help: "\(held.driveName) has both the original zips and the folders unpacked from them. Either one alone holds every photo: the zip is exactly what Google produced, and the unpacked copy is what a re-read walks without decompressing anything first."
+                        )
                         Spacer(minLength: 0)
                     }
                 }
@@ -203,40 +208,29 @@ struct StorageGroupDetail: View {
 
             let behind = store.exportPartsBehindReader(inSet: setID)
             if !behind.isEmpty {
-                Label {
-                    Text("\(Formatters.count(behind.count, "part")) of this export \(behind.count == 1 ? "was" : "were") read by an older version of the app. Reading them again picks up anything it walked past — nothing is moved or deleted.")
-                        .fixedSize(horizontal: false, vertical: true)
-                } icon: {
-                    Image(systemName: "text.magnifyingglass")
+                HStack(spacing: 6) {
+                    Label(
+                        "\(Formatters.count(behind.count, "part")) read by an older version",
+                        systemImage: "text.magnifyingglass"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    ExplainerMark(
+                        subject: "an older reader",
+                        help: "The exports are kept so that a reader which has learned to take more out of them can be run over them again. Reading them again picks up anything the older one walked past. Nothing is moved or deleted."
+                    )
+                    Spacer(minLength: 0)
                 }
-                .font(.caption)
-                .foregroundStyle(.secondary)
             }
 
+            // One verb visible, the rest behind a menu.
+            //
+            // This row had grown to six controls — re-read, relocate per drive,
+            // unpack, spot check, full check, stop tracking — laid out across a
+            // panel that has to fit under a table row. Checking for damage is
+            // the thing somebody opens an export to do; the others are
+            // housekeeping, and housekeeping belongs in a menu.
             HStack(spacing: 10) {
-                if !behind.isEmpty {
-                    Button("Read them again") { store.backfillExportMetadata() }
-                }
-                // Offered per drive, because an export exists on several and
-                // only a connected one can be moved.
-                ForEach(store.targets) { target in
-                    if let plan = store.exportRelocationPlan(forSet: setID, onTarget: target.id) {
-                        Button("Keep in the app's folder on \(target.name)…") { relocating = plan }
-                    }
-                }
-                if !export.extractableZips.isEmpty {
-                    // Named for what it does. It said "Copy them out of the
-                    // download", which promised the one thing it does not do:
-                    // unpacking writes a folder beside the zip, and a photo in
-                    // that folder is still counted as being inside a download.
-                    // What it actually buys is a copy that can be re-read
-                    // without decompressing anything — and what it costs is the
-                    // same bytes again, which the old name never mentioned.
-                    Button("Unpack a copy on the drive…") {
-                        unpacking = export.extractableZips
-                    }
-                    .help("Writes each zip out as a folder beside it, so re-reading this export does not have to decompress it first. The zips stay, so this uses the same space again.")
-                }
                 Menu("Check for damage") {
                     Button("Read a sample of each file") { store.spotCheckExportParts() }
                     Button("Read every byte — slow, and the only proof") {
@@ -244,9 +238,44 @@ struct StorageGroupDetail: View {
                     }
                 }
                 .fixedSize()
+
+                Menu {
+                    if !behind.isEmpty {
+                        Button("Read the export again") { store.backfillExportMetadata() }
+                    }
+                    if !export.extractableZips.isEmpty {
+                        Button("Unpack a copy on the drive…") { unpacking = export.extractableZips }
+                    }
+                    // Offered per drive, because an export exists on several
+                    // and only a connected one can be moved.
+                    ForEach(store.targets) { target in
+                        if let plan = store.exportRelocationPlan(forSet: setID, onTarget: target.id) {
+                            Button("Keep in the app\u{2019}s folder on \(target.name)…") { relocating = plan }
+                        }
+                    }
+                    ForEach(store.exportFormAudits(forSet: setID), id: \.targetID) { held in
+                        ForEach(ExportForm.allCases, id: \.self) { form in
+                            if let plan = store.exportFormRemovalPlan(
+                                removing: form, setID: setID, onTarget: held.targetID
+                            ) {
+                                Button("Remove \(form.displayName) from \(held.driveName)…") {
+                                    removingForm = plan
+                                }
+                            }
+                        }
+                    }
+                    Divider()
+                    Button("Stop tracking this export…", role: .destructive) {
+                        confirmingStopTracking = setID
+                    }
+                } label: {
+                    Label("More", systemImage: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+
                 Spacer(minLength: 0)
-                Button("Stop tracking…", role: .destructive) { confirmingStopTracking = setID }
-                    .buttonStyle(.link)
             }
             .font(.caption)
         }

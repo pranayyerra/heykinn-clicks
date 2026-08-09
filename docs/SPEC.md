@@ -816,6 +816,25 @@ Earned against a real 248 GB archive; the stories are in git history.
     bytes are in. Two subsystems reading different tables can disagree, and the
     one drawing a conclusion is the one to doubt.
 
+71. A detail panel accretes, because every feature adds a line and none removes
+    one. The group panel ended a day's work with four stacked sentences saying
+    overlapping things, a caption naming the row the reader had just clicked,
+    per-device photo counts already printed in the cell directly above, and six
+    controls — re-read, relocate per drive, unpack, spot check, full check, stop
+    tracking — laid out across a box that has to fit under a table row. Every
+    one of them was added for a good reason and none was weighed against what
+    was already there. The rule the rest of the app already follows applies
+    hardest here: the *finding* stays on screen and the paragraph explaining it
+    goes behind the mark, one verb stays visible and the housekeeping goes in a
+    menu.
+
+72. Do not reach for a layout container that measures what you have already
+    decided. The table's widths are constants, so `Grid` was aligning columns
+    it did not need to measure — and a cell spanning every column, inside a
+    grid, inside a horizontally scrolling view, sized itself hundreds of points
+    taller than its contents and pushed every row below it off the screen.
+    Stacks with explicit frames do the same job and cannot do that.
+
 64. Move the files first, then the catalog. A catalog told about a move that
     did not happen describes an archive nobody has, and nothing will ever
     correct it. A file that moved with the catalog not yet updated is found

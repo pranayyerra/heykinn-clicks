@@ -310,29 +310,37 @@ struct StorageMatrix: View {
 
     // MARK: - The table
 
+    /// Every cell already has an explicit width, so this is stacks rather than
+    /// a `Grid`.
+    ///
+    /// It was a `Grid`, with the open panel as a cell spanning every column.
+    /// A spanning cell inside a grid inside a horizontally scrolling view sized
+    /// itself to something far taller than its contents — the panel ran on for
+    /// a couple of hundred empty points and pushed every group below it off the
+    /// screen. `Grid` was buying nothing here: it aligns columns by measuring
+    /// them, and these are `rowHeaderWidth` and `cellWidth`, decided in advance.
     private var grid: some View {
         // Horizontally scrollable rather than compressed: a cell narrower than
         // its number is a cell that cannot be read, and there is no useful
         // abbreviation of "21,117".
         ScrollView(.horizontal, showsIndicators: false) {
-            Grid(alignment: .leading, horizontalSpacing: 6, verticalSpacing: 6) {
-                GridRow {
-                    Color.clear.frame(width: 1, height: 1)
+            VStack(alignment: .leading, spacing: 6) {
+                HStack(alignment: .bottom, spacing: 6) {
+                    Color.clear.frame(width: rowHeaderWidth, height: 1)
                     ForEach(places) { columnHeader($0) }
                 }
                 // A device's panel opens against the header row it came from,
                 // which is the only place in the table a column is named.
                 if case .place(let id) = opened, let target = store.targetsByID[id] {
-                    GridRow {
-                        panel(symbol: target.kind == .hostDevice ? "laptopcomputer" : "externaldrive.fill",
-                              title: target.name) {
-                            DriveCard(drive: target, drawsContainer: false, onForget: { onForget(target) })
-                        }
-                        .gridCellColumns(places.count + 1)
+                    panel(
+                        symbol: target.kind == .hostDevice ? "laptopcomputer" : "externaldrive.fill",
+                        title: target.name
+                    ) {
+                        DriveCard(drive: target, drawsContainer: false, onForget: { onForget(target) })
                     }
                 }
                 ForEach(groups) { group in
-                    GridRow {
+                    HStack(alignment: .center, spacing: 6) {
                         rowHeader(group)
                         ForEach(places) { place in
                             cell(group: group, place: place)
@@ -344,34 +352,31 @@ struct StorageMatrix: View {
                     // row you opened and scrolling past nineteen others to
                     // find it, then scrolling back to act on it.
                     if opened == .group(group.id) {
-                        GridRow {
-                            panel(
-                                symbol: "square.stack.3d.up",
-                                title: group.label,
-                                trailing: {
-                                    // Editing is a mode you ask for. Cells that
-                                    // could be dragged at any moment would make
-                                    // every glance at the table a chance to
-                                    // move an archive by accident.
-                                    if draft?.groupID != group.id {
-                                        Button("Edit") { beginEditing(group) }
-                                            .font(.caption)
-                                            .help("Move where this group is kept, and how many copies it keeps.")
-                                    }
-                                }
-                            ) {
-                                if draft?.groupID == group.id {
-                                    editor(group)
-                                } else {
-                                    StorageGroupDetail(group: group)
+                        panel(
+                            symbol: "square.stack.3d.up",
+                            title: group.label,
+                            trailing: {
+                                // Editing is a mode you ask for. Cells that
+                                // could be dragged at any moment would make
+                                // every glance at the table a chance to move an
+                                // archive by accident.
+                                if draft?.groupID != group.id {
+                                    Button("Edit") { beginEditing(group) }
+                                        .font(.caption)
+                                        .help("Move where this group is kept, and how many copies it keeps.")
                                 }
                             }
-                            .gridCellColumns(places.count + 1)
+                        ) {
+                            if draft?.groupID == group.id {
+                                editor(group)
+                            } else {
+                                StorageGroupDetail(group: group)
+                            }
                         }
                     }
                 }
-                Divider().gridCellColumns(places.count + 1)
-                GridRow {
+                Divider().frame(width: tableWidth)
+                HStack(alignment: .top, spacing: 6) {
                     Text(archivePhotoCount == 1
                          ? "1 photo in the archive"
                          : "\(archivePhotoCount.formatted()) photos in the archive")
@@ -383,6 +388,12 @@ struct StorageMatrix: View {
             }
             .padding(.vertical, 2)
         }
+    }
+
+    /// Exactly as wide as the table above it, so an opened panel can never
+    /// widen what scrolls.
+    private var tableWidth: CGFloat {
+        rowHeaderWidth + CGFloat(places.count) * (cellWidth + 6)
     }
 
     private let rowHeaderWidth: CGFloat = 244
@@ -1018,8 +1029,8 @@ struct StorageMatrix: View {
             Divider()
             content()
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
+        .frame(width: tableWidth, alignment: .leading)
         .background(Color.primary.opacity(0.035), in: RoundedRectangle(cornerRadius: 10))
         .overlay(
             RoundedRectangle(cornerRadius: 10)
