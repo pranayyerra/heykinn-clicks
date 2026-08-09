@@ -1,12 +1,21 @@
 import SwiftUI
 
+/// The residency rules, which decide whether a photo is Local or claimed as
+/// living in a cloud.
+///
+/// Lived on a screen of its own beside the storage groups, which put two
+/// unrelated questions under one word: how many copies to keep is the archive's
+/// central promise, while this is automation most archives never touch — both
+/// of the rules on a real one said "stays Local", which is what happens anyway.
+/// Groups moved to the copies page, next to the copies they govern; this moved
+/// to Settings, next to the other automation.
 struct PoliciesView: View {
     @EnvironmentObject private var store: AppStore
     @State private var isAddSheetPresented = false
     @State private var ruleBeingEdited: PolicyRule?
 
     var body: some View {
-        List {
+        Form {
             Section {
                 ForEach(store.policyRules) { rule in
                     ruleRow(rule)
@@ -24,13 +33,8 @@ struct PoliciesView: View {
                     .fixedSize(horizontal: false, vertical: true)
                     .textCase(nil)
             }
-            // The copies stepper used to be the first thing on this screen.
-            // What replaced it is not a pointer elsewhere but the groups
-            // themselves: one archive-wide number became one per set of
-            // photos, and this is where they live.
-            StorageGroupsList()
         }
-        .navigationTitle("Policies")
+        .formStyle(.grouped)
         .toolbar {
             ToolbarItem {
                 Button {

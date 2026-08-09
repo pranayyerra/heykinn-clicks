@@ -277,7 +277,7 @@ struct ExportCard: View {
             case .none:
                 EmptyView()
             }
-            Button("Change under Policies") { commands.requestedPage = .policies }
+            Button("Change under Keep safe") { commands.requestedPage = .targets }
                 .buttonStyle(.link)
                 .font(.caption)
         }

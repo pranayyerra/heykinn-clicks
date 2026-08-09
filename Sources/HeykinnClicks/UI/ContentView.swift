@@ -9,7 +9,6 @@ enum SidebarSection: String, CaseIterable, Identifiable {
     case targets
     case migrations
     case violations
-    case policies
     case activity
 
     var id: String { rawValue }
@@ -19,9 +18,8 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .overview: return "Overview"
         case .library: return "Library"
         case .duplicates: return "Duplicates"
-        case .targets: return "Drives"
+        case .targets: return "Copies"
         case .violations: return "Violations"
-        case .policies: return "Policies"
         case .migrations: return "Migrations"
         case .takeout: return "Add photos"
         case .activity: return "Activity"
@@ -35,7 +33,6 @@ enum SidebarSection: String, CaseIterable, Identifiable {
         case .duplicates: return "square.on.square"
         case .targets: return "externaldrive.connected.to.line.below"
         case .violations: return "exclamationmark.triangle"
-        case .policies: return "list.bullet.rectangle"
         case .migrations: return "arrow.left.arrow.right"
         case .takeout: return "tray.and.arrow.down"
         case .activity: return "clock"
@@ -151,7 +148,11 @@ enum Question: String, CaseIterable, Identifiable {
         case .overview: return [.overview]
         case .have: return [.library, .duplicates]
         case .from: return [.takeout]
-        case .safe: return [.targets, .policies, .activity]
+        // Policies is gone as a destination. Storage groups are a section of
+        // the copies page — "how many copies, and where" is the same subject as
+        // "where are my copies", read one line apart — and the residency rules
+        // that shared the screen are automation, which is what Settings is.
+        case .safe: return [.targets, .activity]
         }
     }
 
@@ -371,7 +372,6 @@ struct ContentView: View {
         case .duplicates: DuplicatesView()
         case .targets: DrivesView()
         case .violations: ViolationsView()
-        case .policies: PoliciesView()
         case .migrations: MigrationsView()
         case .takeout: SourcesView()
         case .activity: ActivityView()

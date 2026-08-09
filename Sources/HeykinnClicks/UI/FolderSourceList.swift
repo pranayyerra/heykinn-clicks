@@ -249,7 +249,7 @@ struct FolderSourceList: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Button("Change under Policies") { commands.requestedPage = .policies }
+                    Button("Change under Keep safe") { commands.requestedPage = .targets }
                         .buttonStyle(.link)
                         .font(.caption)
                 }

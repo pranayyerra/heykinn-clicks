@@ -18,8 +18,18 @@ struct StorageGroupsList: View {
     private var counts: [UUID: Int] { store.photoCountByStorageGroup }
 
     var body: some View {
-        Section {
+        // A card rather than a `List` section: this lives on the copies page
+        // now, which is a scrolling column of cards, and "how many copies, and
+        // where" is one line's remove from "where are my copies". They were two
+        // destinations asking halves of the same question.
+        CardBox(title: "How many copies, and where", systemImage: "square.stack.3d.up") {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Each set of photos says how many copies to keep. A photo is in exactly one set.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             ForEach(store.storageGroups.sorted(by: { $0.createdAt < $1.createdAt })) { group in
+                Divider()
                 row(group)
             }
             if store.storageGroups.isEmpty {
@@ -61,10 +71,8 @@ struct StorageGroupsList: View {
                     .font(.callout)
             }
             .buttonStyle(.link)
-        } header: {
-            Text("How many copies of each set of photos to keep, and which devices hold them. A photo is in exactly one group.")
-                .fixedSize(horizontal: false, vertical: true)
-                .textCase(nil)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
         }
         .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
         .sheet(isPresented: $placingStranded) {

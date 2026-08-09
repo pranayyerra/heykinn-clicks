@@ -9,6 +9,8 @@ struct SettingsView: View {
                 .tabItem { Label("Automation", systemImage: "wand.and.stars") }
             SafetySettings()
                 .tabItem { Label("Safety", systemImage: "checkmark.shield") }
+            PoliciesView()
+                .tabItem { Label("Rules", systemImage: "list.bullet.rectangle") }
             AccessSettings()
                 .tabItem { Label("Access", systemImage: "key") }
         }

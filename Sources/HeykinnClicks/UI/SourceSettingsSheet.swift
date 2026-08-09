@@ -15,10 +15,21 @@ struct SourceSettingsPicker: View {
     @EnvironmentObject private var store: AppStore
     @Binding var desiredCopies: Int
     @Binding var destinationTargetIDs: [UUID]
+    @Binding var destinationMode: StorageGroup.DestinationMode
+
+    /// Open once the reader has asked for it, and stays open for a set that
+    /// already names its own drives — hiding a choice somebody made is worse
+    /// than showing a control they will not use.
+    @State private var isPickingDrives = false
 
     private var chosen: Set<UUID> { Set(destinationTargetIDs) }
 
     private func toggle(_ targetID: UUID) {
+        // Touching the list *is* the choice. It is the only signal there is:
+        // picking one drive for a one-copy set produces exactly what working
+        // it out produces, so the devices cannot be read back afterwards to
+        // tell which happened.
+        destinationMode = .chosen
         if let index = destinationTargetIDs.firstIndex(of: targetID) {
             destinationTargetIDs.remove(at: index)
         } else {
@@ -29,18 +40,25 @@ struct SourceSettingsPicker: View {
         }
     }
 
+    /// Where a worked-out set lands, given what it is asking for now.
+    private var workedOut: [UUID] {
+        StorageGroup.automaticDestinations(
+            copies: desiredCopies, among: store.automaticEligibleDeviceIDs
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             Stepper(
                 "Keep \(Formatters.count(desiredCopies, "copy", "copies")) of every photo",
                 value: $desiredCopies,
-                in: 1...max(store.targets.count, 1)
+                in: 1...max(store.automaticEligibleDeviceIDs.count, 1)
             )
             .font(.callout)
-
-            Text("On these devices")
-                .font(.caption)
-                .foregroundStyle(.secondary)
+            .onChange(of: desiredCopies) { _, _ in
+                guard destinationMode == .automatic else { return }
+                destinationTargetIDs = workedOut
+            }
 
             if store.targets.isEmpty {
                 Label(
@@ -51,9 +69,43 @@ struct SourceSettingsPicker: View {
                 .foregroundStyle(.orange)
                 .fixedSize(horizontal: false, vertical: true)
             } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    ForEach(store.targets) { target in
-                        deviceRow(target)
+                // The number is the question. Where those copies go is stated,
+                // not asked — with two drives and two copies there has only
+                // ever been one answer, and a picker with one answer teaches
+                // the reader nothing while making them responsible for it.
+                if destinationMode == .automatic, !isPickingDrives {
+                    Text(destinationTargetIDs.isEmpty
+                         ? "Nowhere to keep them yet."
+                         : "On \(store.deviceNames(destinationTargetIDs)).")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    if idleDrives > 0 {
+                        Text("You have \(Formatters.count(store.automaticEligibleDeviceIDs.count, "drive")) and keep \(Formatters.count(desiredCopies, "copy", "copies")), so \(idleDrives == 1 ? "one holds" : "\(idleDrives) hold") none of this.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    Button("Choose the drives myself…") { isPickingDrives = true }
+                        .buttonStyle(.link)
+                        .font(.caption)
+                } else {
+                    Text("On these devices")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    VStack(alignment: .leading, spacing: 6) {
+                        ForEach(store.targets) { target in
+                            deviceRow(target)
+                        }
+                    }
+                    if destinationMode == .chosen {
+                        Button("Let the app work it out") {
+                            destinationMode = .automatic
+                            destinationTargetIDs = workedOut
+                            isPickingDrives = false
+                        }
+                        .buttonStyle(.link)
+                        .font(.caption)
                     }
                 }
             }
@@ -65,6 +117,14 @@ struct SourceSettingsPicker: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
         }
+        .onAppear { isPickingDrives = destinationMode == .chosen }
+    }
+
+    /// Drives holding none of this set because it asks for fewer copies than
+    /// there are drives. The one case where a drive bought later has nothing to
+    /// do, and the reader should hear it from the app rather than notice it.
+    private var idleDrives: Int {
+        max(0, store.automaticEligibleDeviceIDs.count - destinationTargetIDs.count)
     }
 
     /// Said before the choice is made rather than reported as a shortfall
@@ -76,7 +136,9 @@ struct SourceSettingsPicker: View {
             return "Pick at least one device, or these photos will be kept nowhere."
         }
         if destinationTargetIDs.count < desiredCopies {
-            return "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) devices, and \(destinationTargetIDs.count) is chosen. Photos will stop short until another is picked."
+            return destinationMode == .automatic
+                ? "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) drives, and there \(store.automaticEligibleDeviceIDs.count == 1 ? "is" : "are") \(store.automaticEligibleDeviceIDs.count). Add another and this fills itself in."
+                : "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) devices, and \(destinationTargetIDs.count) is chosen. Photos will stop short until another is picked."
         }
         return nil
     }
@@ -151,7 +213,8 @@ struct AddSourceSheet: View {
 
             SourceSettingsPicker(
                 desiredCopies: $setup.desiredCopies,
-                destinationTargetIDs: $setup.destinationTargetIDs
+                destinationTargetIDs: $setup.destinationTargetIDs,
+                destinationMode: $setup.destinationMode
             )
 
             Text("The folder is only ever read. Photos already on a device you pick are counted where they are rather than copied again.")
@@ -187,12 +250,14 @@ struct EditStorageGroupSheet: View {
     let group: StorageGroup
     @State private var desiredCopies: Int
     @State private var destinationTargetIDs: [UUID]
+    @State private var destinationMode: StorageGroup.DestinationMode
     @State private var confirming = false
 
     init(group: StorageGroup) {
         self.group = group
         _desiredCopies = State(initialValue: group.desiredCopies)
         _destinationTargetIDs = State(initialValue: group.destinationTargetIDs)
+        _destinationMode = State(initialValue: group.destinationMode)
     }
 
     /// Recomputed only when the choice changes, not on every redraw.
@@ -213,6 +278,7 @@ struct EditStorageGroupSheet: View {
     private var hasChanges: Bool {
         desiredCopies != group.desiredCopies
             || destinationTargetIDs != group.destinationTargetIDs
+            || destinationMode != group.destinationMode
     }
 
     var body: some View {
@@ -232,7 +298,8 @@ struct EditStorageGroupSheet: View {
 
             SourceSettingsPicker(
                 desiredCopies: $desiredCopies,
-                destinationTargetIDs: $destinationTargetIDs
+                destinationTargetIDs: $destinationTargetIDs,
+                destinationMode: $destinationMode
             )
 
             if hasChanges, !plan.isEmpty {
@@ -274,7 +341,10 @@ struct EditStorageGroupSheet: View {
 
     private func apply() {
         store.applyStorageGroupSettings(
-            group, desiredCopies: desiredCopies, destinations: destinationTargetIDs
+            group,
+            desiredCopies: desiredCopies,
+            destinations: destinationTargetIDs,
+            mode: destinationMode
         )
         dismiss()
     }

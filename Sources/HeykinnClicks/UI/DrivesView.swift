@@ -122,9 +122,9 @@ struct DrivesView: View {
                     onActivateEmpty: activate
                 )
 
-                // Detail lives under the map rather than on it: a spoke has room
-                // for a name and a state, not for capacity, progress and the
-                // controls that act on them.
+                // Detail lives under the list rather than in the row: a row has
+                // room for a name, its holdings and a state, not for capacity,
+                // progress and the controls that act on them.
                 if let target = selectedTarget {
                     DriveCard(drive: target, onForget: { targetToForget = target })
                 } else if !store.targets.isEmpty {
@@ -148,6 +148,8 @@ struct DrivesView: View {
                         MigrationsSummary()
                     }
                 }
+
+                StorageGroupsList()
 
                 if !store.heldExportParts.isEmpty || !store.partTransferPlan.transfers.isEmpty {
                     CardBox(title: "Export parts in transit", systemImage: "shippingbox") {
@@ -191,7 +193,7 @@ struct DrivesView: View {
             }
             .padding(20)
         }
-        .navigationTitle("Drives")
+        .navigationTitle("Copies")
         .toolbar {
             ToolbarItem {
                 Button {

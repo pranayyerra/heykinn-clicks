@@ -2900,6 +2900,12 @@ final class AppStore: ObservableObject {
         var label: String
         var desiredCopies: Int
         var destinationTargetIDs: [UUID]
+        /// Defaults to `chosen` for the same reason `StorageGroup.Defaults`
+        /// does: building one of these with a list of devices is an explicit
+        /// act, and a default of `automatic` throws that list away and works
+        /// the devices out instead. `beginAddingSource` says `automatic` for
+        /// itself, which is the path that means it.
+        var destinationMode: StorageGroup.DestinationMode = .chosen
     }
 
     @Published var pendingSourceSetup: PendingSourceSetup?
@@ -2915,13 +2921,15 @@ final class AppStore: ObservableObject {
                 ? first.lastPathComponent
                 : urls.map(\.lastPathComponent).joined(separator: ", "),
             desiredCopies: defaults.desiredCopies,
-            // Prefilled but not assumed: with nothing chosen before and no
-            // devices named, the sheet opens with the registered devices
-            // ticked up to the copy count, which is what most people want and
-            // all of it visible rather than hidden in a rule.
-            destinationTargetIDs: defaults.destinationTargetIDs.isEmpty
-                ? Array(targets.map(\.id).prefix(defaults.desiredCopies))
-                : defaults.destinationTargetIDs
+            // A worked-out set is worked out here too, rather than prefilled
+            // from `targets` — which included this Mac and would have opened
+            // the sheet proposing the machine the drives exist to survive.
+            destinationTargetIDs: defaults.destinationMode == .automatic
+                ? StorageGroup.automaticDestinations(
+                    copies: defaults.desiredCopies, among: automaticEligibleDeviceIDs
+                  )
+                : defaults.destinationTargetIDs,
+            destinationMode: defaults.destinationMode
         )
     }
 
@@ -2954,6 +2962,7 @@ final class AppStore: ObservableObject {
             label: setup.label,
             desiredCopies: setup.desiredCopies,
             destinationTargetIDs: setup.destinationTargetIDs,
+            destinationMode: setup.destinationMode,
             createdAt: Date()
         )
         do {
@@ -2965,7 +2974,8 @@ final class AppStore: ObservableObject {
         }
         newSourceDefaults = StorageGroup.Defaults(
             desiredCopies: setup.desiredCopies,
-            destinationTargetIDs: setup.destinationTargetIDs
+            destinationTargetIDs: setup.destinationTargetIDs,
+            destinationMode: setup.destinationMode
         )
         sources.append(source)
         storageGroups.append(group)

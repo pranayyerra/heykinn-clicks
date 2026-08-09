@@ -179,3 +179,49 @@ final class DestinationModeTests: XCTestCase {
         XCTAssertFalse(resolved.isSatisfiable, "so it says it is short, rather than claiming safety")
     }
 }
+
+/// The two structs that carry settings into a new group.
+extension DestinationModeTests {
+
+    /// Both default to `chosen`, and both had to.
+    ///
+    /// Naming devices in one of these is an explicit act. A default of
+    /// `automatic` throws the list away and works the devices out — which, on
+    /// a setup whose only device is this Mac, works out to nothing at all,
+    /// because the host is never picked automatically. A test that named a
+    /// host device and got an empty group is how this was found, twice: once
+    /// in `StorageGroup.Defaults` and again in `PendingSourceSetup`.
+    func testNamingDevicesInSettingsMeansThem() throws {
+        let (store, directory) = try makeStore()
+        store.registerHostDeviceTarget(at: try makeDirectory("mac"), name: "This Mac")
+        let mac = try XCTUnwrap(store.targets.first).id
+
+        let fromDefaults = try XCTUnwrap(store.createStorageGroup(
+            label: "Named",
+            from: StorageGroup.Defaults(desiredCopies: 1, destinationTargetIDs: [mac])
+        ))
+        XCTAssertEqual(fromDefaults.destinationTargetIDs, [mac])
+        XCTAssertEqual(fromDefaults.destinationMode, .chosen)
+
+        let setup = AppStore.PendingSourceSetup(
+            urls: [directory], label: "Also named",
+            desiredCopies: 1, destinationTargetIDs: [mac]
+        )
+        XCTAssertEqual(setup.destinationMode, .chosen)
+    }
+
+    /// And the path that means `automatic` says so for itself — working the
+    /// devices out from the drives rather than from every registered target,
+    /// which would have opened the add sheet proposing this Mac.
+    func testTheAddSheetWorksItsDevicesOutFromDrivesOnly() throws {
+        let (store, directory) = try makeStore()
+        store.registerHostDeviceTarget(at: try makeDirectory("mac"), name: "This Mac")
+        let driveA = try addDrive("Drive A", to: directory, at: Date(timeIntervalSince1970: 1))
+        store.loadAll()
+
+        store.beginAddingSource([directory])
+        let setup = try XCTUnwrap(store.pendingSourceSetup)
+        XCTAssertEqual(setup.destinationMode, .automatic)
+        XCTAssertEqual(setup.destinationTargetIDs, [driveA], "the drive, not the Mac")
+    }
+}
