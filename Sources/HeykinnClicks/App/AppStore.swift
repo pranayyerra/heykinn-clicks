@@ -972,6 +972,12 @@ final class AppStore: ObservableObject {
                     lastError = "Could not store the metadata from \(entry.part.displayName): \(error.localizedDescription)"
                     return
                 }
+                // Recorded only after the payloads are committed. Marking the
+                // part read before its rows are stored would be a claim to have
+                // been somewhere the catalog has nothing from.
+                try? catalog.recordCapture(
+                    setID: entry.part.setID, partNumber: entry.part.partNumber
+                )
                 captured += result.captured.count
                 alreadyHeld += result.alreadyHeld
                 unreadable += result.unreadable
@@ -1992,6 +1998,27 @@ final class AppStore: ObservableObject {
     /// them, which the grid draws as "not asked to hold it".
     @Published private(set) var groupPlaceCells: [UUID: [UUID: GroupPlaceCell]] = [:]
 
+    /// Set id → part number → the reader that last read that part.
+    @Published private(set) var captureVersionByPart: [String: [Int: Int]] = [:]
+
+    /// Parts of an export the current reader has not been over.
+    ///
+    /// Includes parts with no record at all: everything imported before the
+    /// reader was versioned was read by something older than version 1 by
+    /// definition, and treating "no record" as up to date would quietly exempt
+    /// the entire existing archive from the one check this exists for.
+    func exportPartsBehindReader(inSet setID: String) -> [Int] {
+        let known = captureVersionByPart[setID] ?? [:]
+        let parts = Set(
+            takeoutArchives
+                .filter { $0.exportSetID == setID }
+                .compactMap(\.partNumber)
+        )
+        return parts
+            .filter { (known[$0] ?? 0) < CatalogStore.currentCaptureVersion }
+            .sorted()
+    }
+
     /// What each way of losing something would cost, worst first.
     ///
     /// Precomputed with the rest of the derived state because the chips that
@@ -2334,6 +2361,7 @@ final class AppStore: ObservableObject {
             sources = try catalog.fetchSources()
             storageGroups = try catalog.fetchStorageGroups()
             storageGroupIDByAsset = try catalog.fetchStorageGroupIDsByAsset()
+            captureVersionByPart = try catalog.fetchCaptureVersions()
             assetIDsByTag = try catalog.fetchAllTags().reduce(into: [TagKey: Set<UUID>]()) {
                 $0[TagKey(kind: $1.kind, value: $1.value), default: []].insert($1.assetID)
             }

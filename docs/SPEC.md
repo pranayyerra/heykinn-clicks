@@ -731,3 +731,19 @@ Earned against a real 248 GB archive; the stories are in git history.
     the main actor. The queue has nothing derived from it at all. Reach for the
     narrow reload, and make the wide one conditional on having done something to
     justify it.
+
+62. Version both layers, and know which one you are in. Reading a provider
+    export happens twice over: **capture** takes bytes out of the export and
+    keeps them verbatim, **projection** decides what those bytes mean. Only
+    projection was versioned. That is the cheap half — being wrong about
+    meaning costs a re-derivation from rows the catalog already holds, which
+    is why `currentProjectionVersion` can sit at 4 without anyone noticing the
+    first three. Being wrong about *capture* is only recoverable while the
+    export still exists, which is the entire reason the exports are kept. So
+    the reader has a version too, recorded per export part — keyed by the part
+    rather than by the drive's copy of it, because a zip on one drive and its
+    unzipped twin on another are the same content and reading either reads the
+    same sidecars. A part with no record counts as behind: everything imported
+    before the reader was versioned was read by something older than version 1
+    by definition, and treating silence as current would exempt every existing
+    archive from the one check this exists to make.

@@ -61,6 +61,73 @@ extension CatalogStore {
             table: "metadata_schemas", column: "example_payload",
             declaration: "TEXT NOT NULL DEFAULT ''"
         )
+
+        // Which reader last read each part of an export.
+        //
+        // Keyed by the *part*, not by the archive row that was read. A part is
+        // one piece of content that happens to exist as a zip on one drive and
+        // an unzipped folder on another; reading either one reads the same
+        // sidecars, so recording it against a drive's copy would leave the
+        // other copy looking unread and invite the work to be done twice.
+        //
+        // This is the missing half of keeping the exports. Projection is
+        // already versioned and re-runs from payloads the catalog holds; the
+        // exports are kept for the other case — going back for something the
+        // reader never stored at all — and until now nothing recorded which
+        // reader had been over which part, so "re-run in case we missed
+        // something" had no way to know what to re-run or whether it was
+        // needed.
+        try database.exec("""
+        CREATE TABLE IF NOT EXISTS export_capture_versions (
+            set_id TEXT NOT NULL,
+            part_number INTEGER NOT NULL,
+            version INTEGER NOT NULL,
+            captured_at REAL NOT NULL,
+            PRIMARY KEY (set_id, part_number)
+        );
+        """)
+    }
+
+    /// What the app currently *reads out of* an export.
+    ///
+    /// Distinct from `currentProjectionVersion`, and the distinction is the
+    /// whole architecture. Projection interprets payloads the catalog already
+    /// holds: being wrong is cheap, and bumping it re-derives everything from
+    /// rows that never left. Capture decides what is worth taking out of the
+    /// export in the first place — and being wrong there is only recoverable
+    /// while the export still exists, which is why they are kept.
+    ///
+    /// Bump this when the reader learns to take something it used to walk
+    /// past: a sidecar kind it ignored, a field it dropped, a folder it did
+    /// not descend into. Parts below it are worth re-reading; parts at it are
+    /// not, and a 127 GB read that would find nothing is worth not offering.
+    static let currentCaptureVersion = 1
+
+    func recordCapture(
+        setID: String, partNumber: Int,
+        version: Int = CatalogStore.currentCaptureVersion,
+        at moment: Date = Date()
+    ) throws {
+        try database.run("""
+        INSERT INTO export_capture_versions (set_id, part_number, version, captured_at)
+        VALUES (?,?,?,?)
+        ON CONFLICT(set_id, part_number) DO UPDATE SET
+            version = excluded.version,
+            captured_at = excluded.captured_at;
+        """, [
+            .text(setID), .int(Int64(partNumber)),
+            .int(Int64(version)), .date(moment),
+        ])
+    }
+
+    /// Set id → part number → the reader that last read it.
+    func fetchCaptureVersions() throws -> [String: [Int: Int]] {
+        try database.query(
+            "SELECT set_id, part_number, version FROM export_capture_versions;"
+        ) { ($0.text(0), Int($0.int(1)), Int($0.int(2))) }
+        .reduce(into: [:]) { result, row in
+            result[row.0, default: [:]][row.1] = row.2
+        }
     }
 
     private func addMetadataColumnIfMissing(

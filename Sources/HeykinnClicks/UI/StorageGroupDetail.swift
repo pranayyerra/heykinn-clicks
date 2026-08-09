@@ -146,7 +146,28 @@ struct StorageGroupDetail: View {
                     driveNames: names
                 )
             }
+            // Which reader has been over this export.
+            //
+            // The exports are kept so an evolved reader can be run over them
+            // again; this is the line that makes that a decision rather than a
+            // guess. Silent when every part is current, because a 127 GB read
+            // that would find nothing is not worth offering.
+            let behind = store.exportPartsBehindReader(inSet: setID)
+            if !behind.isEmpty {
+                Label {
+                    Text("\(Formatters.count(behind.count, "part")) of this export \(behind.count == 1 ? "was" : "were") read by an older version of the app. Reading them again picks up anything it walked past — nothing is moved or deleted.")
+                        .fixedSize(horizontal: false, vertical: true)
+                } icon: {
+                    Image(systemName: "text.magnifyingglass")
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
             HStack(spacing: 10) {
+                if !behind.isEmpty {
+                    Button("Read them again") { store.backfillExportMetadata() }
+                }
                 if !export.extractableZips.isEmpty {
                     Button("Copy them out of the download") {
                         store.extractTakeoutZips(export.extractableZips.map(\.id))
