@@ -47,22 +47,48 @@ struct LibraryView: View {
         }
     }
 
-    private var filteredAssets: [Asset] {
-        store.assets.filter { asset in
+    /// Everything the grid needs to draw itself, worked out in one walk of the
+    /// archive.
+    ///
+    /// Each figure here used to be its own computed property, and a computed
+    /// property is recomputed at every mention: `filteredAssets` was mentioned
+    /// four times per redraw and walked all 24,000 photographs each time.
+    /// Typing a letter into the search field paid all of it on the main thread
+    /// before a single character appeared.
+    ///
+    /// Gathered here, the archive is walked once and every figure below is read
+    /// rather than recounted.
+    private struct Shown {
+        var matched: [Asset] = []
+        var months: [(month: String, assets: [Asset], impossibleCount: Int)] = []
+        /// How many photographs the archive holds regardless of what is on
+        /// screen, so the empty state can say the rest are still there.
+        var countedTotal = 0
+    }
+
+    private func currentlyShown() -> Shown {
+        var shown = Shown()
+
+        for asset in store.assets {
             // The movie half of a Live Photo belongs to its still, not to the
             // grid as a separate entry.
-            if asset.isLivePhotoMotion { return false }
-            if holdingFilter == .notHeld, !asset.isIndexedOnly { return false }
-            if let residencyFilter, asset.residency != residencyFilter { return false }
+            if asset.isLivePhotoMotion { continue }
+            shown.countedTotal += 1
+
+            if holdingFilter == .notHeld, !asset.isIndexedOnly { continue }
+            if let residencyFilter, asset.residency != residencyFilter { continue }
             if !searchText.isEmpty,
                !asset.originalFilename.localizedCaseInsensitiveContains(searchText) {
-                return false
+                continue
             }
             if let tagFilter, !(store.assetIDsByTag[tagFilter]?.contains(asset.id) ?? false) {
-                return false
+                continue
             }
-            return true
+            shown.matched.append(asset)
         }
+
+        shown.months = Self.monthGroups(of: shown.matched)
+        return shown
     }
 
     /// Timeline-friendly grouping by capture month (falling back to import date).
@@ -72,11 +98,18 @@ struct LibraryView: View {
     /// rather than moved: the grouping follows the recorded date, and quietly
     /// filing a file somewhere other than where its own metadata puts it would
     /// be the same guess as rewriting the date.
-    private var monthGroups: [(month: String, assets: [Asset], impossibleCount: Int)] {
-        let grouped = Dictionary(grouping: filteredAssets) { asset -> Date in
+    private static func monthGroups(
+        of assets: [Asset]
+    ) -> [(month: String, assets: [Asset], impossibleCount: Int)] {
+        // Read once rather than twice per photograph. Worth about a tenth of
+        // the grouping at 24,000 — measured, because the shape of it suggests
+        // more: the date arithmetic itself is the expensive part, and hoisting
+        // the calendar does not touch that.
+        let calendar = Calendar.current
+        let grouped = Dictionary(grouping: assets) { asset -> Date in
             let date = asset.captureDate ?? asset.importDate
-            let components = Calendar.current.dateComponents([.year, .month], from: date)
-            return Calendar.current.date(from: components) ?? date
+            let components = calendar.dateComponents([.year, .month], from: date)
+            return calendar.date(from: components) ?? date
         }
         return grouped
             .sorted { $0.key > $1.key }
@@ -90,11 +123,13 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        NavigationStack(path: $path) {
+        // Once, here, and read from everywhere below.
+        let shown = currentlyShown()
+        return NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
-                    albumHeader
-                    ForEach(monthGroups, id: \.month) { group in
+                    albumHeader(shown)
+                    ForEach(shown.months, id: \.month) { group in
                         Section {
                             // Selection is off inside the grid. Every `Text`
                             // in the window became selectable, and here that
@@ -106,7 +141,7 @@ struct LibraryView: View {
                             // page, which keeps it.
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
                                 ForEach(group.assets) { asset in
-                                    gridItem(asset)
+                                    gridItem(asset, showsResidency: !store.residencyIsUniform)
                                         .textSelection(.disabled)
                                 }
                             }
@@ -136,8 +171,8 @@ struct LibraryView: View {
                             .background(.bar)
                         }
                     }
-                    if filteredAssets.isEmpty {
-                        emptyState
+                    if shown.matched.isEmpty {
+                        emptyState(shown)
                             .frame(maxWidth: .infinity)
                             .padding(.top, 80)
                     }
@@ -149,7 +184,7 @@ struct LibraryView: View {
                 AssetDetailView(assetID: assetID)
             }
             .safeAreaInset(edge: .bottom) {
-                if isSelecting { selectionBar }
+                if isSelecting { selectionBar(shown) }
             }
             .searchable(text: $searchText, prompt: "Filename")
             .sheet(isPresented: $isMoving) {
@@ -213,18 +248,18 @@ struct LibraryView: View {
     /// Extracted from the grid: as an inline `if` inside `LazyVGrid` inside
     /// `Section` inside `LazyVStack`, the type-checker gave up on it.
     @ViewBuilder
-    private func gridItem(_ asset: Asset) -> some View {
+    private func gridItem(_ asset: Asset, showsResidency: Bool) -> some View {
         if isSelecting {
             Button {
                 toggle(asset.id)
             } label: {
-                assetCell(asset)
+                assetCell(asset, showsResidency: showsResidency)
                     .overlay(alignment: .topLeading) { selectionMark(for: asset.id) }
             }
             .buttonStyle(.plain)
         } else {
             NavigationLink(value: asset.id) {
-                assetCell(asset)
+                assetCell(asset, showsResidency: showsResidency)
             }
             .buttonStyle(.plain)
         }
@@ -237,7 +272,7 @@ struct LibraryView: View {
     /// Park, Northgate" against an album years ago, and this is the only
     /// surviving record of it — no photo in the album carries it.
     @ViewBuilder
-    private var albumHeader: some View {
+    private func albumHeader(_ shown: Shown) -> some View {
         if let tagFilter, tagFilter.kind == .album,
            let detail = store.albumDetails[tagFilter.value] {
             VStack(alignment: .leading, spacing: 4) {
@@ -246,7 +281,7 @@ struct LibraryView: View {
                     .bold()
                 Text(
                     [detail.date.map(Formatters.providerDateOnly.string(from:)),
-                     Formatters.count(filteredAssets.count, "photo")]
+                     Formatters.count(shown.matched.count, "photo")]
                         .compactMap { $0 }
                         .joined(separator: " · ")
                 )
@@ -345,7 +380,7 @@ struct LibraryView: View {
     /// Kept to moving photos between groups: that is the action the storage
     /// model needs and could not offer, and a bar that grows a dozen verbs is
     /// how a destructive one ends up next to a harmless one.
-    private var selectionBar: some View {
+    private func selectionBar(_ shown: Shown) -> some View {
         HStack(spacing: 12) {
             Text(selection.isEmpty
                  ? "Select photos to move them into a group"
@@ -353,9 +388,9 @@ struct LibraryView: View {
                 .font(.callout)
             Spacer(minLength: 8)
             Button("Select all shown") {
-                selection = Set(filteredAssets.map(\.id))
+                selection = Set(shown.matched.map(\.id))
             }
-            .disabled(filteredAssets.isEmpty)
+            .disabled(shown.matched.isEmpty)
             Button("Clear") { selection = [] }
                 .disabled(selection.isEmpty)
             Button("Move to group…") { isMoving = true }
@@ -365,10 +400,6 @@ struct LibraryView: View {
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
         .background(.bar)
-    }
-
-    private var countedAssetTotal: Int {
-        store.assets.count { !$0.isLivePhotoMotion }
     }
 
     /// Whether the reader has narrowed the view themselves.
@@ -381,13 +412,13 @@ struct LibraryView: View {
     /// matched none needs telling that the photos are still there. "No assets"
     /// told neither, in the app's own word for a photograph.
     @ViewBuilder
-    private var emptyState: some View {
+    private func emptyState(_ shown: Shown) -> some View {
         if isNarrowed {
             ContentUnavailableView(
                 "Nothing matches",
                 systemImage: "magnifyingglass",
                 description: Text("The archive still holds "
-                                  + "\(Formatters.count(countedAssetTotal, "photo")). "
+                                  + "\(Formatters.count(shown.countedTotal, "photo")). "
                                   + "Clear the search or the filters to see them.")
             )
         } else {
@@ -411,18 +442,7 @@ struct LibraryView: View {
             + "clock that was never set. Shown where the files claim, unchanged."
     }
 
-    /// True when every photo in the archive lives in the same domain, which is
-    /// the normal state and the one where the badge is pure repetition.
-    private var residencyIsUniform: Bool {
-        var seen: ResidencyDomain?
-        for asset in store.assets {
-            if let seen, seen != asset.residency { return false }
-            seen = asset.residency
-        }
-        return true
-    }
-
-    private func assetCell(_ asset: Asset) -> some View {
+    private func assetCell(_ asset: Asset, showsResidency: Bool) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             AssetThumbnailView(asset: asset)
                 .frame(height: 120)
@@ -435,7 +455,7 @@ struct LibraryView: View {
                 // this drew the same badge on all 21,000 tiles, so the one
                 // place the badge matters, a photo that is somewhere else, had
                 // nothing to stand out from.
-                if !residencyIsUniform {
+                if showsResidency {
                     ResidencyBadge(domain: asset.residency)
                 }
                 // The archive can see this photograph and holds nothing of it.

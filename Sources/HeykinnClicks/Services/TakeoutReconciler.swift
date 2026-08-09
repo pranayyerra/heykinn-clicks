@@ -25,16 +25,21 @@ enum TakeoutReconciler {
         assetsNeedingReplica: Set<UUID>
     ) -> Result {
         var claimed: [TargetReplicaState] = []
+        // The set answers "already claimed" in constant time. Scanning the
+        // array did the same thing in a walk that grew with every claim, so a
+        // drive holding the whole archive paid for it once per file.
+        var claimedAssetIDs: Set<UUID> = []
         var scanned = 0
         for fileURL in ImportService.mediaFileURLs(under: [folderURL]) {
             scanned += 1
             guard let hash = try? HashingService.sha256(of: fileURL),
                   let assetID = assetIDsByHash[hash],
                   assetsNeedingReplica.contains(assetID),
-                  !claimed.contains(where: { $0.assetID == assetID }),
+                  !claimedAssetIDs.contains(assetID),
                   fileURL.path.hasPrefix(mountURL.path + "/")
             else { continue }
             let volumeRelative = String(fileURL.path.dropFirst(mountURL.path.count + 1))
+            claimedAssetIDs.insert(assetID)
             claimed.append(TargetReplicaState(
                 assetID: assetID,
                 targetID: targetID,
@@ -57,6 +62,7 @@ enum TakeoutReconciler {
         assetsNeedingReplica: Set<UUID>
     ) -> Result {
         var claimed: [TargetReplicaState] = []
+        var claimedAssetIDs: Set<UUID> = []
         guard zipURL.path.hasPrefix(mountURL.path + "/") else {
             return Result(claimedReplicas: [], scannedFileCount: 0)
         }
@@ -66,8 +72,9 @@ enum TakeoutReconciler {
             guard let hash = try? HashingService.sha256OfZipEntry(zipURL: zipURL, entry: entry),
                   let assetID = assetIDsByHash[hash],
                   assetsNeedingReplica.contains(assetID),
-                  !claimed.contains(where: { $0.assetID == assetID })
+                  !claimedAssetIDs.contains(assetID)
             else { continue }
+            claimedAssetIDs.insert(assetID)
             claimed.append(TargetReplicaState(
                 assetID: assetID,
                 targetID: targetID,

@@ -27,15 +27,6 @@ struct DuplicatesView: View {
         }
     }
 
-    private var residencyIsUniform: Bool {
-        var seen: ResidencyDomain?
-        for asset in store.assets {
-            if let seen, seen != asset.residency { return false }
-            seen = asset.residency
-        }
-        return true
-    }
-
     var body: some View {
         NavigationStack(path: $path) {
             Group {
@@ -109,7 +100,7 @@ struct DuplicatesView: View {
                         }
                         .buttonStyle(.plain)
                         Spacer()
-                        if !residencyIsUniform {
+                        if !store.residencyIsUniform {
                             ResidencyBadge(domain: asset.residency)
                         }
                     }

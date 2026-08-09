@@ -11,19 +11,14 @@ struct OverviewView: View {
 
     // MARK: - Derived figures
 
-    /// Live Photo motion halves belong to their still, not to the counts.
-    private var countedAssets: [Asset] {
-        store.assets.filter { !$0.isLivePhotoMotion }
-    }
+    /// Both tallied once per catalog change, in `AppStore`. They were computed
+    /// here, from properties that rebuilt them at every mention — and this
+    /// screen mentions them about fifteen times to write one paragraph, so a
+    /// redraw walked the whole archive fifteen times over. Live Photo motion
+    /// halves belong to their still and are excluded from both.
+    private var protectionCounts: [ProtectionState: Int] { store.protectionCountsByState }
 
-    private var protectionCounts: [ProtectionState: Int] {
-        var counts: [ProtectionState: Int] = [:]
-        for asset in countedAssets {
-            guard let state = store.protectionStates[asset.id], state != .notApplicable else { continue }
-            counts[state, default: 0] += 1
-        }
-        return counts
-    }
+    private var isEmptyArchive: Bool { store.countedPhotoTotal == 0 }
 
 
     /// Sources asking for more copies than they name devices to hold them.
@@ -92,11 +87,28 @@ struct OverviewView: View {
     }
 
 
-    private var recentAssets: [Asset] {
-        countedAssets
-            .sorted { ($0.captureDate ?? $0.importDate) > ($1.captureDate ?? $1.importDate) }
-            .prefix(14)
-            .map { $0 }
+    private var recentAssets: [Asset] { Self.newest(14, in: store.assets) }
+
+    /// The newest few, without sorting the archive to find them.
+    ///
+    /// Fourteen thumbnails used to cost a full sort of all 24,000 photographs,
+    /// paid twice per redraw — once to ask whether there were any and once to
+    /// draw them. A photograph that cannot displace the oldest of the fourteen
+    /// already held is dropped where it stands, so this is one walk and a
+    /// fourteen-long list.
+    /// Not private so the equivalence with the sort it replaced stays under
+    /// test; see `NewestSelectionTests`.
+    static func newest(_ count: Int, in assets: [Asset]) -> [Asset] {
+        var best: [(asset: Asset, date: Date)] = []
+        best.reserveCapacity(count + 1)
+        for asset in assets where !asset.isLivePhotoMotion {
+            let date = asset.captureDate ?? asset.importDate
+            if best.count == count, date <= best[count - 1].date { continue }
+            let index = best.firstIndex { date > $0.date } ?? best.count
+            best.insert((asset, date), at: index)
+            if best.count > count { best.removeLast() }
+        }
+        return best.map(\.asset)
     }
 
     private var pendingArchiveCount: Int {
@@ -109,7 +121,7 @@ struct OverviewView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 16) {
-                if countedAssets.isEmpty {
+                if isEmptyArchive {
                     firstRun
                 } else {
                     // The screen's own subtitle is "the short answer", and it
@@ -324,7 +336,7 @@ struct OverviewView: View {
 
 
     private var safetyHeadline: String {
-        if countedAssets.isEmpty {
+        if isEmptyArchive {
             return "Nothing imported yet. Import a folder or a Google export to start the archive."
         }
         // Nowhere to put anything is its own answer, and it is not a shortfall

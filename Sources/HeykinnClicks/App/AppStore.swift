@@ -25,6 +25,24 @@ final class AppStore: ObservableObject {
     /// What each drive holds, tallied once per catalog change rather than
     /// re-filtered by every view that draws a drive.
     @Published private(set) var driveBreakdowns: [UUID: DriveContentBreakdown] = [:]
+    /// How many photographs sit at each verdict, on the same terms as
+    /// `countedPhotoTotal`: motion halves excluded, and photos the policy has
+    /// nothing to say about left out.
+    ///
+    /// Here for the reason `driveBreakdowns` is: the Overview reads this figure
+    /// a dozen times to write one paragraph — for the headline, the evidence
+    /// line, and every tile under them — and each read used to walk the whole
+    /// catalog again.
+    @Published private(set) var protectionCountsByState: [ProtectionState: Int] = [:]
+    /// Photographs in the archive, counting a Live Photo once rather than
+    /// twice. What "21,401 photos" means everywhere it is printed.
+    @Published private(set) var countedPhotoTotal: Int = 0
+    /// Whether every photo in the archive lives in the same residency domain —
+    /// the normal state, and the one where a per-photo badge is pure
+    /// repetition. The library grid and the duplicates list both ask it to
+    /// decide whether to draw the badge at all, and both asked it once per row
+    /// of a walk of the whole archive.
+    @Published private(set) var residencyIsUniform: Bool = true
     /// A Merkle tree per target over what the catalog records it holding, so
     /// "do these two targets agree?" costs one comparison instead of a sweep.
     /// The few directories a target's recorded paths hang from.
@@ -2409,6 +2427,26 @@ final class AppStore: ObservableObject {
             replicaStates: replicaStates,
             desiredCopies: { [self] in desiredCopies(forAsset: $0) }
         )
+
+        // Off the verdicts just computed, in the one pass that has them.
+        // Residency is judged over every row, motion halves included: the
+        // question is whether the archive holds anything anywhere else, and a
+        // half that had wandered would still be somewhere else.
+        var counted = 0
+        var verdictCounts: [ProtectionState: Int] = [:]
+        var seenResidency: ResidencyDomain?
+        var uniformResidency = true
+        for asset in assets {
+            if let seenResidency, seenResidency != asset.residency { uniformResidency = false }
+            if seenResidency == nil { seenResidency = asset.residency }
+            guard !asset.isLivePhotoMotion else { continue }
+            counted += 1
+            guard let state = protectionStates[asset.id], state != .notApplicable else { continue }
+            verdictCounts[state, default: 0] += 1
+        }
+        countedPhotoTotal = counted
+        protectionCountsByState = verdictCounts
+        residencyIsUniform = uniformResidency
 
         var breakdowns: [UUID: DriveContentBreakdown] = [:]
         for replica in replicaStates {

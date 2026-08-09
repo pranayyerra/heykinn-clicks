@@ -97,6 +97,13 @@ final class CatalogStore {
             PRIMARY KEY (asset_id, drive_id)
         );
 
+        -- The primary key is led by `asset_id`, so it answers "where is this
+        -- photo" and nothing else. Every per-drive question — what this drive
+        -- holds inside a zip, what to repoint when an export moves, what to
+        -- forget when a device is unregistered — asks by `drive_id` alone, and
+        -- without this walked all of the largest table in the catalog.
+        CREATE INDEX IF NOT EXISTS idx_replica_states_drive ON replica_states(drive_id);
+
         CREATE TABLE IF NOT EXISTS replication_tasks (
             id TEXT PRIMARY KEY,
             asset_id TEXT NOT NULL,
