@@ -113,3 +113,48 @@ struct PathRow: View {
         }
     }
 }
+
+/// A folder named on screen, and a way to go and look at it.
+///
+/// A path the app prints is a real place on a real disk. Rendered as grey text
+/// it is a dead end — something to read, retype into Finder, and mistype. This
+/// is that path with somewhere to go.
+///
+/// Falls back to selectable text when the disk is not here, which is the case
+/// the tooltip has to explain rather than the app pretending the click failed.
+struct FolderLink: View {
+    let path: String
+    let display: String
+    var symbol: String = "folder"
+
+    init(path: String, display: String, symbol: String = "folder") {
+        self.path = path
+        self.display = display
+        self.symbol = symbol
+    }
+
+    init(location: AppStore.Location) {
+        self.init(path: location.path, display: location.display)
+    }
+
+    var body: some View {
+        if RevealInFinder.canReveal(path) {
+            Button {
+                RevealInFinder.reveal(path)
+            } label: {
+                Label(display, systemImage: symbol)
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .buttonStyle(.link)
+            .help("Show \(path) in Finder")
+        } else {
+            Label(display, systemImage: symbol)
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .help("\(path) — plug the drive in to open it")
+        }
+    }
+}

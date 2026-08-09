@@ -380,8 +380,16 @@ struct DrivesView: View {
         let reclaimable = store.stagingReclaimPlan
         return VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
-                Image(systemName: "tray")
-                Text("Staging · \(Formatters.bytes.string(fromByteCount: store.staging.totalBytes))")
+                // The one path on this screen that named a real folder and gave
+                // no way to it — it was a tooltip, which is somewhere to read a
+                // path from, not somewhere to go.
+                FolderLink(
+                    path: store.staging.rootURL.path,
+                    display: "Staging",
+                    symbol: "tray"
+                )
+                Text("· \(Formatters.bytes.string(fromByteCount: store.staging.totalBytes))")
+                    .foregroundStyle(.secondary)
                 if stagedOnly > 0 {
                     Text("· \(stagedOnly.formatted()) waiting for a target")
                         .foregroundStyle(.orange)
@@ -397,6 +405,7 @@ struct DrivesView: View {
                     Text(store.reclaimStagingWhenSafe
                          ? "\(Formatters.bytes.string(fromByteCount: reclaimable.bytes)) of this is content your drives already hold safely, and is released after the next sync."
                          : "\(Formatters.bytes.string(fromByteCount: reclaimable.bytes)) of this is content your drives already hold safely.")
+                        .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Button("Release now") { store.reclaimStaging(force: true) }
                         .buttonStyle(.link)
@@ -405,8 +414,10 @@ struct DrivesView: View {
             }
         }
         .font(.caption)
-        .foregroundStyle(.secondary)
-        .help(store.staging.rootURL.path)
+        // Not `.foregroundStyle(.secondary)` on the whole footer: it reaches
+        // into the link and paints it grey, so the one thing here that goes
+        // somewhere stops looking like it does. Each piece of text says what
+        // colour it is.
     }
 
     private func registrationSheet(_ volume: VolumeInfo) -> some View {

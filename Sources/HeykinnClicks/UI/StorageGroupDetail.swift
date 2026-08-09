@@ -330,27 +330,3 @@ private struct SectionCaption: View {
 /// Dims rather than disappears when the drive is away. Where a photo lives is
 /// worth knowing precisely when you cannot get at it — that is the moment
 /// somebody is deciding which drive to go and find.
-private struct FolderLink: View {
-    let location: AppStore.Location
-
-    var body: some View {
-        if RevealInFinder.canReveal(location.path) {
-            Button {
-                RevealInFinder.reveal(location.path)
-            } label: {
-                Label(location.display, systemImage: "folder")
-                    .font(.caption)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-            .buttonStyle(.link)
-            .help("Show \(location.path) in Finder")
-        } else {
-            Label(location.display, systemImage: "folder")
-                .font(.caption)
-                .foregroundStyle(.tertiary)
-                .textSelection(.enabled)
-                .fixedSize(horizontal: false, vertical: true)
-                .help("\(location.path) — plug the drive in to open it")
-        }
-    }
-}
