@@ -129,6 +129,11 @@ extension ViolationKind {
     /// order made those read as equally urgent.
     var severity: Int {
         switch self {
+        // Above a damaged copy: a damaged file has a good twin to restore
+        // from, and a missing export part is the source document itself
+        // gone — with, on a real archive, thousands of photos inside it that
+        // have no file of their own anywhere.
+        case .exportPartMissing: return 6
         case .replicaDrift: return 5
         case .multiDomainCoexistence: return 4
         case .residencyPresenceMismatch: return 3
@@ -144,12 +149,13 @@ extension ViolationKind {
         case .migrationCleanupPending: return "clock.badge.exclamationmark"
         case .replicaDrift: return "exclamationmark.triangle"
         case .orphanReplica: return "externaldrive.badge.questionmark"
+        case .exportPartMissing: return "shippingbox.badge.exclamationmark"
         }
     }
 
     var tint: Color {
         switch self {
-        case .multiDomainCoexistence, .replicaDrift: return .red
+        case .exportPartMissing, .multiDomainCoexistence, .replicaDrift: return .red
         case .residencyPresenceMismatch: return .orange
         case .migrationCleanupPending, .orphanReplica: return .yellow
         }

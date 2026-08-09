@@ -7,9 +7,33 @@ enum ViolationScanner {
         assets: [Asset],
         replicaStates: [TargetReplicaState],
         migrationJobs: [MigrationJob],
-        targetsByID: [UUID: ReplicationTarget]
+        targetsByID: [UUID: ReplicationTarget],
+        takeoutArchives: [TakeoutArchive] = []
     ) -> [Violation] {
         var violations: [Violation] = []
+
+        // One per drive rather than one per file. Six parts of an export
+        // vanishing is one event with one cause — a folder dragged to the bin,
+        // a drive tidied up — and six identical rows describe it worse than a
+        // count does. It also keeps the violation's identity unique, which is
+        // derived from its kind and the things it names.
+        let goneByTarget = Dictionary(
+            grouping: takeoutArchives.filter { $0.missingSince != nil && $0.targetID != nil },
+            by: { $0.targetID! }
+        )
+        for (targetID, gone) in goneByTarget.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            let name = targetsByID[targetID]?.name ?? "a drive"
+            let since = gone.compactMap(\.missingSince).min()
+            violations.append(Violation(
+                kind: .exportPartMissing,
+                targetID: targetID,
+                detail: "\(Formatters.count(gone.count, "export file")) that \(name) was holding "
+                    + "\(gone.count == 1 ? "is" : "are") no longer there"
+                    + (since.map { " — first noticed \(Formatters.relative($0))" } ?? "")
+                    + ". \(gone.map(\.displayName).sorted().prefix(3).joined(separator: ", "))"
+                    + (gone.count > 3 ? " and \(gone.count - 3) more." : ".")
+            ))
+        }
 
         let activeMigrationAssetIDs: Set<UUID> = Set(
             migrationJobs.filter { $0.state.isActive }.flatMap(\.assetIDs)

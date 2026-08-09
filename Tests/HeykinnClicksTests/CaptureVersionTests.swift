@@ -90,3 +90,78 @@ final class CaptureVersionTests: XCTestCase {
         XCTAssertEqual(store.exportPartsBehindReader(inSet: "set"), [1, 3], "part 2 has been read by this reader; the others have not")
     }
 }
+
+/// An export file that was on a drive and is not any more.
+///
+/// Tracked since exports were first scanned, and until now visible only inside
+/// a panel two clicks deep — for a loss that, on a real archive, takes ~1,800
+/// photos with no file of their own out of a drive.
+final class MissingExportPartTests: XCTestCase {
+
+    private func drive(_ id: UUID, _ name: String) -> ReplicationTarget {
+        ReplicationTarget(
+            id: id, name: name, volumeUUID: nil, markerToken: "token",
+            registeredAt: Date(), lastSeenAt: nil,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+        )
+    }
+
+    private func archive(_ part: Int, on drive: UUID?, missing: Date? = nil) -> TakeoutArchive {
+        var one = TakeoutArchive(
+            id: UUID(), path: "/Volumes/Drive/takeout-set-00\(part).zip",
+            kind: .zip, sizeBytes: 1, targetID: drive, discoveredAt: Date(),
+            importedAt: Date(), importBatchID: nil, importedAssetCount: 1,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "set", partNumber: part
+        )
+        one.missingSince = missing
+        return one
+    }
+
+    func testPartsGoneFromOneDriveAreOneFindingNotSix() {
+        let drive = UUID()
+        let target = self.drive(drive, "Owner's Back")
+        let gone = (1...6).map { archive($0, on: drive, missing: Date()) }
+        let held = [archive(7, on: drive)]
+
+        let violations = ViolationScanner.scan(
+            assets: [], replicaStates: [], migrationJobs: [],
+            targetsByID: [drive: target],
+            takeoutArchives: gone + held
+        )
+        XCTAssertEqual(violations.count, 1, "one event, one cause, one row")
+        let only = try? XCTUnwrap(violations.first)
+        XCTAssertEqual(only?.kind, .exportPartMissing)
+        XCTAssertEqual(only?.targetID, drive)
+        XCTAssertTrue(only?.detail.contains("6 export files") ?? false, only?.detail ?? "")
+        XCTAssertTrue(only?.detail.contains("Owner's Back") ?? false)
+    }
+
+    func testEachDriveAnswersForItself() {
+        let a = UUID(), b = UUID()
+        let violations = ViolationScanner.scan(
+            assets: [], replicaStates: [], migrationJobs: [],
+            targetsByID: [
+                a: self.drive(a, "A"),
+                b: self.drive(b, "B"),
+            ],
+            takeoutArchives: [
+                archive(1, on: a, missing: Date()),
+                archive(2, on: b, missing: Date()),
+            ]
+        )
+        XCTAssertEqual(violations.count, 2)
+        XCTAssertEqual(Set(violations.map { $0.id }).count, 2, "and each has an identity of its own")
+    }
+
+    /// The quiet case: nothing missing must produce nothing at all, or the
+    /// review list grows a permanent row describing a healthy archive.
+    func testAnExportThatIsAllThereSaysNothing() {
+        let drive = UUID()
+        let violations = ViolationScanner.scan(
+            assets: [], replicaStates: [], migrationJobs: [],
+            targetsByID: [drive: self.drive(drive, "A")],
+            takeoutArchives: (1...12).map { archive($0, on: drive) }
+        )
+        XCTAssertTrue(violations.isEmpty)
+    }
+}

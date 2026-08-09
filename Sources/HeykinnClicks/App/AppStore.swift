@@ -2389,7 +2389,8 @@ final class AppStore: ObservableObject {
             assets: assets,
             replicaStates: replicaStates,
             migrationJobs: migrationJobs,
-            targetsByID: targetsByID
+            targetsByID: targetsByID,
+            takeoutArchives: takeoutArchives
         )
         protectionStates = ProtectionEvaluator.protectionStates(
             for: assets,
