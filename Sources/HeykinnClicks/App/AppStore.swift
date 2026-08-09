@@ -1768,6 +1768,49 @@ final class AppStore: ObservableObject {
         )
     }
 
+    /// What each device actually holds of one group, and in what form.
+    ///
+    /// The archive-wide split cannot answer "where are the rest of them": it
+    /// collapses across devices, so a photo counts as copied-out if *any* drive
+    /// has a real file of it. On a real archive that hid a genuine difference —
+    /// the Photos library group had 263 of its 272 counted inside the download
+    /// on one drive and only 172 on the other, so one drive was carrying 91
+    /// more of them as their own files than the other.
+    struct GroupHolding: Identifiable {
+        var targetID: UUID
+        var photos: Int
+        var insideDownload: Int
+        var id: UUID { targetID }
+    }
+
+    func holdings(forStorageGroup groupID: UUID) -> [GroupHolding] {
+        var byTarget: [UUID: (photos: Set<UUID>, inside: Int)] = [:]
+        for replica in replicaStates where replica.state == .present {
+            guard storageGroupIDByAsset[replica.assetID] == groupID,
+                  assetsByID[replica.assetID]?.isLivePhotoMotion == false
+            else { continue }
+            var entry = byTarget[replica.targetID] ?? ([], 0)
+            entry.photos.insert(replica.assetID)
+            if replica.relativePath?.hasPrefix(ReplicationService.archivePartPrefix) == true {
+                entry.inside += 1
+            }
+            byTarget[replica.targetID] = entry
+        }
+        // Named devices first and in the order the group names them, so the
+        // list reads the same way the copies line above it does; anything else
+        // holding some follows, because a device nobody named still has bytes.
+        let named = storageGroupsByID[groupID]?.destinationTargetIDs ?? []
+        let rest = byTarget.keys.filter { !named.contains($0) }.sorted {
+            (targetsByID[$0]?.name ?? "") < (targetsByID[$1]?.name ?? "")
+        }
+        return (named + rest).compactMap { targetID in
+            guard let entry = byTarget[targetID] else { return nil }
+            return GroupHolding(
+                targetID: targetID, photos: entry.photos.count, insideDownload: entry.inside
+            )
+        }
+    }
+
     /// The download sets holding any of this group's photos, newest first.
     ///
     /// Lets a group show the part grid for the download that actually backs it,

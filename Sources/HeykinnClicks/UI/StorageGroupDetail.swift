@@ -33,6 +33,7 @@ struct StorageGroupDetail: View {
                 VStack(alignment: .leading, spacing: 18) {
                     copies
                     keptAs
+                    whereTheyAre
                     ForEach(backingSets, id: \.self) { download($0) }
                 }
                 .padding(18)
@@ -135,6 +136,41 @@ struct StorageGroupDetail: View {
                     )
                     .font(.callout)
                     .foregroundStyle(.secondary)
+                }
+            }
+        }
+    }
+
+    /// Which device holds how many, and how many of those are counted inside a
+    /// download rather than written out.
+    ///
+    /// The line above says how the set as a whole is kept; this says where.
+    /// Without it the detail answered "where are the ones inside the download"
+    /// — the part grid does that — and never answered where the rest were, so
+    /// a set with no download behind it said nothing about its whereabouts at
+    /// all. It is also the only place the per-device difference shows: the two
+    /// drives here do not hold the same mix.
+    @ViewBuilder
+    private var whereTheyAre: some View {
+        let holdings = store.holdings(forStorageGroup: group.id)
+        if !holdings.isEmpty {
+            VStack(alignment: .leading, spacing: 6) {
+                SectionCaption("Where they are")
+                ForEach(holdings) { holding in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: store.targetsByID[holding.targetID]?.kind == .hostDevice
+                              ? "laptopcomputer" : "externaldrive.fill")
+                            .foregroundStyle(.secondary)
+                            .frame(width: 16)
+                        Text(store.targetsByID[holding.targetID]?.name ?? "A device that is gone")
+                        Spacer(minLength: 8)
+                        Text(holding.insideDownload > 0
+                             ? "\(holding.photos.formatted()) · \(holding.insideDownload.formatted()) inside the download"
+                             : "\(holding.photos.formatted()) as their own files")
+                            .foregroundStyle(.secondary)
+                            .monospacedDigit()
+                    }
+                    .font(.callout)
                 }
             }
         }

@@ -289,3 +289,69 @@ extension CopyCoverageTests {
         XCTAssertEqual(store.exportSetIDs(backingStorageGroup: groupID), ["abc"])
     }
 }
+
+/// Where a group's photos are, device by device.
+extension CopyCoverageTests {
+
+    /// The archive-wide split cannot answer "where are the rest of them".
+    ///
+    /// It collapses across devices — a photo counts as copied-out if *any*
+    /// drive has a real file — so a set whose two drives hold different mixes
+    /// reads as one number. On a real archive one drive was carrying 91 more
+    /// photos as their own files than the other, and nothing said so.
+    func testHoldingsAreCountedPerDeviceNotAcrossThem() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let groupID = UUID(), driveA = UUID(), driveB = UUID()
+        try catalog.upsertStorageGroup(StorageGroup(
+            id: groupID, label: "Mixed", desiredCopies: 2,
+            destinationTargetIDs: [driveA, driveB], destinationMode: .chosen, createdAt: Date()
+        ))
+        let one = asset("one.jpg"), two = asset("two.jpg")
+        for a in [one, two] { try catalog.upsertAsset(a) }
+        try catalog.assignStorageGroup(groupID, toAssets: [one.id, two.id])
+
+        let part = ReplicationService.archivePartPrefix + "takeout-set-001.zip"
+        // Drive A keeps both inside the download; drive B has written one out.
+        try hold(catalog, one.id, on: driveA, path: part)
+        try hold(catalog, two.id, on: driveA, path: part)
+        try hold(catalog, one.id, on: driveB, path: part)
+        try hold(catalog, two.id, on: driveB, path: "bb/two.jpg")
+
+        let store = makeStore(in: directory)
+        let holdings = store.holdings(forStorageGroup: groupID)
+        XCTAssertEqual(holdings.map(\.targetID), [driveA, driveB], "named devices, in the named order")
+        XCTAssertEqual(holdings.map(\.photos), [2, 2], "both hold everything")
+        XCTAssertEqual(
+            holdings.map(\.insideDownload), [2, 1],
+            "and they do not hold it the same way, which is the point"
+        )
+    }
+
+    /// A set with no download behind it still has to say where it is. This was
+    /// the case that said nothing at all: no download section, and the copies
+    /// line above is a policy, not an observation.
+    func testASetOfPlainFilesStillSaysWhereItIs() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let groupID = UUID(), drive = UUID()
+        try catalog.upsertStorageGroup(StorageGroup(
+            id: groupID, label: "SampleBooks", desiredCopies: 1,
+            destinationTargetIDs: [drive], destinationMode: .chosen, createdAt: Date()
+        ))
+        let book = asset("book1.png")
+        try catalog.upsertAsset(book)
+        try catalog.assignStorageGroup(groupID, toAssets: [book.id])
+        try hold(catalog, book.id, on: drive, path: "8a/book1.png")
+
+        let store = makeStore(in: directory)
+        let holdings = store.holdings(forStorageGroup: groupID)
+        XCTAssertEqual(holdings.count, 1)
+        XCTAssertEqual(holdings.first?.photos, 1)
+        XCTAssertEqual(holdings.first?.insideDownload, 0)
+    }
+}
