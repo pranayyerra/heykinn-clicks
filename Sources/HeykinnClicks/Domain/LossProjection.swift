@@ -81,6 +81,20 @@ extension LossProjection {
     }
 
     static func project(_ loss: ArchiveLoss, in input: Input) -> LossProjection {
+        projectAll([loss], in: input)[loss] ?? LossProjection()
+    }
+
+    /// Every failure mode in one pass over the archive.
+    ///
+    /// Not a convenience: the chips that offer these are labelled with what
+    /// each would cost, so all of them are wanted at once, on every redraw.
+    /// Asking `project` four times means four walks of 21,401 photos, which is
+    /// the shape of cost this screen has already been slow from once.
+    ///
+    /// It is also the reason there is one implementation rather than two — a
+    /// bulk path that drifted from the single path would be a set of numbers
+    /// that disagreed with each other on the same screen.
+    static func projectAll(_ losses: [ArchiveLoss], in input: Input) -> [ArchiveLoss: LossProjection] {
         // Only a present replica is a copy. A pending one is a promise and a
         // damaged one no longer matches what was imported — counting either as
         // a survivor is how a screen tells somebody they are safe because a
@@ -90,7 +104,9 @@ extension LossProjection {
             byAsset[replica.assetID, default: []].append(replica)
         }
 
-        var result = LossProjection()
+        var results: [ArchiveLoss: LossProjection] = [:]
+        for loss in losses { results[loss] = LossProjection() }
+
         for photo in input.photos {
             let copies = byAsset[photo.id] ?? []
             // Staging is a copy — an unmanaged one, on this Mac. It is the only
@@ -101,24 +117,24 @@ extension LossProjection {
             let staged = photo.stagingRelativePath != nil
 
             if copies.isEmpty && !staged {
-                result.alreadyUnprotected += 1
+                for loss in losses { results[loss]?.alreadyUnprotected += 1 }
                 continue
             }
 
             let before = copies.count + (staged ? 1 : 0)
-            let surviving = copies.filter { survives($0, loss) }.count
-                + (staged && !stagingIsLost(loss, host: input.hostTargetID) ? 1 : 0)
-
-            if surviving == 0 {
-                result.lost += 1
-                if let group = input.groupOfAsset[photo.id] {
-                    result.lostByGroup[group, default: 0] += 1
+            let group = input.groupOfAsset[photo.id]
+            for loss in losses {
+                let surviving = copies.reduce(0) { $0 + (survives($1, loss) ? 1 : 0) }
+                    + (staged && !stagingIsLost(loss, host: input.hostTargetID) ? 1 : 0)
+                if surviving == 0 {
+                    results[loss]?.lost += 1
+                    if let group { results[loss]?.lostByGroup[group, default: 0] += 1 }
+                } else if surviving == 1 && before > 1 {
+                    results[loss]?.reducedToOneCopy += 1
                 }
-            } else if surviving == 1 && before > 1 {
-                result.reducedToOneCopy += 1
             }
         }
-        return result
+        return results
     }
 
     private static func survives(_ replica: TargetReplicaState, _ loss: ArchiveLoss) -> Bool {

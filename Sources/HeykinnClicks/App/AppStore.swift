@@ -1877,6 +1877,26 @@ final class AppStore: ObservableObject {
             }
             result[group.id] = row
         }
+        // One pass for every failure mode, off the same rows.
+        let lossInput = LossProjection.Input(
+            assets: assets,
+            replicas: replicaStates,
+            groupOfAsset: storageGroupIDByAsset,
+            hostTargetID: targets.first { $0.kind == .hostDevice }?.id
+        )
+        // Devices only. An export was briefly offered here as a fourth thing
+        // that could be lost, which is a category error twice over: the export
+        // files sit *on* these devices, so there is no way to lose them without
+        // acting on a device, and there is one export per download rather than
+        // one in total — a chip per Takeout over ten years is not a row of
+        // peers, it is a list. Losing a device is a failure; deleting an export
+        // is a decision, and the two do not belong under one verb.
+        //
+        // `ArchiveLoss` keeps the case: the projection is right, tested, and
+        // the honest place for it is beside the exports themselves.
+        let failures: [ArchiveLoss] = targets.map { .device($0.id) }
+        lossByFailure = LossProjection.projectAll(failures, in: lossInput)
+
         photoCountByStorageGroup = assets.reduce(into: [:]) { counts, asset in
             guard !asset.isLivePhotoMotion, let groupID = storageGroupIDByAsset[asset.id] else { return }
             counts[groupID, default: 0] += 1
@@ -1971,6 +1991,36 @@ final class AppStore: ObservableObject {
     /// group → place → what is there. Empty for a pair with nothing between
     /// them, which the grid draws as "not asked to hold it".
     @Published private(set) var groupPlaceCells: [UUID: [UUID: GroupPlaceCell]] = [:]
+
+    /// What each way of losing something would cost, worst first.
+    ///
+    /// Precomputed with the rest of the derived state because the chips that
+    /// offer these are labelled with their own cost — so every one of them is
+    /// wanted on every redraw, not only the one somebody picked.
+    @Published private(set) var lossByFailure: [ArchiveLoss: LossProjection] = [:]
+
+    /// The failure modes worth offering, ordered by what they would cost.
+    ///
+    /// Ranked rather than listed in device order, because the point of putting
+    /// them side by side is that on a real archive they are wildly unequal: no
+    /// drive here is the sole holder of anything, and the download files hold
+    /// 21,380 photos hostage.
+    var rankedFailures: [(loss: ArchiveLoss, projection: LossProjection)] {
+        lossByFailure
+            .map { (loss: $0.key, projection: $0.value) }
+            .sorted {
+                if $0.projection.lost != $1.projection.lost { return $0.projection.lost > $1.projection.lost }
+                return $0.projection.reducedToOneCopy > $1.projection.reducedToOneCopy
+            }
+    }
+
+    func failureName(_ loss: ArchiveLoss) -> String {
+        switch loss {
+        case .device(let id): return targetsByID[id]?.name ?? "a device"
+        case .downloadsEverywhere: return "my Google downloads"
+        case .downloadsOn(let id): return "the downloads on \(targetsByID[id]?.name ?? "a device")"
+        }
+    }
 
     /// Photos in each group that are on fewer places than the group asks for.
     ///

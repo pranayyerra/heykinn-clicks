@@ -84,6 +84,12 @@ struct StorageMatrix: View {
     @State private var plan: RetargetPlan?
     @State private var confirmingApply = false
 
+    /// A failure being played out against the table. Nil means the table is
+    /// showing what is actually there, which is its normal and default state:
+    /// this is the one screen whose whole job is telling the truth, so a
+    /// hypothesis on it has to be loud, opt-in, and easy to leave.
+    @State private var whatIf: ArchiveLoss?
+
     @State private var renaming: StorageGroup?
     @State private var renameText = ""
     @State private var deleting: StorageGroup?
@@ -106,8 +112,23 @@ struct StorageMatrix: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                 } else {
+                    failureChips
+                    if let whatIf { consequence(of: whatIf) }
                     grid
-                    legend
+                        .padding(whatIf == nil ? 0 : 8)
+                        .background {
+                            if whatIf != nil {
+                                RoundedRectangle(cornerRadius: 10)
+                                    .strokeBorder(
+                                        Color.orange.opacity(0.5),
+                                        style: StrokeStyle(lineWidth: 1, dash: [5, 4])
+                                    )
+                            }
+                        }
+                    // The legend names the colours of a real archive. Under
+                    // a hypothesis the colours mean something else entirely,
+                    // and a key to the wrong picture is worse than none.
+                    if whatIf == nil { legend }
                 }
                 footerControls
             }
@@ -129,6 +150,161 @@ struct StorageMatrix: View {
         }
         .sheet(item: $deleting) { group in
             RemoveStorageGroupSheet(group: group, photoCount: counts[group.id] ?? 0)
+        }
+    }
+
+    // MARK: - What if I lost it
+
+    /// The failure modes, each carrying what it would cost, worst first.
+    ///
+    /// The cost is on the chip rather than behind it on purpose. A row of bare
+    /// names is a toy nobody touches; a row that already says *my Google
+    /// downloads · 21,380* and *Owner's Back · nothing* is a ranked answer to
+    /// "what should I worry about" that happens to also be clickable. It reads
+    /// without being used, which is the property a status has and a simulator
+    /// does not.
+    @ViewBuilder
+    private var failureChips: some View {
+        let ranked = store.rankedFailures
+        if !ranked.isEmpty {
+            HStack(spacing: 6) {
+                Text("What if I lost")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                ForEach(ranked, id: \.loss) { entry in
+                    chip(entry.loss, entry.projection)
+                }
+                if whatIf != nil {
+                    Button("Show what is really there") {
+                        withAnimation(.easeInOut(duration: 0.18)) { whatIf = nil }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+                Spacer(minLength: 0)
+            }
+        }
+    }
+
+    private func chip(_ loss: ArchiveLoss, _ projection: LossProjection) -> some View {
+        let selected = whatIf == loss
+        let tint: Color = projection.lost > 0 ? .red : .secondary
+        return Button {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                whatIf = selected ? nil : loss
+                // A hypothesis and an edit are two different things to be doing
+                // to one row, and neither is legible while the other is on.
+                if !selected { endEditing(); opened = nil }
+            }
+        } label: {
+            HStack(spacing: 4) {
+                Text(store.failureName(loss))
+                Text("·")
+                    .foregroundStyle(.tertiary)
+                Text(projection.lost > 0 ? projection.lost.formatted() : "nothing")
+                    .monospacedDigit()
+                    .foregroundStyle(tint)
+            }
+            .font(.caption)
+            .padding(.horizontal, 9)
+            .padding(.vertical, 4)
+            .background(
+                Capsule().fill(selected ? tint.opacity(0.18) : Color.secondary.opacity(0.08))
+            )
+            .overlay(
+                Capsule().strokeBorder(
+                    selected ? tint.opacity(0.6) : Color.secondary.opacity(0.25),
+                    lineWidth: selected ? 1.5 : 1
+                )
+            )
+        }
+        .buttonStyle(.plain)
+        .help(chipExplanation(loss, projection))
+    }
+
+    private func chipExplanation(_ loss: ArchiveLoss, _ projection: LossProjection) -> String {
+        projection.lost > 0
+            ? "\(Formatters.count(projection.lost, "photo")) would have no copy left anywhere."
+            : "Nothing would be lost — every photo involved is also somewhere else."
+    }
+
+    /// What the failure would actually mean, in words, above the picture of it.
+    @ViewBuilder
+    private func consequence(of loss: ArchiveLoss) -> some View {
+        let projection = store.lossByFailure[loss] ?? LossProjection()
+        let tint: Color = projection.lost > 0 ? .red : .green
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(alignment: .top, spacing: 8) {
+                Image(systemName: projection.lost > 0 ? "exclamationmark.triangle.fill" : "checkmark.circle.fill")
+                    .foregroundStyle(tint)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(headline(loss, projection))
+                        .font(.callout.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(consequenceNotes(loss, projection), id: \.self) { note in
+                        Text(note)
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 0)
+            }
+        }
+        .padding(11)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private func headline(_ loss: ArchiveLoss, _ projection: LossProjection) -> String {
+        let name = store.failureName(loss)
+        if projection.lost > 0 {
+            return "\(Formatters.count(projection.lost, "photo")) would be gone if you lost \(name)."
+        }
+        return "Nothing would be lost if you lost \(name)."
+    }
+
+    private func consequenceNotes(_ loss: ArchiveLoss, _ projection: LossProjection) -> [String] {
+        var notes: [String] = []
+        if projection.reducedToOneCopy > 0 {
+            notes.append("\(Formatters.count(projection.reducedToOneCopy, "photo")) would be left on a single copy until you replaced it.")
+        }
+        switch loss {
+        case .downloadsEverywhere:
+            // The distinction the number depends on, and the one somebody is
+            // most likely to get wrong while holding a delete key.
+            notes.append("These are counted inside the download files rather than copied out, and those are the same files on each device — so one deletion takes every copy. Deleting them from one device only loses nothing.")
+        case .device(let id) where store.targetsByID[id]?.kind == .hostDevice:
+            // The cost the grid structurally cannot show: there is no cell for
+            // the catalog, and answering "no photos lost" alone would be true
+            // and dangerously incomplete.
+            let snapshot = store.catalogSnapshots
+                .filter { $0.key != id }
+                .flatMap(\.value)
+                .max { $0.createdAt < $1.createdAt }
+            notes.append(
+                snapshot.map {
+                    "Everything the app knows — where copies are, what was verified, the albums and people read out of your exports — comes back from the catalog snapshot written \(Formatters.relative($0.createdAt)) on \($0.targetID.flatMap { store.targetsByID[$0]?.name } ?? "a drive")."
+                } ?? "No catalog snapshot exists on another device yet, so everything the app knows about these photos would have to be rebuilt by importing them again."
+            )
+        default:
+            break
+        }
+        if projection.alreadyUnprotected > 0 {
+            notes.append("\(Formatters.count(projection.alreadyUnprotected, "photo")) already has no copy anywhere, whatever happens to this.")
+        }
+        return notes
+    }
+
+    /// How many of a cell's photos would survive the failure being played out.
+    private func surviving(_ entry: AppStore.GroupPlaceCell, on place: ArchivePlace, under loss: ArchiveLoss) -> Int {
+        switch loss {
+        case .device(let id):
+            return place.target?.id == id ? 0 : entry.photos
+        case .downloadsEverywhere:
+            return entry.photos - entry.insideDownload
+        case .downloadsOn(let id):
+            return place.target?.id == id ? entry.photos - entry.insideDownload : entry.photos
         }
     }
 
@@ -242,6 +418,7 @@ struct StorageMatrix: View {
                         .font(.caption.weight(.medium))
                         .lineLimit(1)
                         .truncationMode(.tail)
+                        .strikethrough(whatIf == place.target.map { ArchiveLoss.device($0.id) })
                     Spacer(minLength: 0)
                     if place.target != nil {
                         // A dot rather than the word: every column repeating
@@ -301,10 +478,24 @@ struct StorageMatrix: View {
                             .font(.callout.weight(isOpen ? .semibold : .medium))
                             .lineLimit(1)
                             .truncationMode(.tail)
-                        Text(rowSubtitle(group, short: short))
-                            .font(.caption2)
-                            .foregroundStyle(short > 0 || !group.isSatisfiable ? Color.orange : .secondary)
-                            .lineLimit(1)
+                        // Under a hypothesis the row answers the hypothesis.
+                        // Its usual subtitle describes an arrangement that
+                        // would no longer exist, and printing both invites the
+                        // reader to work out which one is true.
+                        if let loss = whatIf {
+                            let gone = store.lossByFailure[loss]?.lostByGroup[group.id] ?? 0
+                            Text(gone > 0
+                                 ? "\(gone.formatted()) of \(Formatters.count(counts[group.id] ?? 0, "photo")) would be gone"
+                                 : "none of these would be lost")
+                                .font(.caption2)
+                                .foregroundStyle(gone > 0 ? Color.red : Color.green)
+                                .lineLimit(1)
+                        } else {
+                            Text(rowSubtitle(group, short: short))
+                                .font(.caption2)
+                                .foregroundStyle(short > 0 || !group.isSatisfiable ? Color.orange : .secondary)
+                                .lineLimit(1)
+                        }
                     }
                     Spacer(minLength: 0)
                 }
@@ -365,7 +556,21 @@ struct StorageMatrix: View {
     @ViewBuilder
     private func columnFooter(_ place: ArchivePlace) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            if place.target == nil {
+            // Under a hypothesis this has to answer the hypothesis. "21,401
+            // held · nothing only here" is true of the archive that exists and
+            // false of the one being drawn above it, and the two sitting in one
+            // column is precisely the confusion a what-if mode risks.
+            if let loss = whatIf, place.target != nil {
+                let left = groups.reduce(0) { total, group in
+                    guard let entry = place.target.flatMap({ store.cell(group: group.id, place: $0.id) })
+                    else { return total }
+                    return total + surviving(entry, on: place, under: loss)
+                }
+                Text(left == 1 ? "1 would be left" : "\(left.formatted()) would be left")
+                    .font(.caption.weight(.medium))
+                    .monospacedDigit()
+                    .foregroundStyle(left == 0 ? Color.red : .secondary)
+            } else if place.target == nil {
                 Text("—")
                     .font(.caption)
                     .foregroundStyle(.tertiary)
@@ -496,7 +701,29 @@ struct StorageMatrix: View {
         let shape = RoundedRectangle(cornerRadius: 6)
 
         Group {
-            if let entry, !entry.isEmpty {
+            if let entry, !entry.isEmpty, let loss = whatIf {
+                // The hypothesis, drawn over the same cell: what is left, with
+                // what it was struck through beneath it. Showing only the
+                // survivor would make a wiped-out cell indistinguishable from a
+                // device the group never used.
+                let left = surviving(entry, on: place, under: loss)
+                let tint: Color = left == 0 ? .red : left < entry.photos ? .orange : .secondary
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(left.formatted())
+                        .font(.callout.monospacedDigit())
+                        .foregroundStyle(tint)
+                    if left < entry.photos {
+                        Text(entry.photos.formatted())
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.tertiary)
+                            .strikethrough()
+                    }
+                }
+                .padding(.horizontal, 8)
+                .padding(.vertical, 7)
+                .frame(width: cellWidth, alignment: .leading)
+                .background(tint.opacity(left < entry.photos ? 0.12 : 0.05), in: shape)
+            } else if let entry, !entry.isEmpty {
                 let tint = cellTint(entry)
                 VStack(alignment: .leading, spacing: 3) {
                     Text(cellNumber(entry))
