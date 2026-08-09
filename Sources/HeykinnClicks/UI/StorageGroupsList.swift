@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Every set of photos that is kept its own way, and the controls to change it.
+/// Every group of photos that is kept its own way, and the controls to change it.
 ///
 /// Groups existed before this screen and could only be reached sideways — from
 /// the card of the source they happened to be born with. That was fine while

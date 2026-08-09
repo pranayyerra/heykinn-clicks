@@ -113,25 +113,11 @@ struct FolderSourceList: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .background(Color.secondary.opacity(0.05), in: RoundedRectangle(cornerRadius: 8))
 
-            // The folder these came from was never written down, but where
-            // they are *now* is known perfectly well — and that is the part
-            // that matters for whether they are safe.
-            let status = store.copyStatus(forAssetIDs: assets.map(\.id))
-            if status.total > 0 {
-                SourceCopyStatusView(status: status, showsLoadBearingWarning: false)
-                    .padding(.leading, 28)
-            }
-
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 6) {
-                    ForEach(assets.prefix(24)) { asset in
-                        AssetThumbnailView(asset: asset, allowsHoverPreview: false)
-                            .frame(width: 56, height: 56)
-                            .clipShape(RoundedRectangle(cornerRadius: 5))
-                    }
-                }
-            }
-            .padding(.leading, 28)
+            // A copy-status readout and a strip of thumbnails were here.
+            // Where these are kept is Keep safe's subject and what they look
+            // like is Photos' — this row exists to say the folder behind them
+            // was never written down, which is the one thing neither of those
+            // screens can tell you.
         }
     }
 

@@ -120,7 +120,7 @@ final class AppStore: ObservableObject {
         Dictionary(sources.map { ($0.id, $0) }, uniquingKeysWith: { first, _ in first })
     }
 
-    /// How each set of photos is kept: copies and named devices. Separate from
+    /// How each group of photos is kept: copies and named devices. Separate from
     /// the source, which records where they came from and never changes.
     @Published private(set) var storageGroups: [StorageGroup] = []
     /// Which group each asset is in. A strict partition — one group per asset,
@@ -2489,172 +2489,8 @@ final class AppStore: ObservableObject {
 
     // MARK: - Where a source's photos are
 
-    /// Where the photos from one source actually sit, right now.
-    ///
-    /// The Google export screen has always answered this per part; a folder
-    /// somebody added answered it not at all, and the difference was purely in
-    /// what each screen bothered to read. Both go through here now, so a
-    /// folder and an export cannot describe the same drive in two vocabularies
-    /// — or, worse, disagree about whether its content is safe.
-    ///
-    /// Motion halves are excluded to match every other count the UI shows: the
-    /// Library presents a Live Photo as one item, and reporting "24 of 36
-    /// copied" for what the user sees as 18 photos reads as a bug.
-    func copyStatus(forAssetIDs ids: [UUID], destinations: [UUID]? = nil, copies: Int? = nil) -> SourceCopyStatus {
-        let subjects = ids.compactMap { assetsByID[$0] }.filter { !$0.isLivePhotoMotion }
-        guard !subjects.isEmpty else { return .empty }
 
-        // The source's own settings when the caller knows them; otherwise the
-        // settings of the first asset, which for a real source is all of them.
-        let policy = subjects.first.map { placementPolicy(forAsset: $0.id) }
-        let named = destinations ?? policy?.destinations ?? []
-        let wanted = copies ?? policy?.copies ?? newSourceDefaults.desiredCopies
-        let namedSet = Set(named)
-        // `uniqueKeysWithValues` would trap on a repeated id. The caller passes
-        // asset ids gathered from a filter, and a duplicate there is a bug
-        // elsewhere — but crashing the app to report it is not the trade, and
-        // this runs on a redraw path.
-        let sizes = Dictionary(subjects.map { ($0.id, $0.fileSize) }, uniquingKeysWith: { first, _ in first })
 
-        // One pass over the assets, not one per question. This runs on every
-        // redraw of an opened source, and the archive it has to survive is
-        // hundreds of thousands of rows — walking the set once per device,
-        // then again for load-bearing, then again for the corridor, is the
-        // shape that stops being affordable exactly when it matters (lesson 8).
-        var held = [UUID: Int]()
-        var pending = [UUID: Int]()
-        var archiveBacked = [UUID: Int]()
-        var histogram = [Int: Int]()
-        var loadBearing = 0
-        var waiting = 0
-
-        let absent = Set(targets.map(\.id)).subtracting(reachablePaths.keys)
-        // Which assets owe a copy to a device that is not here. Built once off
-        // the task list rather than scanned per asset, which would be a linear
-        // search inside a linear walk.
-        var owedToAbsent = Set<UUID>()
-        if !absent.isEmpty {
-            for task in replicationTasks
-            where task.state == .queued && task.action == .copy && absent.contains(task.targetID) {
-                owedToAbsent.insert(task.assetID)
-            }
-        }
-
-        var owed = [UUID: Int]()
-        var owedBytes = [UUID: Int64]()
-
-        for asset in subjects {
-            // Counted only on devices the source named. A copy sitting on some
-            // other drive is real and is shown as a leftover, but it does not
-            // satisfy a setting that never asked for it.
-            var countedCopies = 0
-            var presentAnywhere = 0
-            var backedCount = 0
-            var seenOnNamed = Set<UUID>()
-
-            for replica in replicasByAssetID[asset.id] ?? [] {
-                let isNamed = namedSet.contains(replica.targetID)
-                switch replica.state {
-                case .present:
-                    held[replica.targetID, default: 0] += 1
-                    presentAnywhere += 1
-                    if isNamed {
-                        countedCopies += 1
-                        seenOnNamed.insert(replica.targetID)
-                    }
-                    if ReplicationService.isArchiveBacked(replica) {
-                        archiveBacked[replica.targetID, default: 0] += 1
-                        backedCount += 1
-                    }
-                case .pending, .copying:
-                    pending[replica.targetID, default: 0] += 1
-                    if isNamed { seenOnNamed.insert(replica.targetID) }
-                case .stale, .drift, .missing:
-                    // Not counted as a copy. The bytes are there and no longer
-                    // match what was imported, so calling it a copy would claim
-                    // more than was checked — the one thing invariant 2 forbids.
-                    break
-                }
-            }
-
-            // A named device with no row at all for this photo owes it. This
-            // is the case the previous version could not express, and it is
-            // the one that matters: a source set to keep photos on the NAS,
-            // with nothing on the NAS, is short.
-            for targetID in named where !seenOnNamed.contains(targetID) {
-                owed[targetID, default: 0] += 1
-                owedBytes[targetID, default: 0] += sizes[asset.id] ?? 0
-            }
-
-            histogram[countedCopies, default: 0] += 1
-            let presentCount = presentAnywhere
-
-            // Same rule as `hasOnlyArchiveBackedCopies`, inlined so the walk
-            // stays single-pass: every copy that exists is the source's own
-            // file, and nothing is staged behind it.
-            if asset.stagingRelativePath == nil, presentCount > 0, presentCount == backedCount {
-                loadBearing += 1
-            }
-            if staging.exists(relativePath: asset.stagingRelativePath),
-               owedToAbsent.contains(asset.id) {
-                waiting += 1
-            }
-        }
-
-        // Named devices always — including ones holding nothing, which is
-        // precisely the row worth showing. Then any unnamed device still
-        // carrying copies, so a leftover after a retarget is visible rather
-        // than being space that silently went missing.
-        func placement(for target: ReplicationTarget, isDestination: Bool) -> SourceCopyStatus.Placement {
-            SourceCopyStatus.Placement(
-                targetID: target.id,
-                name: target.name,
-                kind: target.kind,
-                isReachable: reachablePaths[target.id] != nil,
-                isDestination: isDestination,
-                held: held[target.id] ?? 0,
-                pending: pending[target.id] ?? 0,
-                owed: isDestination ? (owed[target.id] ?? 0) : 0,
-                owedBytes: isDestination ? (owedBytes[target.id] ?? 0) : 0,
-                archiveBacked: archiveBacked[target.id] ?? 0
-            )
-        }
-
-        // In the user's order, because the first device someone names is the
-        // one they think of as primary.
-        var placements = named.compactMap { targetID in
-            targetsByID[targetID].map { placement(for: $0, isDestination: true) }
-        }
-        placements += targets
-            .filter { !namedSet.contains($0.id) && (held[$0.id] ?? 0) + (pending[$0.id] ?? 0) > 0 }
-            .map { placement(for: $0, isDestination: false) }
-
-        return SourceCopyStatus(
-            total: subjects.count,
-            desiredCopies: wanted,
-            copiesHistogram: histogram,
-            placements: placements,
-            destinationCount: named.count,
-            waitingInCorridor: waiting,
-            loadBearing: loadBearing
-        )
-    }
-
-    /// The same question asked of one source.
-    func copyStatus(forSource sourceID: UUID) -> SourceCopyStatus {
-        guard sourcesByID[sourceID] != nil else { return .empty }
-        // No settings passed: a source no longer carries any. `copyStatus`
-        // reads them off the group its photos are in, which is the only place
-        // they live now — and the only answer that stays right if the photos
-        // are later moved into a different group.
-        let ids = assets.filter { sourceIDByAsset[$0.id] == sourceID }.map(\.id)
-        return copyStatus(forAssetIDs: ids)
-    }
-
-    /// The same question asked of one import batch.
-    func copyStatus(forBatch batchID: UUID) -> SourceCopyStatus {
-        copyStatus(forAssetIDs: assets.filter { $0.importBatchID == batchID }.map(\.id))
-    }
 
     /// How long a note about a path is worth keeping. Long enough that a drive
     /// swept every few months still benefits; short enough that the table does
@@ -5874,7 +5710,7 @@ final class AppStore: ObservableObject {
         return (subjects.count, changedAssetIDs.count, baselines, absent.count)
     }
 
-    /// Assets not yet on all the devices their source names.
+    /// Assets not yet on all the drives their group is kept on.
     ///
     /// This is what replaced the cross-target tree comparison. That compared
     /// one device's recorded content against another's and called a difference
@@ -6034,7 +5870,7 @@ final class AppStore: ObservableObject {
     /// state it happens to be sitting in is incidental.
     static let withdrawableStates: Set<ReplicaFileState> = [.pending, .missing]
 
-    /// Withdraws intentions to copy onto devices no source names.
+    /// Withdraws intentions to copy onto devices no group names.
     ///
     /// A `pending` replica row is not a copy — it is an intention, and an
     /// intention to put a photo on a device the user has since taken off its

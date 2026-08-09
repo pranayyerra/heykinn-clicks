@@ -179,7 +179,7 @@ private struct SafetySettings: View {
         Form {
             Section("How many copies") {
                 Label(
-                    "Each set of photos says how many copies to keep. Change that under Keep safe, next to the photos it governs — there is no single setting for the whole archive.",
+                    "Each group of photos says how many copies to keep. Change that under Keep safe, next to the photos it governs — there is no single setting for the whole archive.",
                     systemImage: "square.stack.3d.up"
                 )
                 .font(.callout)
