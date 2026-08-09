@@ -96,20 +96,6 @@ struct StorageGroupsList: View {
         }
     }
 
-    @ViewBuilder
-    private func keptLine(_ group: StorageGroup) -> some View {
-        let form = store.storageForm(forStorageGroup: group.id)
-        if form.onlyInsideDownload > 0 {
-            Text(form.copiedOut > 0
-                 ? "\(form.onlyInsideDownload.formatted()) of them exist only inside a Google download"
-                 : "all of them exist only inside a Google download")
-                .font(.caption2)
-                .foregroundStyle(.orange)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-        }
-    }
-
     private func row(_ group: StorageGroup) -> some View {
         let held = counts[group.id] ?? 0
         return HStack(spacing: 10) {
@@ -125,11 +111,15 @@ struct StorageGroupsList: View {
                     .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
-                // How the copies exist, which the count above cannot say. Three
-                // sets on a real archive read identically here while one was
-                // twelve real files and another had 17,964 photos living inside
-                // .zip files.
-                keptLine(group)
+                // A line saying how many of these exist only inside a Google
+                // download used to sit here, in orange. It answered a question
+                // this section does not ask. "How many copies, and where" is
+                // about places; whether a copy is a file or a counted entry
+                // inside a .zip is a different axis entirely, and an orange
+                // number under a copy count reads as "you only have one" when
+                // you have two. It is a consequence, so it is stated once,
+                // where the consequence can be spelled out — inside the group.
+                EmptyView()
                 // Where its photos came from. This screen is the only place a
                 // group is edited, so it has to say what it is about to change
                 // — a group and the import that made it share a name until

@@ -31,10 +31,8 @@ struct StorageGroupDetail: View {
             Divider()
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
-                    copies
-                    keptAs
                     whereTheyAre
-                    ForEach(backingSets, id: \.self) { download($0) }
+                    ForEach(backingSets, id: \.self) { atStake($0) }
                 }
                 .padding(18)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -67,170 +65,129 @@ struct StorageGroupDetail: View {
         .padding(18)
     }
 
-    private var arrival: String {
-        let count = "\(Formatters.count(photoCount, "photo"))"
-        guard let provenance = store.provenanceSummary(forStorageGroup: group.id) else {
-            return count
-        }
-        return "\(count) · \(provenance)"
-    }
-
-    private var copies: some View {
+    /// The policy, then what is actually there, device by device.
+    ///
+    /// Also carries the form each device holds them in, because "272 photos"
+    /// and "272 photos, 263 of them counted inside a .zip" are the same row
+    /// until you say so. A split bar drew that a second time and a group row
+    /// drew it a third; the numbers only need to appear where they can be read
+    /// against a device name.
+    @ViewBuilder
+    private var whereTheyAre: some View {
+        let holdings = store.holdings(forStorageGroup: group.id)
         VStack(alignment: .leading, spacing: 6) {
-            SectionCaption("How many copies")
+            SectionCaption("Where they are")
+            // The policy, then the observation. They agree here and will not
+            // always, and the difference is the whole reason both are shown —
+            // a copy count is what was asked for, not what is.
             HStack(alignment: .firstTextBaseline) {
-                Text("\(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))")
-                    .foregroundStyle(group.isSatisfiable ? Color.primary : Color.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 8)
+                Text("Keeping \(Formatters.copies(group.desiredCopies))")
+                    .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
                 Button("Change…") { editing = true }
                     .buttonStyle(.link)
+                Spacer(minLength: 0)
             }
+            .font(.callout)
             if store.idleDeviceCount(forStorageGroup: group) > 0 {
                 Text("You have more drives than this asks copies for, so \(Formatters.count(store.idleDeviceCount(forStorageGroup: group), "drive")) holds none of it.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             }
+            if holdings.isEmpty {
+                Text("Nowhere yet.")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+            }
+            ForEach(holdings) { holding in
+                HStack(alignment: .firstTextBaseline, spacing: 8) {
+                    Image(systemName: store.targetsByID[holding.targetID]?.kind == .hostDevice
+                          ? "laptopcomputer" : "externaldrive.fill")
+                        .foregroundStyle(.secondary)
+                        .frame(width: 16)
+                    Text(store.targetsByID[holding.targetID]?.name ?? "A device that is gone")
+                    Spacer(minLength: 8)
+                    Text(holding.insideDownload > 0
+                         ? "\(holding.photos.formatted()) · \(holding.insideDownload.formatted()) inside the download"
+                         : "\(holding.photos.formatted()) as their own files")
+                        .foregroundStyle(.secondary)
+                        .monospacedDigit()
+                }
+                .font(.callout)
+            }
         }
     }
 
-    /// The split that the copy count cannot show.
+    /// What the download is holding hostage, and what to do about it.
+    ///
+    /// Headed by the consequence rather than the statistic. "172 exist only
+    /// inside a Google download" is a fact somebody has to work out the meaning
+    /// of; "if the download went, 172 of these would be lost" is the meaning.
+    /// It is also the honest place for the alarm colour — under a copy count it
+    /// read as "you only have one copy", which is not what it says and not
+    /// something that is true.
     @ViewBuilder
-    private var keptAs: some View {
-        let form = self.form
-        if form.insideDownload + form.copiedOut > 0 {
-            VStack(alignment: .leading, spacing: 6) {
-                SectionCaption("How they are kept")
-                if form.onlyInsideDownload > 0 {
-                    // Split so the two halves are exclusive and add up. Showing
-                    // "counted inside" against "copied out" put 21,117 beside
-                    // 5,658 under a total of 21,117 — a photo can be counted
-                    // inside a download on one drive *and* have a file of its
-                    // own elsewhere, so the two overlap and a bar drawn from
-                    // them says the set is bigger than it is.
-                    GeometryReader { proxy in
-                        HStack(spacing: 0) {
-                            Rectangle().fill(Color.orange)
-                                .frame(width: proxy.size.width * fraction(form.onlyInsideDownload, form))
-                            Rectangle().fill(Color.green)
-                        }
-                    }
-                    .frame(height: 8)
-                    .clipShape(Capsule())
-                    Text("\(form.onlyInsideDownload.formatted()) exist only inside a Google download · \(form.copiedOut.formatted()) also have a file of their own")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Label(
-                        "Deleting those .zip files loses the first group, however many drives hold the files.",
-                        systemImage: "shippingbox"
-                    )
+    private func atStake(_ setID: String) -> some View {
+        let archives = store.takeoutArchives.filter { $0.exportSetID == setID }
+        let export = ExportSummary(setID: setID, archives: archives, plan: store.archivePlan)
+        let names = Dictionary(uniqueKeysWithValues: store.targets.map { ($0.id, $0.name) })
+        let verdict = export.protection(driveNames: names)
+        let stranded = form.onlyInsideDownload
+
+        VStack(alignment: .leading, spacing: 7) {
+            if stranded > 0 {
+                Text("If the Google download went, \(Formatters.count(stranded, "photo")) here would be lost")
+                    .font(.callout.weight(.medium))
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                Text(form.copiedOut > 0
+                     ? "They have their copies, but every one is inside the same .zip files. The other \(form.copiedOut.formatted()) have a file of their own and would survive."
+                     : "They have their copies, but every one is inside the same .zip files.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Label(
-                        "All copied out as their own files.",
-                        systemImage: "doc.on.doc"
-                    )
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                }
             }
-        }
-    }
-
-    /// Which device holds how many, and how many of those are counted inside a
-    /// download rather than written out.
-    ///
-    /// The line above says how the set as a whole is kept; this says where.
-    /// Without it the detail answered "where are the ones inside the download"
-    /// — the part grid does that — and never answered where the rest were, so
-    /// a set with no download behind it said nothing about its whereabouts at
-    /// all. It is also the only place the per-device difference shows: the two
-    /// drives here do not hold the same mix.
-    @ViewBuilder
-    private var whereTheyAre: some View {
-        let holdings = store.holdings(forStorageGroup: group.id)
-        if !holdings.isEmpty {
-            VStack(alignment: .leading, spacing: 6) {
-                SectionCaption("Where they are")
-                ForEach(holdings) { holding in
-                    HStack(alignment: .firstTextBaseline, spacing: 8) {
-                        Image(systemName: store.targetsByID[holding.targetID]?.kind == .hostDevice
-                              ? "laptopcomputer" : "externaldrive.fill")
-                            .foregroundStyle(.secondary)
-                            .frame(width: 16)
-                        Text(store.targetsByID[holding.targetID]?.name ?? "A device that is gone")
-                        Spacer(minLength: 8)
-                        Text(holding.insideDownload > 0
-                             ? "\(holding.photos.formatted()) · \(holding.insideDownload.formatted()) inside the download"
-                             : "\(holding.photos.formatted()) as their own files")
-                            .foregroundStyle(.secondary)
-                            .monospacedDigit()
-                    }
-                    .font(.callout)
-                }
-            }
-        }
-    }
-
-    private func fraction(_ part: Int, _ form: AppStore.StorageForm) -> Double {
-        let total = form.onlyInsideDownload + form.copiedOut
-        guard total > 0 else { return 0 }
-        return Double(part) / Double(total)
-    }
-
-    /// The download backing this set, and what can be done about it.
-    @ViewBuilder
-    private func download(_ setID: String) -> some View {
-        let archives = store.takeoutArchives.filter { $0.exportSetID == setID }
-        let export = ExportSummary(setID: setID, archives: archives, plan: store.archivePlan)
-        VStack(alignment: .leading, spacing: 8) {
-            SectionCaption("The download holding them")
-            Text(export.title)
-                .font(.callout.weight(.medium))
-            let names = Dictionary(uniqueKeysWithValues: store.targets.map { ($0.id, $0.name) })
-            let verdict = export.protection(driveNames: names)
-            Label(verdict.text, systemImage: verdict.symbol)
+            Text("\(export.title) — \(verdict.text.prefix(1).lowercased() + verdict.text.dropFirst())")
                 .font(.caption)
-                .foregroundStyle(verdict.tint)
+                .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
-            ExportPartGrid(
-                parts: export.parts,
-                archives: export.archives,
-                managedTargetIDs: export.plan.destinations(forSet: setID),
-                copiesRequired: export.copiesRequired,
-                driveNames: names
-            )
-            HStack(spacing: 12) {
-                Menu("Check these files for damage") {
+            // Twelve numbered chips and a colour key, for an answer already
+            // given in the sentence above. Shown only when a part is missing or
+            // unchecked, which is when per-part detail is the thing you came
+            // for rather than furniture.
+            if verdict.tint != .green {
+                ExportPartGrid(
+                    parts: export.parts,
+                    archives: export.archives,
+                    managedTargetIDs: export.plan.destinations(forSet: setID),
+                    copiesRequired: export.copiesRequired,
+                    driveNames: names
+                )
+            }
+            HStack(spacing: 10) {
+                if !export.extractableZips.isEmpty {
+                    Button("Copy them out of the download") {
+                        store.extractTakeoutZips(export.extractableZips.map(\.id))
+                    }
+                }
+                Menu("Check for damage") {
                     Button("Read a sample of each file") { store.spotCheckExportParts() }
                     Button("Read every byte — slow, and the only proof") {
                         store.verifyExportPartsByChecksum()
                     }
                 }
                 .fixedSize()
-                if !export.extractableZips.isEmpty {
-                    // Named for what it changes, not for the tool it uses.
-                    // "Unzip N files onto the drive" sat beside "Read the
-                    // remaining files" and read as another way of importing;
-                    // it is the opposite end — the photos are already in, and
-                    // this changes how they are stored.
-                    Button("Copy them out of the download") {
-                        store.extractTakeoutZips(export.extractableZips.map(\.id))
-                    }
-                }
                 Spacer(minLength: 0)
+                Button("Stop tracking…", role: .destructive) { confirmingStopTracking = setID }
+                    .buttonStyle(.link)
             }
-            .font(.caption)
-            Button("Stop tracking this download…", role: .destructive) {
-                confirmingStopTracking = setID
-            }
-            .buttonStyle(.link)
             .font(.caption)
         }
+        .padding(10)
+        .background(
+            (stranded > 0 ? Color.orange : Color.secondary).opacity(0.08),
+            in: RoundedRectangle(cornerRadius: 8)
+        )
         .confirmationDialog(
             "Stop tracking this download?",
             isPresented: Binding(
@@ -246,6 +203,14 @@ struct StorageGroupDetail: View {
         } message: {
             Text(strandedWarning(setID))
         }
+    }
+
+    private var arrival: String {
+        let count = "\(Formatters.count(photoCount, "photo"))"
+        guard let provenance = store.provenanceSummary(forStorageGroup: group.id) else {
+            return count
+        }
+        return "\(count) · \(provenance)"
     }
 
     private func strandedWarning(_ setID: String) -> String {
