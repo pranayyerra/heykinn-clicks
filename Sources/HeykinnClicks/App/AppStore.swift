@@ -6900,7 +6900,11 @@ final class AppStore: ObservableObject {
                 )
             },
             allReplicasByAsset: siblings,
-            budget: budget
+            budget: budget,
+            // Only the background patrol leaves recently-read copies alone.
+            // "Check for damage" is somebody asking, and the answer to that is
+            // never "I looked this morning".
+            freshEnough: isPatrol ? PatrolScheduler.freshEnough : 0
         )
 
         var queued = 0

@@ -154,3 +154,61 @@ final class RotPatrolScopeTests: XCTestCase {
         XCTAssertEqual(progress.currentVerb, "Removing")
     }
 }
+
+/// When the patrol should decline to do anything.
+final class PatrolFloorTests: XCTestCase {
+
+    private let drive = UUID()
+
+    private func replica(_ id: UUID, read: Date?) -> PatrolScheduler.Replica {
+        PatrolScheduler.Replica(assetID: id, targetID: drive, sizeBytes: 1_000, lastVerifiedAt: read)
+    }
+
+    private func pick(
+        _ replicas: [PatrolScheduler.Replica], floor: TimeInterval, now: Date = Date()
+    ) -> [PatrolScheduler.Replica] {
+        PatrolScheduler.next(
+            on: drive,
+            candidates: replicas,
+            allReplicasByAsset: Dictionary(grouping: replicas, by: \.assetID),
+            freshEnough: floor,
+            now: now
+        )
+    }
+
+    /// The behaviour that made a drive busy forty-eight times a day: thirty-three
+    /// candidates, a budget of forty, and nothing to say how recent is recent
+    /// enough — so every run read all of them again.
+    func testCopiesReadRecentlyAreLeftAlone() {
+        let now = Date()
+        let fresh = (1...33).map { _ in
+            replica(UUID(), read: now.addingTimeInterval(-30 * 60))
+        }
+        XCTAssertEqual(
+            pick(fresh, floor: PatrolScheduler.freshEnough, now: now).count, 0,
+            "read half an hour ago is not where rot will be found"
+        )
+        XCTAssertEqual(
+            pick(fresh, floor: 0, now: now).count, 33,
+            "and an explicit check still reads every one of them"
+        )
+    }
+
+    func testAcopyOlderThanTheFloorIsStillRead() {
+        let now = Date()
+        let old = replica(UUID(), read: now.addingTimeInterval(-40 * 24 * 60 * 60))
+        let recent = replica(UUID(), read: now.addingTimeInterval(-60))
+        let chosen = pick([old, recent], floor: PatrolScheduler.freshEnough, now: now)
+        XCTAssertEqual(chosen.map(\.assetID), [old.assetID])
+    }
+
+    /// The exemption that must survive any floor: a copy nobody has ever read
+    /// is the most exposed thing in the archive.
+    func testACopyNeverReadIsAlwaysWorthReading() {
+        let never = replica(UUID(), read: nil)
+        XCTAssertEqual(
+            pick([never], floor: PatrolScheduler.freshEnough).map(\.assetID),
+            [never.assetID]
+        )
+    }
+}

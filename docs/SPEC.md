@@ -792,6 +792,17 @@ Earned against a real 248 GB archive; the stories are in git history.
     walk of the disk each. Ask what a check proves before deciding what it is
     allowed to record.
 
+69. Ranking by staleness is not the same as knowing something is stale. The
+    patrol sorted candidates by how long since their freshest copy was read and
+    took the top forty, without ever asking whether the top one was old enough
+    to be worth reading. On a large archive that is invisible — something is
+    always genuinely old — and it hid the defect completely. On a small
+    eligible set it means reading everything, over and over: thirty-three
+    candidates against a budget of forty is a drive marked in use forty-eight
+    times a day to re-read the same thirty-three files. A floor fixes it, and
+    belongs to the *background* pass only: somebody who asks for a check is
+    never answered with "I looked this morning".
+
 64. Move the files first, then the catalog. A catalog told about a move that
     did not happen describes an archive nobody has, and nothing will ever
     correct it. A file that moved with the catalog not yet updated is found

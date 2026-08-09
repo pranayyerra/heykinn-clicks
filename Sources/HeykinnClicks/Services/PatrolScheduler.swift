@@ -55,6 +55,21 @@ enum PatrolScheduler {
         return freshest
     }
 
+    /// How recently a copy must have been read for the patrol to leave it be.
+    ///
+    /// The patrol ranked candidates by staleness and never asked whether the
+    /// stalest one was actually stale. On a large archive that is invisible —
+    /// something is always genuinely old — and on a small eligible set it means
+    /// re-reading everything, over and over, for ever. On a real archive the
+    /// set that can be patrolled at all came to 33 replicas against a budget of
+    /// 40 files every half hour: every run read all of them, forty-eight times
+    /// a day, marking the drive in use each time to learn nothing.
+    ///
+    /// A copy read this recently is not where rot is going to be found. A copy
+    /// never read at all is exempt whatever this says — that one is the most
+    /// exposed thing in the archive and is always worth the read.
+    static let freshEnough: TimeInterval = 30 * 24 * 60 * 60
+
     /// Picks what to read on one device, worst-risk asset first.
     ///
     /// - Parameters:
@@ -67,6 +82,9 @@ enum PatrolScheduler {
         candidates: [Replica],
         allReplicasByAsset: [UUID: [Replica]],
         budget: VerificationBudget = .patrol,
+        /// Zero for a sweep somebody asked for: "check this now" means now,
+        /// whatever was read this morning.
+        freshEnough: TimeInterval = 0,
         now: Date = Date()
     ) -> [Replica] {
         // At most one replica per asset per run: reading a second copy of a
@@ -95,6 +113,10 @@ enum PatrolScheduler {
         var bytes: Int64 = 0
         for replica in ordered {
             guard chosen.count < budget.maxFiles else { break }
+            // Sorted by risk descending, so the first one inside the floor
+            // means every one after it is too.
+            guard riskKey(for: replica, allReplicasByAsset: allReplicasByAsset, now: now)
+                    >= freshEnough else { break }
             // Skipped, not stopped on: a file above the per-file cap must not
             // block every smaller file behind it, or one huge video parks the
             // patrol permanently. The rot patrol is not the only thing that
