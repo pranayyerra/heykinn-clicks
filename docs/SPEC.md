@@ -763,6 +763,22 @@ Earned against a real 248 GB archive; the stories are in git history.
     string, inside the zip's own entry list, where it is an album and not a
     location.
 
+66. State the fact whether or not the drive is here; gate only the doing. The
+    line saying a drive holds an export twice was first shown only for
+    connected drives, which is the rule the *button* needs, not the rule the
+    *sentence* needs. 254 GB that disappears from the screen when somebody
+    unplugs a drive is 254 GB nobody ever gets round to deciding about — and
+    the catalog knows it either way. What needs the drive present is removing
+    something from it, and that gates itself.
+
+67. Name a button after what it does, not after what it is for. "Copy them out
+    of the download" unpacked a zip into a folder beside it — and a photo in
+    that folder is still counted as being inside a download, so the one thing
+    the name promised was the one thing it did not do. What it actually buys is
+    a copy that can be re-read without decompressing 127 GB; what it costs is
+    the same bytes again, which the name never mentioned. Both belong in the
+    label.
+
 64. Move the files first, then the catalog. A catalog told about a move that
     did not happen describes an archive nobody has, and nothing will ever
     correct it. A file that moved with the catalog not yet updated is found

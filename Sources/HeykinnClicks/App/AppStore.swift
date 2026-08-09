@@ -5721,6 +5721,104 @@ final class AppStore: ObservableObject {
     /// unique — so the delivered copy moves *into* that row rather than beside
     /// it, and the row it came from goes away. It is not a lost copy; it is a
     /// copy this method itself moved.
+    // MARK: - The two forms an export is held in
+
+    /// What each drive holds of this export, by form — plugged in or not.
+    ///
+    /// Deliberately not filtered to connected drives. Holding the same export
+    /// twice is a fact the catalog knows either way, and 254 GB that vanishes
+    /// from the screen when somebody unplugs the drive is 254 GB nobody will
+    /// ever get round to deciding about. Only the *removal* needs the drive to
+    /// be here, and that is gated on its own.
+    func exportFormAudits(forSet setID: String) -> [ExportFormAudit] {
+        targets
+            .map { ExportFormRemoval.audit(forSet: setID, target: $0, archives: takeoutArchives) }
+            .filter { $0.holdsBothForms }
+            .sorted { $0.driveName < $1.driveName }
+    }
+
+    /// How many copies on this drive are recorded as living inside a zip of
+    /// this export — the ones deleting the zips would strand.
+    private func zipMembersPointingIntoSet(_ setID: String, onTarget targetID: UUID) -> Int {
+        let zipNames = Set(
+            takeoutArchives
+                .filter { $0.exportSetID == setID && $0.targetID == targetID && $0.kind == .zip }
+                .map { ($0.path as NSString).lastPathComponent }
+        )
+        guard !zipNames.isEmpty else { return 0 }
+        return replicaStates.reduce(0) { total, replica in
+            guard replica.targetID == targetID,
+                  let path = replica.relativePath,
+                  path.hasPrefix(ReplicationService.zipMemberPrefix)
+            else { return total }
+            let payload = path.dropFirst(ReplicationService.zipMemberPrefix.count)
+            let zipPath = payload.split(separator: "!", maxSplits: 1).first.map(String.init) ?? ""
+            return total + (zipNames.contains((zipPath as NSString).lastPathComponent) ? 1 : 0)
+        }
+    }
+
+    func exportFormRemovalPlan(
+        removing form: ExportForm, setID: String, onTarget targetID: UUID
+    ) -> ExportFormRemoval? {
+        guard let target = targetsByID[targetID], reachablePaths[targetID] != nil else { return nil }
+        let plan = ExportFormRemoval.plan(
+            removing: form, setID: setID, target: target, archives: takeoutArchives,
+            replicasPointingIntoZips: form == .zip
+                ? zipMembersPointingIntoSet(setID, onTarget: targetID) : 0
+        )
+        return plan.files.isEmpty ? nil : plan
+    }
+
+    /// Deletes one form of an export from one drive, having been told to.
+    ///
+    /// The catalog row goes with the bytes. A row left behind describing a file
+    /// nobody deleted by accident would come back as a missing-part finding on
+    /// the next connect — the app reporting its own housekeeping as damage.
+    @discardableResult
+    func removeExportForm(_ plan: ExportFormRemoval) -> Int {
+        guard plan.isAllowed, let target = targetsByID[plan.targetID],
+              reachablePaths[plan.targetID] != nil,
+              !isBusy(plan.targetID), !isQuiescing(plan.targetID), !isTransferringParts
+        else {
+            lastError = "That drive is busy, or this cannot be removed safely."
+            return 0
+        }
+
+        var removed: [ExportFormRemoval.File] = []
+        for file in plan.files {
+            guard FileManager.default.fileExists(atPath: file.path) else {
+                removed.append(file)  // already gone; the row still has to go
+                continue
+            }
+            do {
+                try FileManager.default.removeItem(atPath: file.path)
+                removed.append(file)
+            } catch {
+                lastError = "Could not remove \(file.displayName): \(error.localizedDescription)"
+                break
+            }
+        }
+        guard !removed.isEmpty else { return 0 }
+
+        do {
+            try catalog.transaction {
+                for file in removed { try catalog.deleteTakeoutArchive(id: file.archiveID) }
+            }
+        } catch {
+            lastError = "The files were removed but the catalog could not be updated: \(error.localizedDescription)"
+        }
+        audit(
+            .drive,
+            "Removed \(plan.form.displayName) of the export from \(target.name) — "
+                + "\(Formatters.count(removed.count, "file")), "
+                + "\(Formatters.bytes.string(fromByteCount: plan.bytes)) freed. "
+                + "Every part is still on this drive in the other form.",
+            targetID: plan.targetID
+        )
+        loadAll()
+        return removed.count
+    }
+
     // MARK: - Making an export the app's responsibility
 
     /// What moving this export into the app's folder on one drive would do.

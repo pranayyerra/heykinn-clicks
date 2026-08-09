@@ -19,6 +19,8 @@ struct StorageGroupDetail: View {
     let group: StorageGroup
     @State private var confirmingStopTracking: String?
     @State private var relocating: ExportRelocation?
+    @State private var removingForm: ExportFormRemoval?
+    @State private var unpacking: [TakeoutArchive]?
 
     private var form: AppStore.StorageForm { store.storageForm(forStorageGroup: group.id) }
     private var backingSets: [String] { store.exportSetIDs(backingStorageGroup: group.id) }
@@ -34,6 +36,20 @@ struct StorageGroupDetail: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(item: $relocating) { ExportRelocationSheet(plan: $0) }
+        .sheet(item: $removingForm) { ExportFormRemovalSheet(plan: $0) }
+        .confirmationDialog(
+            "Unpack a copy on the drive?",
+            isPresented: Binding(get: { unpacking != nil }, set: { if !$0 { unpacking = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Unpack") {
+                if let unpacking { store.extractTakeoutZips(unpacking.map(\.id)) }
+                unpacking = nil
+            }
+            Button("Cancel", role: .cancel) { unpacking = nil }
+        } message: {
+            Text("Each zip is written out as a folder beside it, so re-reading this export does not have to decompress it first. The zips are kept, so this uses \(Formatters.bytes.string(fromByteCount: (unpacking ?? []).reduce(0) { $0 + $1.sizeBytes })) again on the same drive.")
+        }
     }
 
     /// The policy, then what is actually there, device by device.
@@ -154,6 +170,37 @@ struct StorageGroupDetail: View {
             // again; this is the line that makes that a decision rather than a
             // guess. Silent when every part is current, because a 127 GB read
             // that would find nothing is not worth offering.
+            // Where a drive is holding the same export twice.
+            ForEach(store.exportFormAudits(forSet: setID), id: \.targetID) { held in
+                VStack(alignment: .leading, spacing: 5) {
+                    Label(
+                        "\(held.driveName) holds this export twice — the original zips and their unpacked copies, "
+                        + "\(Formatters.bytes.string(fromByteCount: held.bytesByForm.values.reduce(0, +))) between them. "
+                        + "Either one alone holds every photo.",
+                        systemImage: "doc.on.doc"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 10) {
+                        ForEach(ExportForm.allCases, id: \.self) { form in
+                            if let plan = store.exportFormRemovalPlan(
+                                removing: form, setID: setID, onTarget: held.targetID
+                            ) {
+                                Button("Remove \(form.displayName)…") { removingForm = plan }
+                                    .font(.caption)
+                            }
+                        }
+                        if store.reachablePaths[held.targetID] == nil {
+                            Text("Plug it in to choose.")
+                                .font(.caption)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                }
+            }
+
             let behind = store.exportPartsBehindReader(inSet: setID)
             if !behind.isEmpty {
                 Label {
@@ -178,9 +225,17 @@ struct StorageGroupDetail: View {
                     }
                 }
                 if !export.extractableZips.isEmpty {
-                    Button("Copy them out of the download") {
-                        store.extractTakeoutZips(export.extractableZips.map(\.id))
+                    // Named for what it does. It said "Copy them out of the
+                    // download", which promised the one thing it does not do:
+                    // unpacking writes a folder beside the zip, and a photo in
+                    // that folder is still counted as being inside a download.
+                    // What it actually buys is a copy that can be re-read
+                    // without decompressing anything — and what it costs is the
+                    // same bytes again, which the old name never mentioned.
+                    Button("Unpack a copy on the drive…") {
+                        unpacking = export.extractableZips
                     }
+                    .help("Writes each zip out as a folder beside it, so re-reading this export does not have to decompress it first. The zips stay, so this uses the same space again.")
                 }
                 Menu("Check for damage") {
                     Button("Read a sample of each file") { store.spotCheckExportParts() }
