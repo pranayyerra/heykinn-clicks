@@ -76,6 +76,13 @@ struct SourceFlowView<Detail: View>: View {
     var onSelect: (PhotoSource) -> Void
     /// Drawn inside the row it belongs to, like the places and the groups.
     @ViewBuilder var detail: (PhotoSource) -> Detail
+    /// The one thing this row is for, on the row itself.
+    ///
+    /// "Choose a folder…" and "Connect Photos…" were inside the fold. Somebody
+    /// who has just installed this looks at three collapsed rows and sees no
+    /// way to add a photo — the actions are one click away, behind a row that
+    /// gives no sign it is hiding the only thing they came to do.
+    var action: (PhotoSource) -> (title: String, run: () -> Void)?
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
@@ -155,6 +162,12 @@ struct SourceFlowView<Detail: View>: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
+                if let action = action(source) {
+                    Button(action.title) { action.run() }
+                        .font(.caption)
+                        .buttonStyle(.bordered)
+                        .controlSize(.small)
+                }
                 // Rotates rather than swapping glyph, so it reads as the
                 // same control moving — the same chevron the places and the
                 // groups use.

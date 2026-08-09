@@ -300,23 +300,36 @@ struct ContentView: View {
             pageSelection.wrappedValue = requested
             commands.requestedPage = nil
         }
-        .fileImporter(
-            isPresented: $commands.isImportPickerPresented,
-            allowedContentTypes: [.folder, .image, .movie],
-            allowsMultipleSelection: true
-        ) { result in
-            // Asks before reading. Placement needs a destination, and choosing
-            // one silently is the app deciding where somebody's photos live.
-            if case .success(let urls) = result { store.beginAddingSource(urls) }
-        }
         .sheet(item: $store.pendingSourceSetup) { AddSourceSheet(setup: $0) }
-        .fileImporter(
-            isPresented: $commands.isExportSearchPickerPresented,
-            allowedContentTypes: [.folder],
-            allowsMultipleSelection: false
-        ) { result in
-            if case .success(let urls) = result, let url = urls.first {
-                store.scanForTakeout(rootURL: url, targetID: nil)
+        // Each picker on its own view rather than stacked with the sheets.
+        //
+        // Seven presentations were attached to this one view — four sheets and
+        // two importers, with a sheet between the importers. On macOS they
+        // compete, and "Choose a folder…" silently stopped opening anything:
+        // the button set the flag, and nothing watched it any more. An empty
+        // background gives each presentation a view of its own to hang from,
+        // so adding the next one cannot quietly disable an existing one.
+        .background {
+            Color.clear.fileImporter(
+                isPresented: $commands.isImportPickerPresented,
+                allowedContentTypes: [.folder, .image, .movie],
+                allowsMultipleSelection: true
+            ) { result in
+                // Asks before reading. Placement needs a destination, and
+                // choosing one silently is the app deciding where somebody's
+                // photos live.
+                if case .success(let urls) = result { store.beginAddingSource(urls) }
+            }
+        }
+        .background {
+            Color.clear.fileImporter(
+                isPresented: $commands.isExportSearchPickerPresented,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                if case .success(let urls) = result, let url = urls.first {
+                    store.scanForTakeout(rootURL: url, targetID: nil)
+                }
             }
         }
         // Titled for what happened rather than for the app's embarrassment.

@@ -174,6 +174,22 @@ struct SourcesView: View {
                     // screens now open the same way, and none of them has to
                     // repeat a name to say which thing it is describing.
                     detailPanel(source)
+                } action: { source in
+                    switch source.id {
+                    case "apple":
+                        // Once connected the row's own detail carries what to
+                        // do next, and a button that repeats it is noise.
+                        guard store.applePhotosState != .connected else { return nil }
+                        return ("Connect…", { Task { await store.connectApplePhotos() } })
+                    case "google":
+                        return ("Find a download…", {
+                            commands.isExportSearchPickerPresented = true
+                        })
+                    default:
+                        return ("Choose a folder…", {
+                            commands.isImportPickerPresented = true
+                        })
+                    }
                 }
                 .padding(.vertical, 4)
 
