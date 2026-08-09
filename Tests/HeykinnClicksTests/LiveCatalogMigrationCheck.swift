@@ -195,3 +195,51 @@ final class LiveCatalogMigrationCheck: XCTestCase {
         }
     }
 }
+
+/// The loss model, run over a real archive.
+///
+/// The unit tests prove the rules against a fixture built to be awkward. This
+/// proves the rules still describe *this* archive, whose shape no fixture was
+/// derived from — and it is the only place the two can disagree.
+extension LiveCatalogMigrationCheck {
+
+    func testLossProjectionAgreesWithTheRealArchive() throws {
+        guard let path = ProcessInfo.processInfo.environment["HEYKINN_LIVE_CATALOG"] else {
+            throw XCTSkip("Set HEYKINN_LIVE_CATALOG to a copy of a real catalog.")
+        }
+        let catalog = try CatalogStore(databasePath: path)
+        let assets = try catalog.fetchAssets()
+        let replicas = try catalog.fetchReplicaStates()
+        let targets = try catalog.fetchTargets()
+        let input = LossProjection.Input(
+            assets: assets,
+            replicas: replicas,
+            groupOfAsset: try catalog.fetchStorageGroupIDsByAsset(),
+            hostTargetID: targets.first { $0.kind == .hostDevice }?.id
+        )
+
+        print("LIVE photos=\(input.photos.count) replicas=\(replicas.count)")
+        for target in targets {
+            let projection = LossProjection.project(.device(target.id), in: input)
+            print("LIVE lose \(target.name): \(projection.lost) lost, \(projection.reducedToOneCopy) down to one copy")
+            // Every photo on this archive is in two places, so no single device
+            // failing may lose one. If this ever fires, the archive changed —
+            // and that is the alarm, not the test being wrong.
+            XCTAssertEqual(projection.lost, 0, "\(target.name) is the sole holder of nothing")
+        }
+
+        let downloads = LossProjection.project(.downloadsEverywhere, in: input)
+        print("LIVE delete every download: \(downloads.lost) lost, \(downloads.reducedToOneCopy) down to one copy")
+        // The archive's real weak point, and the number the screen prints.
+        XCTAssertGreaterThan(downloads.lost, 0)
+        XCTAssertLessThanOrEqual(downloads.lost, input.photos.count, "a subset cannot exceed its set")
+
+        // Deleting the downloads from one drive is a different event, and on
+        // an archive where every part exists twice it costs nothing at all.
+        for target in targets {
+            let here = LossProjection.project(.downloadsOn(target.id), in: input)
+            print("LIVE delete downloads on \(target.name): \(here.lost) lost, \(here.reducedToOneCopy) down to one copy")
+            XCTAssertLessThanOrEqual(here.lost, downloads.lost)
+        }
+    }
+}
