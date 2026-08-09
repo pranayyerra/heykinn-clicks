@@ -25,6 +25,20 @@ enum PartRedundancy: String, Codable, Hashable {
     case redundantSpotChecked
     /// Enough targets hold it and their whole-file hashes agree.
     case redundantVerified
+    /// Enough targets hold it, but in different forms — one has the zip, another
+    /// has the folder unpacked from it.
+    ///
+    /// Both are the same export part and neither is missing anything. They
+    /// simply cannot be held against each other by size or hash: a zip and its
+    /// contents are different encodings of the same photos, so the numbers will
+    /// never match and no amount of checking will make them.
+    ///
+    /// Its own grade because the fall-through was `singleCopy`, which is a
+    /// different and alarming claim. On a real archive one drive kept the zips
+    /// and the other kept the unpacked copies, and every part of the export
+    /// went orange, reading "one copy only" directly beneath a line saying it
+    /// was on every drive.
+    case redundantIncomparable
 
     var displayName: String {
         switch self {
@@ -34,6 +48,7 @@ enum PartRedundancy: String, Codable, Hashable {
         case .redundantUnverified: return "Enough copies (sizes match)"
         case .redundantSpotChecked: return "Enough copies, spot-checked"
         case .redundantVerified: return "Enough copies, verified"
+        case .redundantIncomparable: return "Enough copies, held in different forms"
         }
     }
 
@@ -43,7 +58,8 @@ enum PartRedundancy: String, Codable, Hashable {
     var meetsPolicy: Bool {
         switch self {
         case .absent, .singleCopy: return false
-        case .singleCopyByPolicy, .redundantUnverified, .redundantSpotChecked, .redundantVerified:
+        case .singleCopyByPolicy, .redundantUnverified, .redundantSpotChecked,
+             .redundantVerified, .redundantIncomparable:
             return true
         }
     }
@@ -115,9 +131,14 @@ struct ExportPart: Identifiable, Hashable {
         if hashesAgree { return .redundantVerified }
         if quickChecksumsAgree { return .redundantSpotChecked }
         if sizesAgree { return .redundantUnverified }
-        // Enough targets hold a part with this number, but their sizes disagree,
-        // so they are not the same bytes. Report the weaker truth rather than
-        // claiming a redundancy that may not hold.
+        // A zip on one drive and the folder unpacked from it on another are the
+        // same part in two encodings. Their sizes differ by design and their
+        // hashes are not of the same thing, so there is nothing to compare and
+        // never will be — which is not the same as the copies disagreeing.
+        if Set(copies.values.map(\.kind)).count > 1 { return .redundantIncomparable }
+        // Same form on every drive and the sizes still disagree: these are not
+        // the same bytes. Report the weaker truth rather than claiming a
+        // redundancy that may not hold.
         return .singleCopy
     }
 

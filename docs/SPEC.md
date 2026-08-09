@@ -803,6 +803,19 @@ Earned against a real 248 GB archive; the stories are in git history.
     belongs to the *background* pass only: somebody who asks for a check is
     never answered with "I looked this morning".
 
+70. Two copies in different shapes are still two copies. A part held as a zip
+    on one drive and as the folder unpacked from it on another cannot be
+    compared by size or hash — they are different encodings of the same photos,
+    so the numbers will never match and no amount of checking will make them.
+    The grading fell through to `singleCopy`, so every part of an export went
+    orange reading "one copy only" directly beneath a line saying it was on
+    every drive. "Enough drives hold it and I cannot compare them" is not "one
+    drive has it": the first is information, the second is an alarm, and only
+    one of them was true. Note that the archive-wide safety headline was right
+    throughout — it counts replicas per photo, which do not care what shape the
+    bytes are in. Two subsystems reading different tables can disagree, and the
+    one drawing a conclusion is the one to doubt.
+
 64. Move the files first, then the catalog. A catalog told about a move that
     did not happen describes an archive nobody has, and nothing will ever
     correct it. A file that moved with the catalog not yet updated is found

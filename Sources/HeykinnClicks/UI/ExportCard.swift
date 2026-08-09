@@ -105,6 +105,9 @@ struct ExportSummary: Identifiable {
         let verified = grades.filter { $0 == .redundantVerified }
         let spotChecked = grades.filter { $0 == .redundantSpotChecked }
         let soleCopies = grades.filter { $0 == .singleCopyByPolicy }
+        // Held on every drive, in forms that cannot be held against each other.
+        // Not pending a check — there is no check to be pending.
+        let incomparable = grades.filter { $0 == .redundantIncomparable }
         // Nothing was compared and nothing ever will be — the policy asks for
         // one copy, so there is no second copy to hold this one against.
         // Saying "not yet compared" would promise a check that is not coming.
@@ -121,9 +124,17 @@ struct ExportSummary: Identifiable {
         if verified.count + spotChecked.count == parts.count {
             return ("On every drive, and the copies match on a spot check", "checkmark.seal", .green)
         }
+        if incomparable.count == parts.count {
+            return (
+                "On every drive — one keeps the zips and another the unpacked copies, which hold the same photos and cannot be compared to each other.",
+                "checkmark.circle",
+                .teal
+            )
+        }
         // Parts held as a single copy are not waiting on a comparison, so
         // counting them as pending would overstate the work outstanding.
-        let pending = parts.count - verified.count - spotChecked.count - soleCopies.count
+        let pending = parts.count - verified.count - spotChecked.count
+            - soleCopies.count - incomparable.count
         guard pending > 0 else {
             return (
                 "On every drive. \(Formatters.count(soleCopies.count, "file")) \(soleCopies.count == 1 ? "exists" : "exist") as one copy, so there is nothing to check against.",

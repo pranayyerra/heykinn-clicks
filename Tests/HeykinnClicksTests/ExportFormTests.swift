@@ -140,3 +140,76 @@ final class ExportFormTests: XCTestCase {
         )
     }
 }
+
+/// Grading a part whose copies are in different shapes.
+final class ExportPartFormGradeTests: XCTestCase {
+
+    private let driveA = UUID(), driveB = UUID()
+
+    private func archive(_ kind: TakeoutArchiveKind, bytes: Int64, quick: String? = nil) -> TakeoutArchive {
+        var one = TakeoutArchive(
+            id: UUID(), path: "/x/takeout-set-001" + (kind == .zip ? ".zip" : ""),
+            kind: kind, sizeBytes: bytes, targetID: nil, discoveredAt: Date(),
+            importedAt: Date(), importBatchID: nil, importedAssetCount: 1,
+            skippedDuplicateCount: 0, note: nil, exportSetID: "set", partNumber: 1
+        )
+        one.quickChecksum = quick
+        return one
+    }
+
+    /// The state a real archive reached by keeping the zips on one drive and
+    /// the unpacked copies on the other: every part on every drive, and every
+    /// part reported as "one copy only".
+    func testAZipAndAnUnpackedCopyAreEnoughCopies() {
+        let part = ExportPart(
+            setID: "set", partNumber: 1,
+            copies: [
+                driveA: archive(.zip, bytes: 10_652_397_244, quick: "abc"),
+                driveB: archive(.folder, bytes: 10_649_826_020),
+            ]
+        )
+        let grade = part.redundancy(acrossTargets: [driveA, driveB], copiesRequired: 2)
+        XCTAssertEqual(grade, .redundantIncomparable)
+        XCTAssertTrue(grade.meetsPolicy, "both drives hold it; nothing is missing")
+        XCTAssertNotEqual(grade, .singleCopy, "which is what it said, in orange, under a line saying it was on every drive")
+    }
+
+    /// The warning that must survive: same form, different bytes.
+    func testTwoZipsThatDisagreeAreStillReportedAsNotTheSameBytes() {
+        let part = ExportPart(
+            setID: "set", partNumber: 1,
+            copies: [
+                driveA: archive(.zip, bytes: 10_652_397_244),
+                driveB: archive(.zip, bytes: 9_000_000_000),
+            ]
+        )
+        XCTAssertEqual(
+            part.redundancy(acrossTargets: [driveA, driveB], copiesRequired: 2), .singleCopy,
+            "two zips of different sizes are not two copies of one thing"
+        )
+    }
+
+    func testMatchingZipsAreStillGradedOnTheirEvidence() {
+        let part = ExportPart(
+            setID: "set", partNumber: 1,
+            copies: [
+                driveA: archive(.zip, bytes: 10, quick: "same"),
+                driveB: archive(.zip, bytes: 10, quick: "same"),
+            ]
+        )
+        XCTAssertEqual(
+            part.redundancy(acrossTargets: [driveA, driveB], copiesRequired: 2),
+            .redundantSpotChecked
+        )
+    }
+
+    /// One drive, one copy, and no second form to be incomparable with.
+    func testOneDriveIsUnaffected() {
+        let part = ExportPart(
+            setID: "set", partNumber: 1, copies: [driveA: archive(.folder, bytes: 10)]
+        )
+        XCTAssertEqual(
+            part.redundancy(acrossTargets: [driveA, driveB], copiesRequired: 2), .singleCopy
+        )
+    }
+}

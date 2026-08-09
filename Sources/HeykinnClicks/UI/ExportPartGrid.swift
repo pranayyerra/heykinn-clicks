@@ -32,6 +32,9 @@ struct ExportPartGrid: View {
     private func tint(_ grade: PartRedundancy) -> Color {
         switch grade {
         case .redundantVerified, .redundantSpotChecked, .redundantUnverified: return .green
+        // Informational, not a warning. Nothing is missing and nothing is
+        // wrong; the two copies are simply in forms that cannot be compared.
+        case .redundantIncomparable: return .teal
         case .singleCopyByPolicy: return .teal
         case .singleCopy: return .orange
         case .absent: return .red
@@ -159,6 +162,7 @@ extension PartRedundancy {
         case .singleCopyByPolicy: return 2
         case .redundantUnverified: return 3
         case .redundantSpotChecked: return 4
+        case .redundantIncomparable: return 3
         case .redundantVerified: return 5
         }
     }
@@ -172,6 +176,7 @@ extension PartRedundancy {
         case .singleCopyByPolicy: return "one copy, as asked"
         case .redundantUnverified: return "on every drive"
         case .redundantSpotChecked: return "spot-checked"
+        case .redundantIncomparable: return "on every drive, in different forms"
         case .redundantVerified: return "checked in full"
         }
     }

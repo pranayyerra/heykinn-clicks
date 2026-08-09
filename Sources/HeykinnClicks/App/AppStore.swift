@@ -401,6 +401,18 @@ final class AppStore: ObservableObject {
         } catch {
             lastError = "Could not read how storage groups chose their devices: \(error.localizedDescription)"
         }
+        do {
+            let withdrawn = try catalog.withdrawUnreadPartVerifications()
+            if withdrawn > 0 {
+                loadAll()
+                audit(
+                    .system,
+                    "\(Formatters.count(withdrawn, "copy", "copies")) counted inside a Google export were recorded as read back, on the strength of a file with the right name existing. Nothing was read, so the claim has been withdrawn — the photos are exactly where they were, and \"Check for damage\" on the export is what proves them."
+                )
+            }
+        } catch {
+            lastError = "Could not review what has been read back: \(error.localizedDescription)"
+        }
         resolveAutomaticDestinations()
 
         targetMonitor.rescanRequested = { [weak self] in
@@ -6869,7 +6881,13 @@ final class AppStore: ObservableObject {
                 // Whether a part's bytes are still good is a question about the
                 // part, and it has its own answer: the spot check and the
                 // full-checksum pass on the export itself.
-                && !(isPatrol && ReplicationService.isInsideADownload($0.relativePath))
+                //
+                // Only *part*-backed copies, not everything inside a download.
+                // A photo recorded as a member of a zip is read for real —
+                // streamed out of the archive and hashed — so it is exactly
+                // what the patrol is for, however slow one read is. The
+                // distinction is whether bytes can be read, not where they sit.
+                && !(isPatrol && ReplicationService.isArchivePartBacked($0))
         }
 
         // Every readable copy of those assets, on every device — not just this

@@ -212,3 +212,48 @@ final class PatrolFloorTests: XCTestCase {
         )
     }
 }
+
+/// Taking back a read-back claim that was never earned.
+final class UnreadPartVerificationTests: XCTestCase {
+
+    func testOnlyPartBackedClaimsAreWithdrawn() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-withdraw-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let drive = UUID()
+        let read = Date(timeIntervalSince1970: 1_700_000_000)
+        let part = UUID(), member = UUID(), ownFile = UUID()
+
+        try catalog.upsertReplicaState(TargetReplicaState(
+            assetID: part, targetID: drive, state: .present,
+            relativePath: ReplicationService.archivePartPrefix + "takeout-set-001",
+            lastVerifiedAt: read
+        ))
+        // Streamed out of the zip and hashed — a real read, and it keeps its claim.
+        try catalog.upsertReplicaState(TargetReplicaState(
+            assetID: member, targetID: drive, state: .present,
+            relativePath: ReplicationService.zipMemberPrefix + "Exports/a.zip!Takeout/x.jpg",
+            lastVerifiedAt: read
+        ))
+        try catalog.upsertReplicaState(TargetReplicaState(
+            assetID: ownFile, targetID: drive, state: .present,
+            relativePath: "Buckets/aa/x.jpg", lastVerifiedAt: read
+        ))
+
+        XCTAssertEqual(try catalog.withdrawUnreadPartVerifications(), 1)
+        let byAsset = try catalog.fetchReplicaStates()
+            .reduce(into: [UUID: Date?]()) { $0[$1.assetID] = $1.lastVerifiedAt }
+        XCTAssertNil(byAsset[part] ?? nil, "confirmed by name, never read")
+        XCTAssertEqual(byAsset[member] ?? nil, read, "streamed out of the zip and hashed")
+        XCTAssertEqual(byAsset[ownFile] ?? nil, read, "a file of its own, read directly")
+
+        XCTAssertEqual(
+            try catalog.withdrawUnreadPartVerifications(), 0,
+            "and it stays withdrawn — safe to run at every launch"
+        )
+    }
+}

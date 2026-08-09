@@ -83,7 +83,12 @@ struct OverviewView: View {
         if stale > 0 {
             return "\(confirmedCount.formatted()) read back and matched. \(stale.formatted()) were last read a while ago and are due another look."
         }
-        return "\(confirmedCount.formatted()) of \(localCount.formatted()) read back and matched. The rest are on your drives but nobody has read them yet — that is what the inner ring is filling in."
+        // No "the inner ring is filling in": that ring was removed when this
+        // screen was cut back, and the sentence went on pointing at it. It also
+        // promised a background pass that will never come for most of these —
+        // a photo counted inside an export part has no file of its own to read,
+        // and proving those is the export's own full check.
+        return "\(confirmedCount.formatted()) of \(localCount.formatted()) read back and matched. The rest are on your drives, unread — for photos held inside a Google export that is what \u{201C}Check for damage\u{201D} on the export proves."
     }
 
 

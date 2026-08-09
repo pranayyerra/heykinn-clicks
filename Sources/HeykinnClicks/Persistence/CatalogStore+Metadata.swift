@@ -103,6 +103,36 @@ extension CatalogStore {
     /// not, and a 127 GB read that would find nothing is worth not offering.
     static let currentCaptureVersion = 1
 
+    /// Withdraws a read-back claim that was never earned.
+    ///
+    /// A copy counted inside an export *part* was confirmed by looking for a
+    /// file with the right name, and then stamped `lastVerifiedAt` — the field
+    /// that means the bytes were read and matched. On a real archive that made
+    /// 21,117 photos report as "all read back" on the strength of a filename.
+    /// Fixing the stamping stops it happening again; this is the part already
+    /// on record.
+    ///
+    /// Deliberately only `archivepart:`. A photo recorded as a member of a zip
+    /// is verified by streaming it out and hashing it, which is a genuine read
+    /// and keeps every claim it has earned.
+    ///
+    /// Idempotent, and safe to run at every launch: once cleared these stay
+    /// cleared, because nothing per-photo reads a part's bytes.
+    @discardableResult
+    func withdrawUnreadPartVerifications() throws -> Int {
+        let prefix = ReplicationService.archivePartPrefix
+        let affected = try database.query("""
+        SELECT count(*) FROM replica_states
+        WHERE last_verified_at IS NOT NULL AND substr(relative_path, 1, ?) = ?;
+        """, [.int(Int64(prefix.count)), .text(prefix)]) { Int($0.int(0)) }.first ?? 0
+        guard affected > 0 else { return 0 }
+        try database.run("""
+        UPDATE replica_states SET last_verified_at = NULL
+        WHERE last_verified_at IS NOT NULL AND substr(relative_path, 1, ?) = ?;
+        """, [.int(Int64(prefix.count)), .text(prefix)])
+        return affected
+    }
+
     func recordCapture(
         setID: String, partNumber: Int,
         version: Int = CatalogStore.currentCaptureVersion,
