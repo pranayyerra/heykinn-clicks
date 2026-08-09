@@ -29,7 +29,7 @@ struct HelpView: View {
     private static let topics: [Topic] = [
         Topic(
             symbol: "externaldrive.connected.to.line.below",
-            title: "A target is a device, not a folder",
+            title: "A device is a disk, not a folder",
             body: """
             A target is somewhere a whole copy of your archive lives: either this Mac, \
             holding its copy in a folder you pick, or an external drive. Two folders on \

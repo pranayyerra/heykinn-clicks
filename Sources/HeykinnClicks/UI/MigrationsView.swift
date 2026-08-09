@@ -258,7 +258,7 @@ struct MigrationCreator: View {
                 .disabled(selectedAssetIDs.isEmpty || source == target)
             }
             if source == target {
-                Text("Source and target must differ.")
+                Text("A move has to go somewhere else.")
                     .font(.caption)
                     .foregroundStyle(.orange)
             }

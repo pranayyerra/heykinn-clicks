@@ -47,8 +47,8 @@ struct OverviewView: View {
         // the photos whose source asks for three, and wrong in the direction
         // that reads as reassurance.
         return [
-            SegmentedBar.Segment(label: "Kept the way its source asks", count: met, color: .green),
-            SegmentedBar.Segment(label: "Short of what its source asks", count: short, color: .orange),
+            SegmentedBar.Segment(label: "On all the drives it is meant to be on", count: met, color: .green),
+            SegmentedBar.Segment(label: "Short of the copies asked for", count: short, color: .orange),
             SegmentedBar.Segment(label: "A copy no longer matches", count: diverged, color: .red)
         ]
     }
@@ -90,6 +90,13 @@ struct OverviewView: View {
     /// though it were is what made a healthy archive look broken — but leaving
     /// it as a grey aside under a 100% is how a reader comes away believing
     /// every photo has been verified when almost none of them have.
+    /// Whether the evidence note is the all-clear rather than a shortfall.
+    private var everythingRead: Bool {
+        protectionCounts
+            .filter { $0.key.checkStanding == .neverRead || $0.key.checkStanding == .stale }
+            .values.reduce(0, +) == 0
+    }
+
     private var evidenceNote: String? {
         let neverRead = protectionCounts.filter { $0.key.checkStanding == .neverRead }.values.reduce(0, +)
         let stale = protectionCounts.filter { $0.key.checkStanding == .stale }.values.reduce(0, +)
@@ -208,7 +215,7 @@ struct OverviewView: View {
                 detail: targetStepDetail,
                 symbol: "externaldrive.badge.plus",
                 isDone: !store.targets.isEmpty,
-                actionLabel: store.targets.isEmpty ? "Add a target" : "Manage targets"
+                actionLabel: store.targets.isEmpty ? "Add a drive" : "Manage drives"
             ) {
                 selection = .targets
             }
@@ -230,12 +237,12 @@ struct OverviewView: View {
 
     private var targetStepDetail: String {
         guard !store.targets.isEmpty else {
-            return "A target is a device holding a whole copy: this Mac, an external drive, "
+            return "A device is somewhere holding a whole copy: this Mac, an external drive, "
                 + "or both. Until one exists, photos wait in a staging area on this Mac — "
                 + "safe, but only in one place."
         }
         let registered = store.targets.map(\.name).sorted().joined(separator: ", ")
-        return "Registered: \(registered). Each source you add says how many copies of its photos to keep and which of these devices hold them."
+        return "Registered: \(registered). Each group of photos says how many copies to keep, and the app works out which of these hold them."
     }
 
     private func firstRunStep(
@@ -309,9 +316,18 @@ struct OverviewView: View {
                         // The inner ring's line. Not a footnote qualifying the
                         // verdict — a second fact, and the one the reader would
                         // otherwise assume the green ring had already promised.
-                        Label(evidenceNote, systemImage: "circle.dotted")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
+                        // Good news must not wear the styling of an
+                        // outstanding item. Both messages rendered as a dotted
+                        // grey circle, so "Every copy has been read back and
+                        // matched" was indistinguishable at a glance from "N
+                        // have never been read" — a hollow ring under a green
+                        // 100%, which reads as work left to do.
+                        Label(
+                            evidenceNote,
+                            systemImage: everythingRead ? "checkmark.circle.fill" : "circle.dotted"
+                        )
+                        .font(.callout)
+                        .foregroundStyle(everythingRead ? Color.green : Color.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                             .help("Having enough copies and having read them back are different things. A copy nobody has read is still a copy — it just has not been confirmed undamaged yet.")
                     }
@@ -323,7 +339,7 @@ struct OverviewView: View {
                         Button {
                             selection = .targets
                         } label: {
-                            Label("Set up targets", systemImage: "externaldrive.badge.plus")
+                            Label("Set up drives", systemImage: "externaldrive.badge.plus")
                         }
                         .buttonStyle(.borderedProminent)
                     }
@@ -345,7 +361,7 @@ struct OverviewView: View {
         // Nowhere to put anything is its own answer, and it is not a shortfall
         // the app can work off.
         if store.targets.isEmpty {
-            return "\(localCount.formatted()) photos have nowhere to go yet — no device is registered. Add one and the copies each source asks for start being made."
+            return "\(localCount.formatted()) photos have nowhere to go yet — no drive is registered. Add one and the copies each group asks for start being made."
         }
         // A source asking for more copies than it names devices can never be
         // satisfied by copying, so it is said plainly rather than counted in
@@ -366,6 +382,14 @@ struct OverviewView: View {
             // known to be good — and only the first is true here. Say the one
             // the ring is actually reporting; the line under it says how far
             // the checking has got.
+            // The same answer Keep safe leads with, in the same words. Both
+            // screens were asked "is my archive safe" and gave different
+            // replies: this one reported policy compliance, which a photo
+            // alone on one drive satisfies. How many places hold it is the
+            // question, and one number cannot be right on one screen only.
+            if let fewest = store.leastCopiesAnywhere, fewest > 1 {
+                return "Every photo is on \(Formatters.count(fewest, "drive"))."
+            }
             return "All \(localCount.formatted()) photos are on all the drives they are meant to be on."
         }
         let short = localCount - protectedCount
@@ -402,12 +426,12 @@ struct OverviewView: View {
                     VStack(alignment: .leading, spacing: 3) {
                         Text("Nothing holds a copy yet")
                             .font(.headline)
-                        Text("Imports land in staging and stay there until a target holds them.")
+                        Text("Imports land in staging and stay there until a drive holds them.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Spacer()
-                    Button("Add a target…") { selection = .targets }
+                    Button("Add a drive…") { selection = .targets }
                         .buttonStyle(.borderedProminent)
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -598,7 +622,7 @@ struct OverviewView: View {
                         Spacer()
                     }
                 }
-                Text("Every photo lives in exactly one place. Move them between places from Migrations.")
+                Text("Every photo lives in exactly one place. Move them between places from Keep safe.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

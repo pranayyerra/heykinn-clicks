@@ -25,7 +25,7 @@ struct StorageGroupsList: View {
         // destinations asking halves of the same question.
         CardBox(title: "How many copies, and where", systemImage: "square.stack.3d.up") {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Each set of photos says how many copies to keep. A photo is in exactly one set.")
+            Text("Each group of photos says how many copies to keep. A photo is in exactly one group.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -393,7 +393,7 @@ struct RetargetSummary: View {
                     }
                     if change.toDelete == 0 && change.toRelease == 0 {
                         Label(
-                            "\(change.name) holds none of this source, so nothing changes there.",
+                            "\(change.name) holds none of this group, so nothing changes there.",
                             systemImage: "checkmark.circle"
                         )
                         .font(.caption)

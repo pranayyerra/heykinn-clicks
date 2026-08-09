@@ -712,7 +712,7 @@ final class AppStore: ObservableObject {
                     importBatchID: nil,
                     importedAssetCount: 0,
                     skippedDuplicateCount: 0,
-                    note: "Copied from \(step.donorDriveID.flatMap { targetsByID[$0]?.name } ?? "the Mac's holding area") so this export is kept on the devices its source names.",
+                    note: "Copied from \(step.donorDriveID.flatMap { targetsByID[$0]?.name } ?? "the Mac's holding area") so this export is kept on the drives its group works out.",
                     exportSetID: transfer.setID,
                     partNumber: transfer.partNumber,
                     quickChecksum: outcome.quickChecksum
@@ -5955,7 +5955,7 @@ final class AppStore: ObservableObject {
         if queued > 0 {
             audit(
                 .replication,
-                "Queued \(Formatters.count(queued, "copy", "copies")) so \(Formatters.count(plans.count, "photo")) reach the devices their source is set to keep them on."
+                "Queued \(Formatters.count(queued, "copy", "copies")) so \(Formatters.count(plans.count, "photo")) reach the drives they are meant to be on."
             )
             loadAll()
         }
@@ -6087,7 +6087,7 @@ final class AppStore: ObservableObject {
             .sorted()
         audit(
             .replication,
-            "Withdrew \(Formatters.count(staleReplicas.count, "queued copy", "queued copies")) to \(devices.isEmpty ? "devices no source uses" : devices.joined(separator: " and ")) — no source keeps its photos there any more, so nothing was waiting to be done. Nothing was deleted from any device."
+            "Withdrew \(Formatters.count(staleReplicas.count, "queued copy", "queued copies")) to \(devices.isEmpty ? "devices no group uses" : devices.joined(separator: " and ")) — no group keeps its photos there any more, so nothing was waiting to be done. Nothing was deleted from any device."
         )
         loadAll()
         return staleReplicas.count

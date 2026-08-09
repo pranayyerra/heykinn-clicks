@@ -152,10 +152,6 @@ struct ExportCard: View {
     /// found on a drive has never been asked about, and inventing settings for
     /// it would put a decision in the user's mouth. The card offers the sheet
     /// as soon as there is something for it to govern.
-    private var placement: SourceGroupPlacement {
-        store.groupPlacement(forExportSet: export.setID)
-    }
-
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 8) {
@@ -364,7 +360,7 @@ struct TakeoutImportSheet: View {
             Text("Photos and videos are added to the library with their dates and locations from Google's metadata. Anything already in the library is skipped.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            Text("They are recorded as living on your own targets. The export proves this content was in Google when the export was made, which is not evidence about now — so the app claims nothing about Google until it can check for itself.")
+            Text("They are recorded as living on your own drives. The export proves this content was in Google when the export was made, which is not evidence about now — so the app claims nothing about Google until it can check for itself.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

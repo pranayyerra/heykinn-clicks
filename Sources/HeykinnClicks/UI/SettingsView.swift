@@ -33,7 +33,7 @@ private struct AutomationSettings: View {
             }
             Section {
                 Toggle("Bring Photos-library originals into the archive", isOn: $store.importFromApplePhotos)
-                Text("Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your targets like anything else; ones already held byte-for-byte are merged rather than stored twice. Connect and watch progress under Add photos.")
+                Text("Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your drives like anything else; ones already held byte-for-byte are merged rather than stored twice. Connect and watch progress under Add photos.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -179,14 +179,14 @@ private struct SafetySettings: View {
         Form {
             Section("How many copies") {
                 Label(
-                    "Each source says how many copies of its photos to keep and which devices hold them. Change that under Keep safe, next to the photos it governs — there is no single setting for the whole archive.",
+                    "Each set of photos says how many copies to keep. Change that under Keep safe, next to the photos it governs — there is no single setting for the whole archive.",
                     systemImage: "square.stack.3d.up"
                 )
                 .font(.callout)
             }
             Section("Background checking") {
                 Toggle("Read a few files in the background", isOn: $store.backgroundRotPatrol)
-                Text("Every half hour, on an idle target, the app re-reads the forty files it checked longest ago. Reading is the only thing that finds bit rot — comparing what the catalog recorded can never see a file decay on disk. It yields to imports and syncs, and skips a target that has work waiting.")
+                Text("Every half hour, on an idle drive, the app re-reads the forty files it checked longest ago. Reading is the only thing that finds bit rot — comparing what the catalog recorded can never see a file decay on disk. It yields to imports and syncs, and skips a target that has work waiting.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

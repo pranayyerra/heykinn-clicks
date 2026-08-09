@@ -154,7 +154,7 @@ struct DrivesView: View {
                 if !store.heldExportParts.isEmpty || !store.partTransferPlan.transfers.isEmpty {
                     CardBox(title: "Export parts in transit", systemImage: "shippingbox") {
                         VStack(alignment: .leading, spacing: 8) {
-                            Text("When the target that has a part and the target that needs it are never reachable at the same time, the part waits here in between. It is deleted as soon as it lands.")
+                            Text("When the drive that has a part and the drive that needs it are never reachable at the same time, the part waits here in between. It is deleted as soon as it lands.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             ForEach(store.heldExportParts) { part in
@@ -212,7 +212,7 @@ struct DrivesView: View {
             registrationSheet(volume)
         }
         .confirmationDialog(
-            "Forget \(targetToForget?.name ?? "this target")?",
+            "Forget \(targetToForget?.name ?? "this drive")?",
             isPresented: Binding(
                 get: { targetToForget != nil },
                 set: { if !$0 { targetToForget = nil } }

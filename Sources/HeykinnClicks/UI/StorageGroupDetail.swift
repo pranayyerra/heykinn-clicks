@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Everything true about one set of photos: where they came from, how many
+/// Everything true about one group of photos: where they came from, how many
 /// copies they ask for, and how those copies actually exist.
 ///
 /// Built because the two halves were on different screens and only one of them

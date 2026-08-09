@@ -85,23 +85,6 @@ struct FolderSourceList: View {
     /// The source a batch's photos belong to, so its settings can be edited
     /// from where its photos are shown. Nil for photos imported before sources
     /// existed and not yet backfilled.
-    /// What keeps this folder's photos, said plainly.
-    private func storageNote(for batch: ImportBatch) -> String? {
-        guard let assetID = store.assets.first(where: { $0.importBatchID == batch.id })?.id,
-              let sourceID = store.sourceIDByAsset[assetID]
-        else { return nil }
-        switch store.groupPlacement(forSource: sourceID) {
-        case .none:
-            return nil
-        case .exclusive(let group):
-            return "Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))."
-        case .shared(let group, let otherPhotos):
-            return "Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs)), in the group \(group.label) — which also holds \(Formatters.count(otherPhotos, "photo")) from elsewhere."
-        case .split(let groups, _):
-            return "These photos are kept in \(Formatters.count(groups.count, "group")): \(groups.map(\.label).joined(separator: ", "))."
-        }
-    }
-
     @ViewBuilder
     private var unaccountedRow: some View {
         let assets = unaccountedFor
@@ -229,50 +212,17 @@ struct FolderSourceList: View {
                 PathRow(path: batch.sourcePath)
             }
 
-            // Where this folder's photos are now — the same reading the Google
-            // export cards do, off the same replica states. A folder on one of
-            // the archive's own devices is not only a source: its files were
-            // counted as that device's copy rather than duplicated onto it,
-            // which makes the folder load-bearing, and the status says so.
-            let status = store.copyStatus(forBatch: batch.id)
-            if status.total > 0 {
-                Divider()
-                SourceCopyStatusView(status: status)
-                // Reported, not edited. Two screens writing one setting is
-                // what made "does this override that?" a question anybody had
-                // to ask; Policies is the single place it is answered.
-                HStack(alignment: .firstTextBaseline, spacing: 6) {
-                    if let note = storageNote(for: batch) {
-                        Text(note)
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                }
-                .padding(.top, 2)
-            }
+            // A copy-status readout used to sit here — a verdict, a device
+            // breakdown, and a line repeating both. The export card carried
+            // the same thing and lost it; this one was missed, so one screen
+            // was doing arrival for downloads and arrival-plus-storage for
+            // folders. Where a photo is kept is Keep safe's whole subject, and
+            // saying it here in a second voice is how the two drift.
 
             if assets.isEmpty {
                 Text("Nothing from this folder is in the archive — every photo in it was already here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-            } else {
-                ScrollView(.horizontal, showsIndicators: false) {
-                    HStack(spacing: 6) {
-                        ForEach(assets.prefix(24)) { asset in
-                            AssetThumbnailView(asset: asset, allowsHoverPreview: false)
-                                .frame(width: 56, height: 56)
-                                .clipShape(RoundedRectangle(cornerRadius: 5))
-                        }
-                        if assets.count > 24 {
-                            Text("+\((assets.count - 24).formatted())")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .frame(width: 56, height: 56)
-                                .background(Color.secondary.opacity(0.1), in: RoundedRectangle(cornerRadius: 5))
-                        }
-                    }
-                }
             }
         }
         .padding(.leading, 28)
