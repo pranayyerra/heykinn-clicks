@@ -90,8 +90,14 @@ struct StorageMatrix: View {
     /// hypothesis on it has to be loud, opt-in, and easy to leave.
     @State private var whatIf: ArchiveLoss?
 
-    @State private var renaming: StorageGroup?
+    /// The group whose name is being typed over, in place.
+    ///
+    /// Renaming a label is the lightest thing anybody does to a group, and it
+    /// sat in a menu next to removing one — the same weight given to the same
+    /// two clicks. Double-clicking a name is what a name does everywhere else.
+    @State private var renamingInline: UUID?
     @State private var renameText = ""
+    @FocusState private var renameFieldFocused: Bool
     @State private var deleting: StorageGroup?
     @State private var placingStranded = false
 
@@ -136,17 +142,6 @@ struct StorageMatrix: View {
         }
         .sheet(isPresented: $placingStranded) {
             MoveToStorageGroupSheet(assetIDs: store.ungroupedAssetIDs)
-        }
-        .alert("Rename group", isPresented: Binding(
-            get: { renaming != nil },
-            set: { if !$0 { renaming = nil } }
-        )) {
-            TextField("Name", text: $renameText)
-            Button("Cancel", role: .cancel) { renaming = nil }
-            Button("Rename") {
-                if let renaming { store.renameStorageGroup(renaming.id, to: renameText) }
-                renaming = nil
-            }
         }
         .sheet(item: $deleting) { group in
             RemoveStorageGroupSheet(group: group, photoCount: counts[group.id] ?? 0)
@@ -487,10 +482,51 @@ struct StorageMatrix: View {
                         .foregroundStyle(.tertiary)
                         .rotationEffect(.degrees(isOpen ? 90 : 0))
                     VStack(alignment: .leading, spacing: 1) {
-                        Text(group.label)
-                            .font(.callout.weight(isOpen ? .semibold : .medium))
-                            .lineLimit(1)
-                            .truncationMode(.tail)
+                        if renamingInline == group.id {
+                            // A visible way out, not only a keyboard one.
+                            //
+                            // Neither `onExitCommand` nor `onKeyPress(.escape)`
+                            // reached a focused TextField here — escape simply
+                            // did nothing. That is worse than it sounds:
+                            // clicking away *commits*, so a name typed by
+                            // accident had no way back at all. A control that
+                            // is on screen cannot be routed away by the
+                            // framework.
+                            HStack(spacing: 4) {
+                                TextField("Name", text: $renameText)
+                                    .textFieldStyle(.roundedBorder)
+                                    .font(.callout)
+                                    .focused($renameFieldFocused)
+                                    .onSubmit { commitRename(group) }
+                                // Clicking away keeps what was typed, which is
+                                // what renaming does everywhere else. The guard
+                                // is because committing clears the focus too,
+                                // and this would otherwise answer itself.
+                                    .onChange(of: renameFieldFocused) { _, focused in
+                                        if !focused, renamingInline == group.id { commitRename(group) }
+                                    }
+                                Button {
+                                    abandonRename()
+                                } label: {
+                                    Image(systemName: "xmark.circle.fill")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                                .buttonStyle(.plain)
+                                .help("Keep the name it had")
+                            }
+                        } else {
+                            Text(group.label)
+                                .font(.callout.weight(isOpen ? .semibold : .medium))
+                                .lineLimit(1)
+                                .truncationMode(.tail)
+                                // Wins over the row's own click, so a double
+                                // click renames rather than opening and closing
+                                // the panel underneath it.
+                                .highPriorityGesture(
+                                    TapGesture(count: 2).onEnded { beginRenaming(group) }
+                                )
+                        }
                         // Under a hypothesis the row answers the hypothesis.
                         // Its usual subtitle describes an arrangement that
                         // would no longer exist, and printing both invites the
@@ -528,11 +564,10 @@ struct StorageMatrix: View {
             Menu {
                 // No "Edit where it is kept" here. The panel this row opens has
                 // an Edit button, and two doors to one editor is how they come
-                // to behave differently.
-                Button("Rename…") {
-                    renameText = group.label
-                    renaming = group
-                }
+                // to behave differently. No "Rename…" either — double-clicking
+                // the name does it, which is what a name does everywhere else,
+                // and a menu entry made the lightest change in the app look
+                // like the same size as removing the group.
                 Button("Remove…", role: .destructive) { deleting = group }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -801,6 +836,35 @@ struct StorageMatrix: View {
         guard var next = draft, next.remove(targetID) else { return }
         draft = next
         refreshPlanForDraft()
+    }
+
+    private func beginRenaming(_ group: StorageGroup) {
+        renameText = group.label
+        renamingInline = group.id
+        renameFieldFocused = true
+    }
+
+    /// Commits, unless the name would be empty — in which case the group keeps
+    /// the one it had rather than becoming a row with no title.
+    private func commitRename(_ group: StorageGroup) {
+        let trimmed = renameText.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !trimmed.isEmpty, trimmed != group.label {
+            store.renameStorageGroup(group.id, to: trimmed)
+        }
+        cancelRename()
+    }
+
+    private func cancelRename() {
+        renamingInline = nil
+        renameFieldFocused = false
+    }
+
+    /// Escape leaves the name alone. Identical to `cancelRename` today and
+    /// named apart from it because they mean different things: one is "stop
+    /// renaming", the other is "do not keep this".
+    private func abandonRename() {
+        renamingInline = nil
+        renameFieldFocused = false
     }
 
     private func beginEditing(_ group: StorageGroup) {

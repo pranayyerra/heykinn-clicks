@@ -854,6 +854,22 @@ Earned against a real 248 GB archive; the stories are in git history.
     neither leaves the count quietly meaning something else than it did a
     moment ago, and nobody notices until a drive is emptier than expected.
 
+75. Weight a control by the size of what it does. Renaming a group sat in a
+    menu beside removing one — the lightest change in the app and the heaviest,
+    two clicks each, indistinguishable. A name is renamed by double-clicking
+    it, the way a name is everywhere else, and the menu keeps the thing that
+    deserves a menu.
+
+76. A way out that the framework can route away is not a way out. Escape was
+    supposed to abandon an in-place rename and simply did nothing: neither
+    `onExitCommand` nor `onKeyPress(.escape)` reached a focused `TextField`.
+    That mattered more than a missing shortcut, because clicking away *commits*
+    — so a name typed by accident had no way back at all, and the app would
+    have quietly kept it. The fix is a control on screen, which cannot be
+    swallowed by a responder chain. Reach for the visible affordance when the
+    invisible one is the only thing standing between somebody and an
+    irreversible-looking change.
+
 64. Move the files first, then the catalog. A catalog told about a move that
     did not happen describes an archive nobody has, and nothing will ever
     correct it. A file that moved with the catalog not yet updated is found
