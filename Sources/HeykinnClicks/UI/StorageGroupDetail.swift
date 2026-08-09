@@ -114,6 +114,17 @@ struct StorageGroupDetail: View {
                         .monospacedDigit()
                 }
                 .font(.callout)
+                // Where on that drive. A count answers "are they there"; this
+                // answers "where do I look", which is the question somebody
+                // asks when they want to see the files themselves.
+                if !holding.locations.isEmpty {
+                    Text(holding.locations.joined(separator: " · "))
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 24)
+                        .textSelection(.enabled)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
     }

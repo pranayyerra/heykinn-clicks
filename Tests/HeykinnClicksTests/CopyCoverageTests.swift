@@ -355,3 +355,53 @@ extension CopyCoverageTests {
         XCTAssertEqual(holdings.first?.insideDownload, 0)
     }
 }
+
+/// Which forms count as "inside a download" — the question that had two
+/// answers when there are four prefixes.
+extension CopyCoverageTests {
+
+    /// A `zipmember:` replica is a photo the app never wrote out: the bytes are
+    /// inside the .zip and can only be reached by opening it. Reading it as a
+    /// file of the photo's own under-reported the risk by 6,482 copies on a
+    /// real archive, and told somebody 100 photos "would survive" when they
+    /// were in the same .zip as the ones that would not.
+    func testAFileInsideAZipIsNotAFileOfItsOwn() {
+        XCTAssertTrue(ReplicationService.isInsideADownload(
+            ReplicationService.zipMemberPrefix + "Takeout/part-001.zip!Google Photos/a.jpg"
+        ))
+        XCTAssertTrue(ReplicationService.isInsideADownload(
+            ReplicationService.archivePartPrefix + "takeout-2026-001"
+        ))
+        // A user's own file sitting on the volume is a real file — it just is
+        // not one the app put there, and a deleted .zip does not touch it.
+        XCTAssertFalse(ReplicationService.isInsideADownload(
+            ReplicationService.volumeBackedPrefix + "Photos/a.jpg"
+        ))
+        XCTAssertFalse(ReplicationService.isInsideADownload("8a/a.jpg"))
+        XCTAssertFalse(ReplicationService.isInsideADownload(nil))
+    }
+
+    /// The count that decides whether the warning appears must use the same
+    /// rule, or the screen and the sentence disagree.
+    func testStorageFormCountsZipMembersAsInsideTheDownload() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let groupID = UUID(), drive = UUID()
+        try catalog.upsertStorageGroup(StorageGroup(
+            id: groupID, label: "Zips", desiredCopies: 1,
+            destinationTargetIDs: [drive], destinationMode: .chosen, createdAt: Date()
+        ))
+        let member = asset("in-member.jpg")
+        try catalog.upsertAsset(member)
+        try catalog.assignStorageGroup(groupID, toAssets: [member.id])
+        try hold(catalog, member.id, on: drive,
+                 path: ReplicationService.zipMemberPrefix + "T/part-001.zip!a.jpg")
+
+        let store = makeStore(in: directory)
+        let form = store.storageForm(forStorageGroup: groupID)
+        XCTAssertEqual(form.onlyInsideDownload, 1)
+        XCTAssertEqual(form.copiedOut, 0, "it has no file of its own to survive on")
+    }
+}

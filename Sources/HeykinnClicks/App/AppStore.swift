@@ -1755,7 +1755,7 @@ final class AppStore: ObservableObject {
             guard storageGroupIDByAsset[replica.assetID] == groupID,
                   assetsByID[replica.assetID]?.isLivePhotoMotion == false
             else { continue }
-            if replica.relativePath?.hasPrefix(ReplicationService.archivePartPrefix) == true {
+            if ReplicationService.isInsideADownload(replica.relativePath) {
                 inside.insert(replica.assetID)
             } else {
                 out.insert(replica.assetID)
@@ -1780,6 +1780,11 @@ final class AppStore: ObservableObject {
         var targetID: UUID
         var photos: Int
         var insideDownload: Int
+        /// The folders on that device the bytes are actually in, relative to
+        /// its root. "272 photos" says how many; this says where to look, which
+        /// is the question somebody asks when they want to see them with their
+        /// own eyes rather than take the app's word for it.
+        var locations: [String] = []
         var id: UUID { targetID }
     }
 
@@ -1791,11 +1796,12 @@ final class AppStore: ObservableObject {
             else { continue }
             var entry = byTarget[replica.targetID] ?? ([], 0)
             entry.photos.insert(replica.assetID)
-            if replica.relativePath?.hasPrefix(ReplicationService.archivePartPrefix) == true {
+            if ReplicationService.isInsideADownload(replica.relativePath) {
                 entry.inside += 1
             }
             byTarget[replica.targetID] = entry
         }
+        let locations = downloadFolders(forStorageGroup: groupID)
         // Named devices first and in the order the group names them, so the
         // list reads the same way the copies line above it does; anything else
         // holding some follows, because a device nobody named still has bytes.
@@ -1803,12 +1809,41 @@ final class AppStore: ObservableObject {
         let rest = byTarget.keys.filter { !named.contains($0) }.sorted {
             (targetsByID[$0]?.name ?? "") < (targetsByID[$1]?.name ?? "")
         }
-        return (named + rest).compactMap { targetID in
+        return (named + rest).compactMap { targetID -> GroupHolding? in
             guard let entry = byTarget[targetID] else { return nil }
+            var where_: [String] = []
+            if entry.inside > 0, let folder = locations[targetID] { where_.append(folder) }
+            if entry.inside < entry.photos.count, let root = targetsByID[targetID]?.replicaRootComponent {
+                where_.append(root)
+            }
             return GroupHolding(
-                targetID: targetID, photos: entry.photos.count, insideDownload: entry.inside
+                targetID: targetID, photos: entry.photos.count,
+                insideDownload: entry.inside, locations: where_
             )
         }
+    }
+
+    /// The folder each device keeps this group's download files in.
+    ///
+    /// Read off the archives themselves rather than assumed, because the user
+    /// chose where to put them — on a real archive one drive has them under
+    /// `Owner/Takeout_Archive_2026` and nothing about the app would guess that.
+    private func downloadFolders(forStorageGroup groupID: UUID) -> [UUID: String] {
+        let sets = Set(exportSetIDs(backingStorageGroup: groupID))
+        guard !sets.isEmpty else { return [:] }
+        var byTarget: [UUID: String] = [:]
+        for archive in takeoutArchives {
+            guard let setID = archive.exportSetID, sets.contains(setID),
+                  let targetID = archive.targetID, byTarget[targetID] == nil,
+                  let mount = targetsByID[targetID]?.lastKnownPath
+            else { continue }
+            let folder = (archive.path as NSString).deletingLastPathComponent
+            guard folder.hasPrefix(mount) else { continue }
+            let relative = String(folder.dropFirst(mount.count))
+                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+            byTarget[targetID] = relative.isEmpty ? "the top of the drive" : relative
+        }
+        return byTarget
     }
 
     /// The download sets holding any of this group's photos, newest first.
@@ -2137,7 +2172,7 @@ final class AppStore: ObservableObject {
         var outsideAnArchive: Set<UUID> = []
         for replica in replicaStates where replica.state == .present {
             drivesHolding[replica.assetID, default: []].insert(replica.targetID)
-            if replica.relativePath?.hasPrefix(ReplicationService.archivePartPrefix) != true {
+            if !ReplicationService.isInsideADownload(replica.relativePath) {
                 outsideAnArchive.insert(replica.assetID)
             }
         }

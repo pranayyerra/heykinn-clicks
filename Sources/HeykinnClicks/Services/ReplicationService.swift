@@ -71,6 +71,22 @@ enum ReplicationService {
         isVolumeBacked(replica) || isZipMemberBacked(replica) || isArchivePartBacked(replica)
     }
 
+    /// Bytes that live inside a .zip rather than as a file of their own.
+    ///
+    /// Two of the four prefixes mean this, and code that knew about only one of
+    /// them under-reported the risk by 6,482 copies on a real archive — it read
+    /// `zipmember:` as a file the photo owned, when it is a photo the app never
+    /// wrote out and can only reach by opening the download. `volume:` really
+    /// is a file of its own; it just is not one the app put there.
+    ///
+    /// Named once because the question is asked in four places and the answer
+    /// has to be the same in all of them.
+    static func isInsideADownload(_ relativePath: String?) -> Bool {
+        guard let relativePath else { return false }
+        return relativePath.hasPrefix(zipMemberPrefix)
+            || relativePath.hasPrefix(archivePartPrefix)
+    }
+
     static func zipMemberComponents(_ replica: TargetReplicaState?) -> (zipRelativePath: String, entry: String)? {
         guard let relative = replica?.relativePath, relative.hasPrefix(zipMemberPrefix) else { return nil }
         let payload = relative.dropFirst(zipMemberPrefix.count)
