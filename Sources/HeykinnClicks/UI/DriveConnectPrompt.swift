@@ -24,8 +24,6 @@ struct DriveConnectPrompt: View {
     /// not how many devices may exist — a sixth drive is another place copies
     /// can land, and refusing it because the policy asks for two copies was
     /// the two ideas being confused.
-    private var canRegister: Bool { true }
-
     private func choose(_ decision: VolumeDecision) {
         store.decide(decision, for: volume, remember: remember)
         dismiss()

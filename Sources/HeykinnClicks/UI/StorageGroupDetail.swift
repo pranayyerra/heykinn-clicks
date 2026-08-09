@@ -20,7 +20,6 @@ struct StorageGroupDetail: View {
     @State private var editing = false
     @State private var confirmingStopTracking: String?
 
-    private var photoCount: Int { store.photoCountByStorageGroup[group.id] ?? 0 }
     private var form: AppStore.StorageForm { store.storageForm(forStorageGroup: group.id) }
     private var backingSets: [String] { store.exportSetIDs(backingStorageGroup: group.id) }
 

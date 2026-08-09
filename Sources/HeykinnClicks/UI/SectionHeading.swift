@@ -22,8 +22,6 @@ struct SectionHeading<Trailing: View>: View {
     var font: Font = .headline
     @ViewBuilder var trailing: Trailing
 
-    @State private var isExplaining = false
-
     init(
         _ title: String,
         help: String? = nil,
@@ -41,23 +39,7 @@ struct SectionHeading<Trailing: View>: View {
             Text(title)
                 .font(font)
             if let help {
-                Button {
-                    isExplaining.toggle()
-                } label: {
-                    Image(systemName: "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help(help)
-                .accessibilityLabel("What \(title) means")
-                .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
-                    Text(help)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: 320, alignment: .leading)
-                        .padding(14)
-                }
+                ExplainerMark(subject: title, help: help)
             }
             trailing
             Spacer(minLength: 0)
@@ -77,8 +59,6 @@ struct ExplainedToggle: View {
     @Binding var isOn: Bool
     let help: String
 
-    @State private var isExplaining = false
-
     init(_ title: String, isOn: Binding<Bool>, help: String) {
         self.title = title
         self._isOn = isOn
@@ -89,22 +69,38 @@ struct ExplainedToggle: View {
         Toggle(isOn: $isOn) {
             HStack(spacing: 6) {
                 Text(title)
-                Button { isExplaining.toggle() } label: {
-                    Image(systemName: "info.circle")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help(help)
-                .accessibilityLabel("What \(title) does")
-                .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
-                    Text(help)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .frame(width: 340, alignment: .leading)
-                        .padding(14)
-                }
+                ExplainerMark(subject: title, help: help)
             }
+        }
+    }
+}
+
+/// The ⓘ itself: hover for a tooltip, click for a popover that stays put.
+///
+/// Written three times before this existed — once in `SectionHeading`, once in
+/// `CardBox`, once in `ExplainedToggle` — which is three places for the width,
+/// the font and the accessibility label to drift apart.
+struct ExplainerMark: View {
+    let subject: String
+    let help: String
+
+    @State private var isOpen = false
+
+    var body: some View {
+        Button { isOpen.toggle() } label: {
+            Image(systemName: "info.circle")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+        .buttonStyle(.plain)
+        .help(help)
+        .accessibilityLabel("What \(subject) means")
+        .popover(isPresented: $isOpen, arrowEdge: .bottom) {
+            Text(help)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(width: 330, alignment: .leading)
+                .padding(14)
         }
     }
 }

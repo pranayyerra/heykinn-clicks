@@ -244,10 +244,6 @@ struct DrivesView: View {
         }
     }
 
-    private var selectedTarget: ReplicationTarget? {
-        selectedPlace.flatMap { id in store.targets.first { $0.id == id } }
-    }
-
     private var unmanagedVolumes: [VolumeInfo] {
         store.availableVolumes.filter { volume in
             TargetMonitor.match(volume: volume, against: store.targets) == nil

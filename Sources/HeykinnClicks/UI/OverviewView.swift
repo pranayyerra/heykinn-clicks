@@ -130,10 +130,6 @@ struct OverviewView: View {
             .map { $0 }
     }
 
-    private var damagedCount: Int { protectionCounts[.driftDetected] ?? 0 }
-    private var unprotectedCount: Int {
-        (protectionCounts[.stagedOnly] ?? 0) + (protectionCounts[.replicatedToOneDrive] ?? 0)
-    }
     private var pendingArchiveCount: Int {
         TakeoutExportSet.partsAwaitingImport(in: store.takeoutArchives)
     }

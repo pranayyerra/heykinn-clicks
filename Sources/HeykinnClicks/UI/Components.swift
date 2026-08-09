@@ -604,8 +604,6 @@ struct CardBox<Content: View>: View {
     var accessory: AnyView?
     @ViewBuilder let content: Content
 
-    @State private var isExplaining = false
-
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -614,21 +612,7 @@ struct CardBox<Content: View>: View {
                         Text(title)
                             .font(.headline)
                         if let help {
-                            Button { isExplaining.toggle() } label: {
-                                Image(systemName: "info.circle")
-                                    .font(.caption)
-                                    .foregroundStyle(.secondary)
-                            }
-                            .buttonStyle(.plain)
-                            .help(help)
-                            .accessibilityLabel("What \(title) means")
-                            .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
-                                Text(help)
-                                    .font(.callout)
-                                    .fixedSize(horizontal: false, vertical: true)
-                                    .frame(width: 320, alignment: .leading)
-                                    .padding(14)
-                            }
+                            ExplainerMark(subject: title, help: help)
                         }
                     }
                 } icon: {
