@@ -10,6 +10,10 @@ struct DriveCard: View {
     var showsActions: Bool = true
     /// Supplied only where forgetting makes sense — the screen that manages
     /// targets, not the Overview.
+    /// Draws its own box. False when it opens inside a list row, which already
+    /// is one — a card inside a card reads as two things, and the reader has to
+    /// work out which of the two borders means anything.
+    var drawsContainer: Bool = true
     var onForget: (() -> Void)?
 
     @EnvironmentObject private var store: AppStore
@@ -46,12 +50,20 @@ struct DriveCard: View {
                 actions
             }
         }
-        .padding(14)
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(isConnected ? Color.green.opacity(0.35) : Color.secondary.opacity(0.18), lineWidth: 1)
-        )
+        .padding(drawsContainer ? 14 : 0)
+        .background {
+            if drawsContainer {
+                RoundedRectangle(cornerRadius: 14)
+                    .fill(Color.secondary.opacity(0.06))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 14)
+                            .stroke(
+                                isConnected ? Color.green.opacity(0.35) : Color.secondary.opacity(0.18),
+                                lineWidth: 1
+                            )
+                    )
+            }
+        }
         .task(id: mountURL) {
             capacity = mountURL.flatMap { VolumeCapacity.read($0) }
         }

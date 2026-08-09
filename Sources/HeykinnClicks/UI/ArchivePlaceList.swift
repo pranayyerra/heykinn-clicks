@@ -65,12 +65,18 @@ struct ArchivePlaceList<Detail: View>: View {
         VStack(spacing: 0) {
             ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
                 if index > 0 { Divider() }
-                row(place)
-                if selection == place.id {
-                    detail(place)
-                        .padding(.horizontal, 12)
-                        .padding(.bottom, 10)
+                VStack(spacing: 0) {
+                    row(place)
+                    if selection == place.id {
+                        detail(place)
+                            .padding(.horizontal, 12)
+                            .padding(.bottom, 12)
+                    }
                 }
+                // One tint over the row *and* its detail, so an open place is
+                // a single block rather than a highlighted row sitting above
+                // an unrelated panel.
+                .background(selection == place.id ? Color.primary.opacity(0.04) : .clear)
             }
         }
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
@@ -85,7 +91,9 @@ struct ArchivePlaceList<Detail: View>: View {
                 // Toggles. A row that opens and will not close is a row that
                 // has to be closed by opening something else, which is not
                 // closing it — it is moving the problem.
-                selection = selection == place.id ? nil : place.id
+                withAnimation(.easeInOut(duration: 0.18)) {
+                    selection = selection == place.id ? nil : place.id
+                }
             }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -111,13 +119,21 @@ struct ArchivePlaceList<Detail: View>: View {
                      : place.isReachable ? "connected" : "away")
                     .font(.caption)
                     .foregroundStyle(place.isReachable ? Color.green : Color.secondary)
+                // Says the row opens, before anybody has clicked it to find
+                // out. Rotating rather than swapping glyph, so the change
+                // reads as the same control moving.
+                if place.target != nil {
+                    Image(systemName: "chevron.right")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .rotationEffect(.degrees(selection == place.id ? 90 : 0))
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 9)
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .background(selection == place.id ? Color.accentColor.opacity(0.12) : .clear)
     }
 
     /// What the place holds, and how much of that has been read back.

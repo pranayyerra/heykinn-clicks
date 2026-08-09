@@ -129,7 +129,11 @@ struct DrivesView: View {
                     onActivateEmpty: activate
                 ) { place in
                     if let target = place.target {
-                        DriveCard(drive: target, onForget: { targetToForget = target })
+                        DriveCard(
+                            drive: target,
+                            drawsContainer: false,
+                            onForget: { targetToForget = target }
+                        )
                     }
                 }
 

@@ -199,13 +199,18 @@ struct StorageGroupDetail: View {
     }
 }
 
+/// A quiet label over a block of facts.
+///
+/// Was letter-spaced upper case, which is the typography of a form somebody
+/// has to fill in. This sits inside a row the reader opened out of curiosity;
+/// sentence case in the secondary colour says the same thing without raising
+/// its voice.
 private struct SectionCaption: View {
     let text: String
     init(_ text: String) { self.text = text }
     var body: some View {
-        Text(text.uppercased())
-            .font(.caption2)
-            .tracking(0.6)
+        Text(text)
+            .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
     }
 }

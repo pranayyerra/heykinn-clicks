@@ -144,11 +144,10 @@ struct StorageGroupsList: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-            Button(expanded == group.id ? "Close" : "Open") {
-                expanded = expanded == group.id ? nil : group.id
-            }
-            .buttonStyle(.link)
-            .font(.caption)
+            Image(systemName: "chevron.right")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
+                .rotationEffect(.degrees(expanded == group.id ? 90 : 0))
             Menu {
                 Button("Rename…") {
                     renameText = group.label
@@ -166,7 +165,11 @@ struct StorageGroupsList: View {
         }
         .padding(.vertical, 2)
         .contentShape(Rectangle())
-        .onTapGesture { expanded = expanded == group.id ? nil : group.id }
+        .onTapGesture {
+            withAnimation(.easeInOut(duration: 0.18)) {
+                expanded = expanded == group.id ? nil : group.id
+            }
+        }
     }
 }
 
