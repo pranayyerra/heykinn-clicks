@@ -769,3 +769,14 @@ Earned against a real 248 GB archive; the stories are in git history.
     again by the path repair that already runs on every connect. Only one of
     those two is recoverable by doing nothing, and that is the one to fail
     towards.
+
+65. A rule named after a place stops being the rule it meant when the place
+    gains a second purpose. `ExportSetLayout.home` excluded the whole of the
+    app's folder, on the reasoning that a part parked there is waiting rather
+    than living — true while the only thing in that folder was the waiting
+    room. Relocation put a *deliberately chosen* home inside the same folder,
+    and the rule then read it as no home at all: `rehomeDeliveredParts` had
+    nowhere to take a delivered part, so it would have sat in the waiting room
+    for ever. Nothing failed, nothing was logged, and the archive was left one
+    delivery away from a silent no-op. Exclude the thing the reason is about —
+    the waiting room — not the folder it happened to be the only occupant of.

@@ -264,16 +264,24 @@ enum ExportSetLayout {
     /// The directory on this target holding the most parts of this set, or nil
     /// when the target holds none.
     ///
-    /// The app's own folder is never the answer. It is where a part waits when
-    /// there is nowhere better, and treating it as a home would mean the first
-    /// delivery decided the layout for every delivery after it.
+    /// The *waiting room* is never the answer. `ExportPartRelay`'s directory is
+    /// where a part lands when there is nowhere better, and treating that as a
+    /// home would mean the first delivery decided the layout for every delivery
+    /// after it.
+    ///
+    /// This once excluded the whole of the app's folder, which was the same
+    /// rule while the app had only one thing in there. It stopped being the
+    /// same rule the moment an export could be *deliberately* moved into
+    /// `HeykinnClicks/Exports` — a home chosen on purpose then read as no home
+    /// at all, which left a delivered part sitting in the waiting room for ever
+    /// because `rehomeDeliveredParts` had nowhere to take it.
     static func home(
         forSet setID: String,
         onMount mountURL: URL,
         archives: [TakeoutArchive]
     ) -> URL? {
         let prefix = mountURL.path.hasSuffix("/") ? mountURL.path : mountURL.path + "/"
-        let appFolder = prefix + ReplicationTarget.appFolderName + "/"
+        let waitingRoom = prefix + ExportPartRelay.onDriveDirectoryName + "/"
 
         // Distinct part numbers, not rows: a zip and the folder extracted from
         // it sit in the same directory and are one part between them.
@@ -282,7 +290,7 @@ enum ExportSetLayout {
             guard archive.exportSetID == setID, archive.holdsBytes,
                   let partNumber = archive.partNumber,
                   archive.path.hasPrefix(prefix),
-                  !archive.path.hasPrefix(appFolder)
+                  !archive.path.hasPrefix(waitingRoom)
             else { continue }
             let directory = (archive.path as NSString).deletingLastPathComponent
             partsByDirectory[directory, default: []].insert(partNumber)

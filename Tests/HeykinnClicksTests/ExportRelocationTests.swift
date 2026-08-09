@@ -174,3 +174,55 @@ final class ExportRelocationTests: XCTestCase {
         )
     }
 }
+
+/// Where an export set is considered to live on a drive.
+///
+/// Relocation created a case this had never seen: an export that is
+/// deliberately inside the app's folder. The old rule excluded that folder
+/// wholesale, so a home chosen on purpose read as no home at all.
+final class ExportHomeAfterRelocationTests: XCTestCase {
+
+    private let mount = URL(fileURLWithPath: "/Volumes/Owner's Back", isDirectory: true)
+
+    private func archive(_ part: Int, at path: String) -> TakeoutArchive {
+        TakeoutArchive(
+            id: UUID(), path: path, kind: .zip, sizeBytes: 1, targetID: UUID(),
+            discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
+            importedAssetCount: 1, skippedDuplicateCount: 0, note: nil,
+            exportSetID: "set", partNumber: part
+        )
+    }
+
+    func testARelocatedExportIsAHome() {
+        let archives = (1...3).map {
+            archive($0, at: "/Volumes/Owner's Back/HeykinnClicks/Exports/set/takeout-set-00\($0).zip")
+        }
+        XCTAssertEqual(
+            ExportSetLayout.home(forSet: "set", onMount: mount, archives: archives)?.path,
+            "/Volumes/Owner's Back/HeykinnClicks/Exports/set",
+            "a part delivered later has somewhere to be put beside its siblings"
+        )
+    }
+
+    /// The rule that was always meant: a part parked in transit must not decide
+    /// where the export lives.
+    func testTheWaitingRoomIsStillNeverAHome() {
+        let archives = [
+            archive(1, at: "/Volumes/Owner's Back/" + ExportPartRelay.onDriveDirectoryName + "/takeout-set-001.zip")
+        ]
+        XCTAssertNil(ExportSetLayout.home(forSet: "set", onMount: mount, archives: archives))
+    }
+
+    /// And a real home still beats the waiting room when both hold parts.
+    func testSomewhereChosenBeatsSomewhereParked() {
+        let archives = [
+            archive(1, at: "/Volumes/Owner's Back/Owner/takeout-set-001.zip"),
+            archive(2, at: "/Volumes/Owner's Back/Owner/takeout-set-002.zip"),
+            archive(3, at: "/Volumes/Owner's Back/" + ExportPartRelay.onDriveDirectoryName + "/takeout-set-003.zip"),
+        ]
+        XCTAssertEqual(
+            ExportSetLayout.home(forSet: "set", onMount: mount, archives: archives)?.path,
+            "/Volumes/Owner's Back/Owner"
+        )
+    }
+}
