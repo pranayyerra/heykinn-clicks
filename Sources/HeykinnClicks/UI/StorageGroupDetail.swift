@@ -114,16 +114,14 @@ struct StorageGroupDetail: View {
                         .monospacedDigit()
                 }
                 .font(.callout)
-                // Where on that drive. A count answers "are they there"; this
-                // answers "where do I look", which is the question somebody
-                // asks when they want to see the files themselves.
-                if !holding.locations.isEmpty {
-                    Text(holding.locations.joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                // Where on that drive, one folder per line and each one a way
+                // in. Joined with a middle dot and rendered as grey text they
+                // were a dead end: a path you can read, cannot click, and have
+                // to retype into Finder. A path that leads somewhere should go
+                // there.
+                ForEach(holding.locations) { location in
+                    FolderLink(location: location)
                         .padding(.leading, 24)
-                        .textSelection(.enabled)
-                        .fixedSize(horizontal: false, vertical: true)
                 }
             }
         }
@@ -241,5 +239,35 @@ private struct SectionCaption: View {
             .font(.caption2)
             .tracking(0.6)
             .foregroundStyle(.secondary)
+    }
+}
+
+/// A folder on a device: readable, and a way in when the device is here.
+///
+/// Dims rather than disappears when the drive is away. Where a photo lives is
+/// worth knowing precisely when you cannot get at it — that is the moment
+/// somebody is deciding which drive to go and find.
+private struct FolderLink: View {
+    let location: AppStore.Location
+
+    var body: some View {
+        if RevealInFinder.canReveal(location.path) {
+            Button {
+                RevealInFinder.reveal(location.path)
+            } label: {
+                Label(location.display, systemImage: "folder")
+                    .font(.caption)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .buttonStyle(.link)
+            .help("Show \(location.path) in Finder")
+        } else {
+            Label(location.display, systemImage: "folder")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+                .help("\(location.path) — plug the drive in to open it")
+        }
     }
 }

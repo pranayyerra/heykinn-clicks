@@ -1780,12 +1780,23 @@ final class AppStore: ObservableObject {
         var targetID: UUID
         var photos: Int
         var insideDownload: Int
-        /// The folders on that device the bytes are actually in, relative to
-        /// its root. "272 photos" says how many; this says where to look, which
-        /// is the question somebody asks when they want to see them with their
-        /// own eyes rather than take the app's word for it.
-        var locations: [String] = []
+        /// The folders on that device the bytes are actually in. "272 photos"
+        /// says how many; this says where to look, which is the question
+        /// somebody asks when they want to see them with their own eyes rather
+        /// than take the app's word for it.
+        var locations: [Location] = []
         var id: UUID { targetID }
+    }
+
+    /// A folder on a device, in both the forms it is needed in.
+    ///
+    /// The absolute path is what Finder can be pointed at; the shortened one is
+    /// what a person reads. Carrying only the readable one made the row a dead
+    /// end — a path you can see, cannot click, and have to retype.
+    struct Location: Identifiable, Hashable {
+        var path: String
+        var display: String
+        var id: String { path }
     }
 
     func holdings(forStorageGroup groupID: UUID) -> [GroupHolding] {
@@ -1811,10 +1822,14 @@ final class AppStore: ObservableObject {
         }
         return (named + rest).compactMap { targetID -> GroupHolding? in
             guard let entry = byTarget[targetID] else { return nil }
-            var where_: [String] = []
-            if entry.inside > 0, let folder = locations[targetID] { where_.append(folder) }
-            if entry.inside < entry.photos.count, let root = targetsByID[targetID]?.replicaRootComponent {
-                where_.append(root)
+            var where_: [Location] = []
+            let mount = reachablePaths[targetID]?.path ?? targetsByID[targetID]?.lastKnownPath
+            if entry.inside > 0, let folder = locations[targetID] {
+                where_.append(folder)
+            }
+            if entry.inside < entry.photos.count,
+               let root = targetsByID[targetID]?.replicaRootComponent, let mount {
+                where_.append(Location(path: mount + "/" + root, display: root))
             }
             return GroupHolding(
                 targetID: targetID, photos: entry.photos.count,
@@ -1828,20 +1843,26 @@ final class AppStore: ObservableObject {
     /// Read off the archives themselves rather than assumed, because the user
     /// chose where to put them — on a real archive one drive has them under
     /// `Owner/Takeout_Archive_2026` and nothing about the app would guess that.
-    private func downloadFolders(forStorageGroup groupID: UUID) -> [UUID: String] {
+    private func downloadFolders(forStorageGroup groupID: UUID) -> [UUID: Location] {
         let sets = Set(exportSetIDs(backingStorageGroup: groupID))
         guard !sets.isEmpty else { return [:] }
-        var byTarget: [UUID: String] = [:]
+        var byTarget: [UUID: Location] = [:]
         for archive in takeoutArchives {
             guard let setID = archive.exportSetID, sets.contains(setID),
-                  let targetID = archive.targetID, byTarget[targetID] == nil,
-                  let mount = targetsByID[targetID]?.lastKnownPath
+                  let targetID = archive.targetID, byTarget[targetID] == nil
             else { continue }
             let folder = (archive.path as NSString).deletingLastPathComponent
-            guard folder.hasPrefix(mount) else { continue }
-            let relative = String(folder.dropFirst(mount.count))
-                .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
-            byTarget[targetID] = relative.isEmpty ? "the top of the drive" : relative
+            // Shortened for reading against the drive it is on, since the row
+            // already says which drive that is. The absolute path is kept for
+            // Finder, which cannot be pointed at a shortened one.
+            let mount = reachablePaths[targetID]?.path ?? targetsByID[targetID]?.lastKnownPath
+            var display = folder
+            if let mount, folder.hasPrefix(mount) {
+                let relative = String(folder.dropFirst(mount.count))
+                    .trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+                display = relative.isEmpty ? "the top of the drive" : relative
+            }
+            byTarget[targetID] = Location(path: folder, display: display)
         }
         return byTarget
     }
