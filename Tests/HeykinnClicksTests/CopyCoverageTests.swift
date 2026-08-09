@@ -406,14 +406,17 @@ extension CopyCoverageTests {
     }
 }
 
-/// This Mac is not a drive, and the headline must not count it as one.
+/// This Mac is a place like any other, and the count says so.
 extension CopyCoverageTests {
 
-    /// Found by putting a group on one drive and this Mac and reading the
-    /// screen: it said "every photo is on 2 drives" while twelve of them were
-    /// on one drive plus the computer — the exact arrangement
-    /// `automaticEligibleDeviceIDs` refuses to create, announced as safe.
-    func testTheHostIsNotCountedAsADrive() throws {
+    /// Briefly it did not. Coverage was split — drives counted, the host
+    /// discounted — on the reasoning that the host is "the machine the drives
+    /// exist to survive". That did not survive checking: a copy on a
+    /// registered host target is written to the same replica root, verified
+    /// the same way, and removed only when a group stops naming it.
+    /// `reclaimStaging` frees the staging area, never a target's replicas. If
+    /// this Mac dies, a photo on it and on a drive still has the drive.
+    func testTheHostCountsAsAPlace() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(
             databasePath: directory.appendingPathComponent("catalog.sqlite").path
@@ -438,15 +441,15 @@ extension CopyCoverageTests {
 
         let store = makeStore(in: directory)
         XCTAssertEqual(
-            store.copyCoverage, [1: 1],
-            "one drive, whatever else is also holding it"
+            store.copyCoverage, [2: 1],
+            "a drive and this Mac are two places, because they are two machines"
         )
-        XCTAssertEqual(store.photosLeaningOnThisMac, 1, "and the caveat is countable")
     }
 
-    /// A photo the host alone holds is on no drive at all, and must still
-    /// appear in the distribution rather than falling out of it.
-    func testAPhotoOnlyOnThisMacIsOnNoDrive() throws {
+    /// A photo the host alone holds is in exactly one place — which is a real
+    /// place, and also the thing the app should be uneasy about, since one
+    /// place is one place whichever machine it is.
+    func testAPhotoOnlyOnThisMacIsInOnePlace() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(
             databasePath: directory.appendingPathComponent("catalog.sqlite").path
@@ -463,7 +466,7 @@ extension CopyCoverageTests {
         try hold(catalog, stranded.id, on: mac, path: "aa/x.jpg")
 
         let store = makeStore(in: directory)
-        XCTAssertEqual(store.copyCoverage, [0: 1])
-        XCTAssertEqual(store.leastCopiesAnywhere, 0)
+        XCTAssertEqual(store.copyCoverage, [1: 1])
+        XCTAssertEqual(store.leastCopiesAnywhere, 1)
     }
 }

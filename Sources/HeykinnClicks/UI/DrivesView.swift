@@ -24,11 +24,8 @@ struct DrivesView: View {
         let reachable = store.targets.filter { store.reachablePaths[$0.id] != nil }.count
 
         HStack(alignment: .top, spacing: 12) {
-            // The mark has to agree with the sentence beside it. It was read
-            // off policy alone — "two copies" is met by one drive and this Mac
-            // — so a green seal sat above a headline saying twelve photos are
-            // on one drive. Whatever the headline reports as short, this is
-            // not green for.
+            // The mark has to agree with the sentence beside it: whatever the
+            // headline reports as short, this is not green for.
             let thin = (store.leastCopiesAnywhere ?? 2) < 2
             Image(systemName: damaged > 0 ? "exclamationmark.triangle.fill"
                   : (short > 0 || thin) ? "exclamationmark.circle.fill" : "checkmark.seal.fill")
@@ -44,26 +41,6 @@ struct DrivesView: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             Spacer(minLength: 0)
-        }
-    }
-
-    /// The caveat on the count above: a place that is this computer.
-    ///
-    /// Said separately rather than folded into the number, because it is not a
-    /// different count — it is what one of those places actually is. A photo on
-    /// one drive and this Mac survives the drive failing and does not survive
-    /// the Mac failing, which is the event the drives are there for.
-    @ViewBuilder
-    private var hostCaveat: some View {
-        if store.photosLeaningOnThisMac > 0 {
-            Label {
-                Text("\(store.photosLeaningOnThisMac.formatted()) of them count this Mac as one of their places. It is the machine your drives exist to survive, so those are a drive short of what they look like.")
-                    .fixedSize(horizontal: false, vertical: true)
-            } icon: {
-                Image(systemName: "laptopcomputer")
-            }
-            .font(.callout)
-            .foregroundStyle(.orange)
         }
     }
 
@@ -109,11 +86,13 @@ struct DrivesView: View {
         // the least safe arrangement there is.
         if let fewest = store.leastCopiesAnywhere {
             switch fewest {
-            case 0: return "Some photos are not on any drive."
+            case 0: return "Some photos are in no place at all."
             case 1:
-                let short = store.copyCoverage[1] ?? 0
-                return "\(Formatters.count(short, "photo")) \(short == 1 ? "is" : "are") on one drive only."
-            default: return "Every photo is on \(Formatters.count(fewest, "drive"))."
+                let alone = store.copyCoverage[1] ?? 0
+                return "\(Formatters.count(alone, "photo")) \(alone == 1 ? "is" : "are") in one place only."
+            // "Drives" was wrong the moment somebody named this Mac: it is a
+            // place that holds a copy, which is the thing being counted.
+            default: return "Every photo is in \(Formatters.count(fewest, "place"))."
             }
         }
         return "Yes — every photo is on all the drives it is meant to be on."
@@ -141,8 +120,6 @@ struct DrivesView: View {
                 }
 
                 verdict
-
-                hostCaveat
 
                 archiveBackedNote
 

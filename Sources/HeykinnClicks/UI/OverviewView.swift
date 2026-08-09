@@ -393,14 +393,13 @@ struct OverviewView: View {
             // alone on one drive satisfies. How many places hold it is the
             // question, and one number cannot be right on one screen only.
             if let fewest = store.leastCopiesAnywhere, fewest > 1 {
-                return "Every photo is on \(Formatters.count(fewest, "drive"))."
+                return "Every photo is in \(Formatters.count(fewest, "place"))."
             }
-            // Policy can be met while the drive count is not: two copies where
-            // one of them is this Mac. Keep safe says so, and this screen must
-            // not disagree with it.
+            // Keep safe says this in the same words; the two screens are asked
+            // the same question and must not answer it differently.
             if let fewest = store.leastCopiesAnywhere, fewest < 2 {
-                let short = store.copyCoverage[fewest] ?? 0
-                return "\(Formatters.count(short, "photo")) \(short == 1 ? "is" : "are") on \(fewest == 0 ? "no drive" : "one drive only")."
+                let alone = store.copyCoverage[fewest] ?? 0
+                return "\(Formatters.count(alone, "photo")) \(alone == 1 ? "is" : "are") \(fewest == 0 ? "in no place at all" : "in one place only")."
             }
             return "All \(localCount.formatted()) photos are on all the drives they are meant to be on."
         }
