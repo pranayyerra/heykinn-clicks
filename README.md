@@ -490,11 +490,14 @@ that no screen could remove.
 
 **The system prompt is a separate thing.** macOS itself gates access to
 removable volumes, and that grant is keyed to the app's code-signing identity.
-`Packaging/bundle.sh` signs ad-hoc by default, so the hash changes on every
-rebuild and macOS asks again — expected while developing, and fixed by a
-stable Developer ID signature rather than by anything in the app's code. If
-macOS is re-asking on every connect of a build you did not rebuild, check
-System Settings → Privacy & Security → Files and Folders.
+`Packaging/bundle.sh` signs with any Apple Development certificate on the
+machine, because that identity is stable across rebuilds. Ad-hoc signing —
+what it falls back to, and what `--adhoc` forces — has no team identifier, so
+the designated requirement becomes `cdhash H"…"` and every rebuild is a new
+app: the grant is dropped, and the app never appears in the Privacy list to be
+granted again. If a permission is stuck from an earlier ad-hoc build, clear it
+with `tccutil reset Photos com.heykinn.HeykinnClicks` (or `SystemPolicyRemovableVolumes`)
+and relaunch. A Developer ID signature is still what shipping needs.
 
 ### Safety behaviors implemented
 

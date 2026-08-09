@@ -20,14 +20,38 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 CONFIGURATION="debug"
-IDENTITY="-"                       # ad-hoc: runs on this Mac, nowhere else
+IDENTITY=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --release) CONFIGURATION="release"; shift ;;
         --sign)    IDENTITY="${2:?--sign needs an identity}"; shift 2 ;;
+        --adhoc)   IDENTITY="-"; shift ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
+
+# Prefer a real identity, because macOS privacy permissions are keyed to one.
+#
+# Ad-hoc signing has no team identifier, so TCC — the thing behind System
+# Settings → Privacy & Security — falls back to identifying the app by the hash
+# of its code, which changes on *every* build. The effects are quiet and
+# baffling: a permission granted to yesterday's build does not apply to today's,
+# the app never appears in the Photos list at all, and "grant it in System
+# Settings, then try again" sends somebody to a pane their app is not in.
+#
+# Any Apple Development certificate fixes it. Its team identifier is stable
+# across rebuilds, so one grant survives them. Falls back to ad-hoc when there
+# is no certificate, which still runs — it just cannot hold a permission.
+if [ -z "$IDENTITY" ]; then
+    IDENTITY=$(security find-identity -v -p codesigning 2>/dev/null \
+        | sed -n 's/.*"\(Apple Development:[^"]*\)".*/\1/p' | head -1)
+    if [ -z "$IDENTITY" ]; then
+        IDENTITY="-"
+        echo "No Apple Development certificate found — signing ad-hoc."
+        echo "  The app will run, but macOS cannot remember a Photos or"
+        echo "  removable-volume permission across rebuilds."
+    fi
+fi
 
 APP="build/HeykinnClicks.app"
 BINARY=".build/${CONFIGURATION}/HeykinnClicks"

@@ -79,11 +79,14 @@ Shipped and tested; the pointers are where to look.
   `Services/AccessGrants.swift`, `UI/SettingsView.swift`.
 
   The system half of this is not the app's to fix in code. macOS keys its
-  removable-volume grant to the app's code-signing identity, and
-  `Packaging/bundle.sh` signs ad-hoc by default — the cdhash changes on every
-  rebuild, so macOS drops the grant and asks again. A stable Developer ID
-  signature is the fix; the bookmark is what makes the app's own state survive
-  in the meantime. Tracked in PRODUCTION_READINESS.md.
+  privacy grants — removable volumes, the Photos library — to the app's
+  code-signing identity, so `Packaging/bundle.sh` now signs with any Apple
+  Development certificate it finds and only falls back to ad-hoc without one.
+  Ad-hoc has no team identifier, so the designated requirement degenerates to
+  `cdhash H"…"`: a new app to macOS on every rebuild. The grant is dropped, and
+  worse, the app never appears in the Privacy list at all — so "grant it in
+  System Settings" sends somebody to a pane their app is not in. A Developer ID
+  signature is still what ships. Tracked in PRODUCTION_READINESS.md.
 - **Replication** — per-file for loose assets, per-export-part for archives;
   archive-backed replicas; the host-staging corridor for targets never
   reachable together; a drive arriving with the same export already on it
