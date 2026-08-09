@@ -82,7 +82,30 @@ struct SourceFlowView<Detail: View>: View {
     /// who has just installed this looks at three collapsed rows and sees no
     /// way to add a photo — the actions are one click away, behind a row that
     /// gives no sign it is hiding the only thing they came to do.
-    var action: (PhotoSource) -> (title: String, run: () -> Void)?
+    var action: (PhotoSource) -> (title: String, symbol: String, run: () -> Void)?
+
+    @ViewBuilder
+    private func actionButton(
+        _ action: (title: String, symbol: String, run: () -> Void),
+        prominent: Bool
+    ) -> some View {
+        Group {
+            if prominent {
+                Button(action: action.run) {
+                    Label(action.title, systemImage: action.symbol)
+                }
+                .buttonStyle(.borderedProminent)
+            } else {
+                Button(action: action.run) {
+                    Label(action.title, systemImage: action.symbol)
+                }
+                .buttonStyle(.bordered)
+            }
+        }
+        .font(.caption)
+        .controlSize(.small)
+        .tint(.accentColor)
+    }
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
@@ -163,10 +186,16 @@ struct SourceFlowView<Detail: View>: View {
                 }
                 Spacer(minLength: 0)
                 if let action = action(source) {
-                    Button(action.title) { action.run() }
-                        .font(.caption)
-                        .buttonStyle(.bordered)
-                        .controlSize(.small)
+                    // Filled while the source has never been set up, outlined
+                    // once it has. On a first run this is three invitations;
+                    // afterwards it is three quiet ways back in.
+                    //
+                    // No trailing "…" either. The convention says an ellipsis
+                    // means "this opens something that asks for more", which is
+                    // true of all three and useful on none of them: every one
+                    // of these obviously opens a picker, and three ellipses in
+                    // a column read as hesitation rather than as a rule.
+                    actionButton(action, prominent: !source.isSet)
                 }
                 // Rotates rather than swapping glyph, so it reads as the
                 // same control moving — the same chevron the places and the

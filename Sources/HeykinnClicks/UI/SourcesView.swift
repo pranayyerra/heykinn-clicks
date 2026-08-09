@@ -180,15 +180,20 @@ struct SourcesView: View {
                         // Once connected the row's own detail carries what to
                         // do next, and a button that repeats it is noise.
                         guard store.applePhotosState != .connected else { return nil }
-                        return ("Connect…", { Task { await store.connectApplePhotos() } })
+                        return (
+                            "Connect Photos", "photo.on.rectangle.angled",
+                            { Task { await store.connectApplePhotos() } }
+                        )
                     case "google":
-                        return ("Find a download…", {
-                            commands.isExportSearchPickerPresented = true
-                        })
+                        return (
+                            "Find a download", "magnifyingglass",
+                            { commands.isExportSearchPickerPresented = true }
+                        )
                     default:
-                        return ("Choose a folder…", {
-                            commands.isImportPickerPresented = true
-                        })
+                        return (
+                            "Choose a folder", "folder.badge.plus",
+                            { commands.isImportPickerPresented = true }
+                        )
                     }
                 }
                 .padding(.vertical, 4)
@@ -280,10 +285,9 @@ struct SourcesView: View {
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Connect Photos…") {
-                        Task { await store.connectApplePhotos() }
-                    }
-                    .buttonStyle(.borderedProminent)
+                    // No Connect button here: the row this opens from has
+                    // one, and two buttons doing one thing a centimetre apart
+                    // is a choice nobody has to make.
                 }
             case .denied:
                 Label("macOS is blocking access. Allow it in System Settings → Privacy & Security → Photos, then reopen the app.", systemImage: "xmark.circle")
@@ -394,7 +398,7 @@ struct SourcesView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("None found yet.")
                         .font(.callout)
-                    Text("Google calls this a Takeout: you ask for a copy of your photos at takeout.google.com and it emails you a set of large .zip files, usually about 10 GB each. Put them on one of your drives, or anywhere on this Mac, and use Search for Google downloads above. The app unpacks and reads them on its own from there.")
+                    Text("Google calls this a Takeout: you ask for a copy of your photos at takeout.google.com and it emails you a set of large .zip files, usually about 10 GB each. Put them on one of your drives, or anywhere on this Mac, and use Find a download. The app unpacks and reads them on its own from there.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -445,8 +449,7 @@ struct SourcesView: View {
                 } else {
                     FolderSourceList()
                 }
-                Button("Choose a folder…") { commands.isImportPickerPresented = true }
-                    .disabled(store.isImporting)
+                // No "Choose a folder" here either — it is on the row.
                 if store.isImporting {
                     HStack(spacing: 6) {
                         ProgressView().controlSize(.small)
