@@ -351,18 +351,7 @@ struct StorageMatrix: View {
                             symbol: "square.stack.3d.up",
                             // No title: this opens directly beneath the row
                             // bearing the same name, one line up.
-                            title: nil,
-                            trailing: {
-                                // Editing is a mode you ask for. Cells that
-                                // could be dragged at any moment would make
-                                // every glance at the table a chance to move an
-                                // archive by accident.
-                                if draft?.groupID != group.id {
-                                    Button("Edit") { beginEditing(group) }
-                                        .font(.caption)
-                                        .help("Move where this group is kept, and how many copies it keeps.")
-                                }
-                            }
+                            title: nil
                         ) {
                             if draft?.groupID == group.id {
                                 editor(group)
@@ -561,13 +550,17 @@ struct StorageMatrix: View {
             }
             .buttonStyle(.plain)
 
+            // A row's actions live on the row, in one place.
+            //
+            // Editing was a button inside the panel and removing was here, so
+            // the two things you can do to a group were in two different
+            // places, one of which you had to open the group to find. No
+            // "Rename…" though — double-clicking the name does that, which is
+            // what a name does everywhere else, and a menu entry made the
+            // lightest change in the app look the same size as removing it.
             Menu {
-                // No "Edit where it is kept" here. The panel this row opens has
-                // an Edit button, and two doors to one editor is how they come
-                // to behave differently. No "Rename…" either — double-clicking
-                // the name does it, which is what a name does everywhere else,
-                // and a menu entry made the lightest change in the app look
-                // like the same size as removing the group.
+                Button("Edit where it is kept…") { beginEditing(group) }
+                Divider()
                 Button("Remove…", role: .destructive) { deleting = group }
             } label: {
                 Image(systemName: "ellipsis.circle")
@@ -1078,10 +1071,9 @@ struct StorageMatrix: View {
     /// the thing that opened it can now be several rows away — a column header
     /// at the top of the table, or a group row above nineteen others.
     @ViewBuilder
-    private func panel<Content: View, Trailing: View>(
+    private func panel<Content: View>(
         symbol: String,
         title: String?,
-        @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -1094,7 +1086,6 @@ struct StorageMatrix: View {
                         .font(.callout.weight(.semibold))
                 }
                 Spacer(minLength: 8)
-                trailing()
                 Button {
                     endEditing()
                     withAnimation(.easeInOut(duration: 0.18)) { opened = nil }
