@@ -59,9 +59,12 @@ final class StoragePlacementDraftTests: XCTestCase {
     }
 
     /// Asking for more copies than there are homes for them.
+    ///
+    /// No longer reachable by taking a device away — removal keeps "on all of
+    /// them" true rather than stranding the count. It arrives the other way:
+    /// a group that named three devices and had one of them forgotten.
     func testMoreCopiesThanDevicesCannotBeSaved() {
-        var draft = StoragePlacementDraft(group: group(copies: 2, on: [driveA, driveB]))
-        draft.remove(driveB)
+        var draft = StoragePlacementDraft(group: group(copies: 2, on: [driveA]))
         XCTAssertFalse(draft.canBeSaved)
         XCTAssertEqual(
             draft.problem,
@@ -73,16 +76,30 @@ final class StoragePlacementDraftTests: XCTestCase {
         XCTAssertTrue(draft.canBeSaved)
     }
 
+    /// Taking a device off a group that kept a copy on all of them must not
+    /// answer with an error about an arrangement nobody asked for.
+    func testRemovingADeviceDoesNotProduceThatComplaint() {
+        var draft = StoragePlacementDraft(group: group(copies: 2, on: [driveA, driveB]))
+        draft.remove(driveB)
+        XCTAssertEqual(draft.copies, 1)
+        XCTAssertTrue(draft.canBeSaved)
+    }
+
     /// A group working out its own devices is short of nothing until it has
     /// resolved them, so the count is not measured against a list it does not
     /// use. Warning here would put an error on the default arrangement.
     func testAnAutomaticGroupIsNotJudgedAgainstItsResolvedDevices() {
         var draft = StoragePlacementDraft(group: group(copies: 3, on: [driveA], mode: .automatic))
-        XCTAssertNil(draft.problem)
-        // Naming a device is what makes the count answerable.
+        XCTAssertNil(draft.problem, "it has not resolved its devices yet; there is nothing to be short of")
+        // Naming a device is what makes the count answerable — and adding one
+        // keeps every named device holding a copy, so the count follows.
         draft.add(driveB)
         XCTAssertEqual(draft.mode, .chosen)
-        XCTAssertNotNil(draft.problem, "three copies, two devices — now it is a real shortfall")
+        XCTAssertEqual(draft.copies, 2)
+        XCTAssertNil(draft.problem)
+        // Asking for a third copy with two devices named is the shortfall.
+        draft.copies = 3
+        XCTAssertNotNil(draft.problem, "three copies, two devices")
     }
 
     func testADraftThatMatchesItsGroupHasNothingToApply() {
@@ -97,5 +114,69 @@ final class StoragePlacementDraftTests: XCTestCase {
             draft.differs(from: existing),
             "dragging something out and back is not a change, and must not offer to be saved"
         )
+    }
+}
+
+/// Naming devices and asking for copies are two different things, and the
+/// editor has to keep the difference straight without making anybody think
+/// about it.
+final class StoragePlacementIntentTests: XCTestCase {
+
+    private let driveA = UUID(), driveB = UUID(), mac = UUID()
+    private lazy var names: [UUID: String] = [driveA: "Owner's Back", driveB: "My Passport", mac: "this Mac"]
+
+    private func group(copies: Int, on destinations: [UUID]) -> StorageGroup {
+        StorageGroup(
+            id: UUID(), label: "G", desiredCopies: copies,
+            destinationTargetIDs: destinations, destinationMode: .chosen, createdAt: Date()
+        )
+    }
+
+    private func rule(_ draft: StoragePlacementDraft) -> String {
+        draft.rule { self.names[$0] ?? "?" }
+    }
+
+    /// Ticking another device usually means "and this one too". Leaving the
+    /// count behind would silently demote it to a spare.
+    func testAddingADeviceKeepsEveryDeviceHoldingACopy() {
+        var draft = StoragePlacementDraft(group: group(copies: 2, on: [driveA, driveB]))
+        XCTAssertTrue(draft.keepsACopyEverywhere)
+        draft.add(mac)
+        XCTAssertEqual(draft.copies, 3, "all three hold a copy, which is what ticking a third means")
+        XCTAssertTrue(rule(draft).contains("all 3"), rule(draft))
+    }
+
+    /// Unless spares were already in use — then another device is another spare.
+    func testAddingADeviceToAGroupUsingSparesAddsASpare() {
+        var draft = StoragePlacementDraft(group: group(copies: 2, on: [driveA, driveB, mac]))
+        draft.copies = 2
+        XCTAssertFalse(draft.keepsACopyEverywhere)
+        let fourth = UUID()
+        draft.add(fourth)
+        XCTAssertEqual(draft.copies, 2, "the arrangement in force was two of these; it still is")
+    }
+
+    /// Removing a device while "on all of them" was true must not produce an
+    /// error about an arrangement nobody asked for.
+    func testRemovingADeviceDoesNotStrandTheCount() {
+        var draft = StoragePlacementDraft(group: group(copies: 3, on: [driveA, driveB, mac]))
+        draft.remove(mac)
+        XCTAssertEqual(draft.copies, 2)
+        XCTAssertNil(draft.problem, "and it is saveable, rather than complaining about itself")
+    }
+
+    /// The sentence that explains why a count and a tick list are both needed.
+    func testTheRuleSaysWhichDevicesAreSpares() {
+        var draft = StoragePlacementDraft(group: group(copies: 3, on: [driveA, driveB, mac]))
+        draft.copies = 2
+        let sentence = rule(draft)
+        XCTAssertTrue(sentence.contains("two copies"), sentence)
+        XCTAssertTrue(sentence.contains("Owner's Back and My Passport first"), sentence)
+        XCTAssertTrue(sentence.contains("this Mac when one of those is full"), sentence)
+    }
+
+    func testOneDeviceReadsAsOneDevice() {
+        let draft = StoragePlacementDraft(group: group(copies: 1, on: [driveA]))
+        XCTAssertEqual(rule(draft), "Every photo on Owner's Back, and nowhere else.")
     }
 }

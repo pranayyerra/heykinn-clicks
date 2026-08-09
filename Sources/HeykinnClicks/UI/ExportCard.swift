@@ -70,10 +70,6 @@ struct ExportSummary: Identifiable {
 
     /// "3, 4 and 7" — read aloud the way a person would, because these are
     /// numbers the reader is about to go looking for on a drive.
-    static func list(_ items: [String]) -> String {
-        guard items.count > 1 else { return items.first ?? "" }
-        return items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
-    }
 
     /// Plain answer to "is this safe?", and when it is not, which parts are
     /// short and where they need to go — a count alone gives nothing to act on.
@@ -94,7 +90,7 @@ struct ExportSummary: Identifiable {
             // reader with nothing to look for on the drive.
             let subject = numbers.count == 1
                 ? "File \(numbers[0]) of this download is"
-                : "Files \(Self.list(numbers)) of this download are"
+                : "Files \(Formatters.list(numbers)) of this download are"
             return (
                 "\(subject) not on \(targets.joined(separator: " and ")) yet — \(Formatters.bytes.string(fromByteCount: bytesOutstanding)) still to copy",
                 "exclamationmark.triangle.fill",
@@ -219,7 +215,7 @@ struct ExportCard: View {
 
                 if !export.missingPartNumbers.isEmpty {
                     Label(
-                        "\(export.missingPartNumbers.count == 1 ? "File" : "Files") \(ExportSummary.list(export.missingPartNumbers.map(String.init))) of this download were never found, so some photos in it are missing. Check whether every .zip Google gave you was copied across.",
+                        "\(export.missingPartNumbers.count == 1 ? "File" : "Files") \(Formatters.list(export.missingPartNumbers.map(String.init))) of this download were never found, so some photos in it are missing. Check whether every .zip Google gave you was copied across.",
                         systemImage: "exclamationmark.triangle"
                     )
                     .font(.caption)

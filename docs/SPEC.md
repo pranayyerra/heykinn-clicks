@@ -835,6 +835,25 @@ Earned against a real 248 GB archive; the stories are in git history.
     taller than its contents and pushed every row below it off the screen.
     Stacks with explicit frames do the same job and cannot do that.
 
+73. Two controls that look redundant may mean different things — say which.
+    Naming devices and asking for a number of copies look like the same
+    question asked twice, and are not: the devices are *n*, the count is *k*,
+    and the planner walks the named devices in order and stops at k, so a third
+    device with the count at two is a spare for when one of the first two is
+    full, away, or already holds the photo. That is the whole k-of-n design and
+    the editor never said it — a tick list and a stepper side by side, with
+    nothing between them to explain why both exist. The fix is not to remove one
+    but to write the arrangement out: *every photo on all three*, or *two
+    copies — A and B first, and C when one of those cannot take it*.
+
+74. Preserve the arrangement somebody is already in. Ticking another device
+    almost always means "and this one too", so if every named device held a
+    copy, the new one does; if spares were already in use, it becomes another
+    spare. Removing one works the same way, which also stops the app answering
+    a deletion with a complaint about an arrangement nobody asked for. Doing
+    neither leaves the count quietly meaning something else than it did a
+    moment ago, and nobody notices until a drive is emptier than expected.
+
 64. Move the files first, then the catalog. A catalog told about a move that
     did not happen describes an archive nobody has, and nothing will ever
     correct it. A file that moved with the catalog not yet updated is found

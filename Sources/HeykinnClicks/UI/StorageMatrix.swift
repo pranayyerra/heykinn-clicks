@@ -354,7 +354,9 @@ struct StorageMatrix: View {
                     if opened == .group(group.id) {
                         panel(
                             symbol: "square.stack.3d.up",
-                            title: group.label,
+                            // No title: this opens directly beneath the row
+                            // bearing the same name, one line up.
+                            title: nil,
                             trailing: {
                                 // Editing is a mode you ask for. Cells that
                                 // could be dragged at any moment would make
@@ -524,7 +526,9 @@ struct StorageMatrix: View {
             .buttonStyle(.plain)
 
             Menu {
-                Button("Edit where it is kept") { beginEditing(group) }
+                // No "Edit where it is kept" here. The panel this row opens has
+                // an Edit button, and two doors to one editor is how they come
+                // to behave differently.
                 Button("Rename…") {
                     renameText = group.label
                     renaming = group
@@ -836,6 +840,16 @@ struct StorageMatrix: View {
             let changed = draft.differs(from: group)
 
             VStack(alignment: .leading, spacing: 12) {
+                // What the arrangement means, in words, updating as it changes.
+                //
+                // The tick list and the number sat side by side with nothing
+                // between them, so three devices and two copies read as a
+                // contradiction rather than as a spare. It is the one thing
+                // here somebody cannot work out by looking.
+                Text(draft.rule { store.targetsByID[$0]?.name ?? "a device" })
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+
                 Text("Drag **kept here** onto another device to move it. Click a dashed cell to add one.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -850,7 +864,7 @@ struct StorageMatrix: View {
                             self.draft = next
                             refreshPlan(for: group)
                         }
-                    ), in: 1...max(1, store.targets.count)) {
+                    ), in: 1...max(1, draft.destinations.count)) {
                         HStack(spacing: 6) {
                             Text("Keep")
                                 .font(.callout)
@@ -1002,17 +1016,19 @@ struct StorageMatrix: View {
     @ViewBuilder
     private func panel<Content: View, Trailing: View>(
         symbol: String,
-        title: String,
+        title: String?,
         @ViewBuilder trailing: () -> Trailing = { EmptyView() },
         @ViewBuilder content: () -> Content
     ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 6) {
-                Image(systemName: symbol)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                Text(title)
-                    .font(.callout.weight(.semibold))
+                if let title {
+                    Image(systemName: symbol)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Text(title)
+                        .font(.callout.weight(.semibold))
+                }
                 Spacer(minLength: 8)
                 trailing()
                 Button {
@@ -1026,7 +1042,7 @@ struct StorageMatrix: View {
                 .buttonStyle(.plain)
                 .help("Close")
             }
-            Divider()
+            if title != nil { Divider() }
             content()
         }
         .padding(12)

@@ -46,20 +46,68 @@ struct StoragePlacementDraft: Equatable {
         return true
     }
 
+    /// Whether every named device is meant to hold a copy.
+    ///
+    /// The difference the editor has to keep straight. Naming three devices and
+    /// asking for two copies is not a mistake — it is k-of-n, and the third is
+    /// a spare the planner falls back to when one of the first two is full,
+    /// away, or already holds the photo. But somebody ticking a third device
+    /// usually means "and this one too", and letting that silently demote it to
+    /// a fallback is the kind of thing nobody notices until a drive is emptier
+    /// than they expected.
+    var keepsACopyEverywhere: Bool { copies >= destinations.count }
+
+    /// Adds a device, keeping whichever arrangement was already in force.
+    ///
+    /// If every named device was holding a copy, the new one does too. If the
+    /// group was already using spares, it gains another spare. Either way the
+    /// count is not quietly left meaning something else.
     @discardableResult
     mutating func add(_ targetID: UUID) -> Bool {
         guard !destinations.contains(targetID) else { return false }
+        let wasEverywhere = keepsACopyEverywhere
         destinations.append(targetID)
+        if wasEverywhere { copies = destinations.count }
         mode = .chosen
         return true
     }
 
+    /// Removes a device, keeping whichever arrangement was already in force.
+    ///
+    /// Dropping a device while "on all of them" was true would otherwise leave
+    /// the count one above the devices — an error message about an arrangement
+    /// the user never asked for, in response to the one thing they did.
     @discardableResult
     mutating func remove(_ targetID: UUID) -> Bool {
         guard destinations.contains(targetID) else { return false }
+        let wasEverywhere = keepsACopyEverywhere
         destinations.removeAll { $0 == targetID }
+        if wasEverywhere { copies = max(1, destinations.count) }
         mode = .chosen
         return true
+    }
+
+    /// What this arrangement means, in the words somebody would use.
+    ///
+    /// The editor showed a tick list and a number with nothing between them, so
+    /// "three devices, two copies" looked like a contradiction rather than a
+    /// spare. Written out, it is neither surprising nor a thing to work out.
+    func rule(naming names: (UUID) -> String) -> String {
+        guard !destinations.isEmpty else { return "Nowhere to keep them yet." }
+        if mode == .automatic {
+            return "Keeping \(Formatters.copies(copies)) of every photo, on devices the app works out."
+        }
+        let listed = destinations.map(names)
+        if destinations.count == 1 {
+            return "Every photo on \(listed[0]), and nowhere else."
+        }
+        if keepsACopyEverywhere {
+            return "Every photo on all \(destinations.count) — \(Formatters.list(listed))."
+        }
+        let primary = Array(listed.prefix(copies))
+        let spares = Array(listed.dropFirst(copies))
+        return "Every photo on \(Formatters.copies(copies)) — \(Formatters.list(primary)) first, "
+            + "and \(Formatters.list(spares)) when one of those is full, away, or already has it."
     }
 
     /// What is wrong with this draft right now, or nil when it could be saved.

@@ -3,6 +3,13 @@ import AppKit
 
 enum Formatters {
 
+    /// "A, B and C" — the way a person lists things.
+    static func list(_ items: [String]) -> String {
+        guard items.count > 1 else { return items.first ?? "" }
+        return items.dropLast().joined(separator: ", ") + " and " + items[items.count - 1]
+    }
+
+
     /// "1 file", "12 files" — never "12 file(s)".
     ///
     /// The parenthesised plural was in twenty-odd strings across the app and

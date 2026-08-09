@@ -73,9 +73,8 @@ struct StorageGroupDetail: View {
             // the panel that contains this — and a second link to a sheet that
             // does the same job differently is how two ways of setting the same
             // policy drift apart.
-            Text("Keeping \(Formatters.copies(group.desiredCopies))")
-                .font(.callout)
-                .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
+            // No "Keeping two copies": the row this panel opens under already
+            // says it, and says it beside the photo count it qualifies.
             if store.idleDeviceCount(forStorageGroup: group) > 0 {
                 Text("You have more drives than this asks copies for, so \(Formatters.count(store.idleDeviceCount(forStorageGroup: group), "drive")) holds none of it.")
                     .font(.caption)
