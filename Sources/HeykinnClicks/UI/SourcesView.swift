@@ -224,7 +224,9 @@ struct SourcesView: View {
             .padding(.horizontal, 12)
             .padding(.bottom, 12)
         }
-        .background(Color.secondary.opacity(0.06), in: RoundedRectangle(cornerRadius: 12))
+        // No background of its own. It sits inside the card the row draws, and
+        // a second rounded fill inside that one is the box-in-a-box the whole
+        // pass is removing.
     }
 
     /// What this screen is, in the two sentences someone needs before any of
@@ -384,7 +386,8 @@ struct SourcesView: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                ForEach(exports) { export in
+                ForEach(Array(exports.enumerated()), id: \.element.id) { index, export in
+                    if index > 0 { Divider() }
                     ExportCard(export: export, importRequest: $importRequest)
                 }
             }

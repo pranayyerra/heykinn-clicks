@@ -81,10 +81,34 @@ struct SourceFlowView<Detail: View>: View {
         HStack(alignment: .center, spacing: 0) {
             VStack(spacing: 8) {
                 ForEach(sources) { source in
-                    node(source)
-                    if opened.contains(source.id) {
-                        detail(source)
+                    // Row and detail inside one card, not a card followed by a
+                    // loose panel. The border was drawn around the row alone,
+                    // so opening it put the detail outside the very outline
+                    // that said which source it belonged to.
+                    let isOpen = opened.contains(source.id)
+                    VStack(alignment: .leading, spacing: 0) {
+                        node(source)
+                        if isOpen {
+                            detail(source)
+                        }
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(
+                        .background.opacity(source.isSet ? 1 : 0.5),
+                        in: RoundedRectangle(cornerRadius: 12)
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 12)
+                            .stroke(
+                                isOpen ? Color.accentColor.opacity(0.55)
+                                    : source.isSet ? source.tint.opacity(0.35)
+                                    : Color.secondary.opacity(0.25),
+                                style: StrokeStyle(
+                                    lineWidth: 1,
+                                    dash: source.isSet ? [] : [4, 4]
+                                )
+                            )
+                    )
                 }
             }
             .frame(maxWidth: .infinity)
@@ -131,21 +155,17 @@ struct SourceFlowView<Detail: View>: View {
                         .lineLimit(1)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: isOpen ? "chevron.down" : "chevron.right")
+                // Rotates rather than swapping glyph, so it reads as the
+                // same control moving — the same chevron the places and the
+                // groups use.
+                Image(systemName: "chevron.right")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(isOpen ? 90 : 0))
             }
             .padding(10)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(.background.opacity(source.isSet ? 1 : 0.5), in: RoundedRectangle(cornerRadius: 12))
-            .overlay(
-                RoundedRectangle(cornerRadius: 12)
-                    .stroke(
-                        isOpen ? Color.accentColor
-                            : source.isSet ? source.tint.opacity(0.35) : Color.secondary.opacity(0.25),
-                        style: StrokeStyle(lineWidth: isOpen ? 2 : 1, dash: source.isSet ? [] : [4, 4])
-                    )
-            )
+            .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .accessibilityLabel("\(source.name). \(source.detail). \(source.status).")

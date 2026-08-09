@@ -153,7 +153,11 @@ struct ExportCard: View {
     /// it would put a decision in the user's mouth. The card offers the sheet
     /// as soon as there is something for it to govern.
     var body: some View {
-        GroupBox {
+        // A plain block, not a `GroupBox`. This opens inside the card the
+        // source row draws, so its own filled, rounded container was a third
+        // box nested in a second one. Exports are separated by a rule instead,
+        // which still tells two of them apart and adds no walls.
+        Group {
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
                     Text(export.title)
