@@ -25,33 +25,6 @@ struct OverviewView: View {
         return counts
     }
 
-    /// Two segments, because the user is given one answer. The six-state
-    /// breakdown that used to live here made the reader learn a taxonomy in
-    /// order to work out whether their photos were safe.
-    private var protectionSegments: [SegmentedBar.Segment] {
-        let counts = protectionCounts
-        var met = 0
-        var short = 0
-        var diverged = 0
-        for (state, count) in counts {
-            switch state.verdict {
-            case .meetsPolicy: met += count
-            case .shortOfPolicy: short += count
-            case .diverged: diverged += count
-            case .notLocal: break
-            }
-        }
-        // Named for the question rather than for a number. Every photo is
-        // judged against what its own source asks for, so there is no single
-        // figure to put in this label — "has two copies" would be wrong for
-        // the photos whose source asks for three, and wrong in the direction
-        // that reads as reassurance.
-        return [
-            SegmentedBar.Segment(label: "On all the drives it is meant to be on", count: met, color: .green),
-            SegmentedBar.Segment(label: "Short of the copies asked for", count: short, color: .orange),
-            SegmentedBar.Segment(label: "A copy no longer matches", count: diverged, color: .red)
-        ]
-    }
 
     /// Sources asking for more copies than they name devices to hold them.
     ///
@@ -113,15 +86,6 @@ struct OverviewView: View {
         return "\(confirmedCount.formatted()) of \(localCount.formatted()) read back and matched. The rest are on your drives but nobody has read them yet — that is what the inner ring is filling in."
     }
 
-    private var residencySegments: [SegmentedBar.Segment] {
-        ResidencyDomain.allCases.map { domain in
-            SegmentedBar.Segment(
-                label: domain.displayName,
-                count: countedAssets.filter { $0.residency == domain }.count,
-                color: domain.tint
-            )
-        }
-    }
 
     private var recentAssets: [Asset] {
         countedAssets
@@ -143,14 +107,23 @@ struct OverviewView: View {
                 if countedAssets.isEmpty {
                     firstRun
                 } else {
-                    safetyCard
-                    drivesCard
+                    // The screen's own subtitle is "the short answer", and it
+                    // had grown into five cards, four of which answered a
+                    // question another screen answers better and in more
+                    // detail. What is left is the answer, anything wanting a
+                    // decision, and a way back into the photos.
+                    //
+                    // Gone: a donut permanently at 100% whose caption had to be
+                    // corrected because it did not measure what it claimed; a
+                    // legend restating the sentence beside it; a drives card
+                    // that is Keep safe in miniature; a residency card that
+                    // reads "all 21,401 photos are in Local" and will until the
+                    // app has a cloud connector; and a "Nothing needs you" card
+                    // shown when the line above already said so.
+                    theAnswer
                     if !attentionTiles.isEmpty {
                         attentionCard
-                    } else {
-                        allClearCard
                     }
-                    residencyCard
                     if !recentAssets.isEmpty {
                         recentCard
                     }
@@ -294,66 +267,56 @@ struct OverviewView: View {
 
     // MARK: - Safety
 
-    private var safetyCard: some View {
-        CardBox(title: "Protection", systemImage: "checkmark.shield") {
-            HStack(alignment: .top, spacing: 24) {
-                ProtectionDonut(
-                    segments: protectionSegments,
-                    headline: donutHeadline,
-                    // The ring measures policy — has each photo the number of
-                    // copies its group asked for — and "on enough drives" is
-                    // not that. Two copies where one is this Mac satisfies the
-                    // policy and is one drive, so the ring read 100% above a
-                    // headline saying twelve photos are on one drive.
-                    caption: localCount == 0 ? "nothing yet" : "have the copies asked for",
-                    confirmed: localCount == 0 ? nil : confirmedCount
-                )
-                VStack(alignment: .leading, spacing: 12) {
-                    Text(safetyHeadline)
-                        .font(.title3)
-                        .fixedSize(horizontal: false, vertical: true)
-                    SegmentLegend(segments: protectionSegments)
-                    if let evidenceNote {
-                        // The inner ring's line. Not a footnote qualifying the
-                        // verdict — a second fact, and the one the reader would
-                        // otherwise assume the green ring had already promised.
-                        // Good news must not wear the styling of an
-                        // outstanding item. Both messages rendered as a dotted
-                        // grey circle, so "Every copy has been read back and
-                        // matched" was indistinguishable at a glance from "N
-                        // have never been read" — a hollow ring under a green
-                        // 100%, which reads as work left to do.
-                        Label(
-                            evidenceNote,
-                            systemImage: everythingRead ? "checkmark.circle.fill" : "circle.dotted"
-                        )
-                        .font(.callout)
-                        .foregroundStyle(everythingRead ? Color.green : Color.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                            .help("Having enough copies and having read them back are different things. A copy nobody has read is still a copy — it just has not been confirmed undamaged yet.")
-                    }
-                    // Offered when there is nowhere to put a copy at all, or
-                    // when a source is asking for more copies than it has
-                    // devices to hold them. Both are fixed by adding a device;
-                    // neither is fixed by waiting.
-                    if store.targets.isEmpty || !unsatisfiableSources.isEmpty {
-                        Button {
-                            selection = .targets
-                        } label: {
-                            Label("Set up drives", systemImage: "externaldrive.badge.plus")
-                        }
-                        .buttonStyle(.borderedProminent)
-                    }
-                }
-                Spacer(minLength: 0)
-            }
-        }
+    /// The one thing this screen exists to say.
+    ///
+    /// Same sentence Keep safe leads with, drawn the same way — a mark, a
+    /// headline, and the two facts that qualify it. No ring: a figure pinned at
+    /// 100% is decoration, and this one spent the day claiming to measure
+    /// drives while measuring policy.
+    /// Whether the headline is good news: enough places, and read back.
+    private var archiveIsSound: Bool {
+        everythingRead && (store.leastCopiesAnywhere ?? 0) >= 2
     }
 
-    private var donutHeadline: String {
-        guard localCount > 0 else { return "—" }
-        return "\(Int((Double(protectedCount) / Double(localCount) * 100).rounded()))%"
+    private var theAnswer: some View {
+        HStack(alignment: .top, spacing: 12) {
+            // Reflects the sentence beside it and nothing else. Folding the
+            // attention count in turned the mark orange over a green headline
+            // and a green evidence line, because a move was running — which is
+            // worth surfacing, and is not a statement about whether the photos
+            // are safe. That section says it for itself, directly below.
+            Image(systemName: archiveIsSound ? "checkmark.seal.fill" : "exclamationmark.circle.fill")
+                .font(.title)
+                .foregroundStyle(archiveIsSound ? .green : .orange)
+            VStack(alignment: .leading, spacing: 6) {
+                Text(safetyHeadline)
+                    .font(.title3)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let evidenceNote {
+                    Label(
+                        evidenceNote,
+                        systemImage: everythingRead ? "checkmark.circle.fill" : "circle.dotted"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(everythingRead ? Color.green : Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+                if store.archiveBackedOnlyCount > 0 {
+                    Label(
+                        "\(store.archiveBackedOnlyCount.formatted()) of them are inside your Google Takeout files rather than copied out of them.",
+                        systemImage: "shippingbox"
+                    )
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.bottom, 4)
     }
+
+
 
     private var safetyHeadline: String {
         if countedAssets.isEmpty {
@@ -413,73 +376,7 @@ struct OverviewView: View {
 
     // MARK: - Drives
 
-    /// One line, not a second copy of the drives screen. The cards live there;
-    /// repeating them here made the same state render twice and gave neither
-    /// screen a clear job.
-    private var drivesCard: some View {
-        CardBox(
-            title: "Drives holding your archive",
-            systemImage: "externaldrive",
-            accessory: AnyView(
-                Button("Manage") { selection = .targets }
-                    .buttonStyle(.link)
-            )
-        ) {
-            if store.targets.isEmpty {
-                HStack(spacing: 12) {
-                    Image(systemName: "externaldrive.badge.plus")
-                        .font(.largeTitle)
-                        .foregroundStyle(.secondary)
-                    VStack(alignment: .leading, spacing: 3) {
-                        Text("Nothing holds a copy yet")
-                            .font(.headline)
-                        Text("Imports land in staging and stay there until a drive holds them.")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    Spacer()
-                    Button("Add a drive…") { selection = .targets }
-                        .buttonStyle(.borderedProminent)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(copiesSummary)
-                        .font(.title3)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Text(store.targets.map(\.name).sorted().joined(separator: " · "))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-        }
-    }
 
-    private var copiesSummary: String {
-        let reachable = store.targets.filter { store.reachablePaths[$0.id] != nil }.count
-        let complete = store.targets.filter { target in
-            let breakdown = store.driveBreakdowns[target.id] ?? DriveContentBreakdown()
-            return breakdown.expectedPhotos > 0 && breakdown.presentPhotos == breakdown.expectedPhotos
-        }.count
-        let total = store.targets.count
-
-        // Counted in drives. "2 copies" here and "one copy" in the verdict
-        // above are different things — a drive, and how many copies of each
-        // photo the policy asks for — and using one word for both on a single
-        // screen made the two numbers look like they should agree.
-        let completeness: String
-        switch (complete == total, total) {
-        case (true, 1): completeness = "One drive, holding everything"
-        case (true, 2): completeness = "Both drives hold everything"
-        case (true, _): completeness = "All \(total) drives hold everything"
-        default: completeness = "\(complete) of \(total) drives hold everything"
-        }
-        let availability = reachable == 0
-            ? "none plugged in right now"
-            : (reachable == total ? "all plugged in now" : "\(reachable) plugged in now")
-        return "\(completeness) — \(availability)."
-    }
 
     // MARK: - Attention
 
@@ -576,69 +473,10 @@ struct OverviewView: View {
         }
     }
 
-    private var allClearCard: some View {
-        CardBox(title: "Nothing needs you", systemImage: "checkmark.seal") {
-            Label(
-                "No damaged copies, no violations, no exports waiting to be imported.",
-                systemImage: "hand.thumbsup"
-            )
-            .foregroundStyle(.green)
-        }
-    }
 
     // MARK: - Residency
 
-    /// Domains actually holding something. A bar drawn from one non-zero
-    /// segment is a full-width block of one colour with two zeroes underneath
-    /// it — chart furniture around a fact that is one sentence long.
-    private var occupiedResidencySegments: [SegmentedBar.Segment] {
-        residencySegments.filter { $0.count > 0 }
-    }
 
-    private var residencyCard: some View {
-        CardBox(
-            title: "Where your photos live",
-            systemImage: "map",
-            help: "Every photo lives in exactly one place. Move them between places from Keep safe."
-        ) {
-            VStack(alignment: .leading, spacing: 10) {
-                if occupiedResidencySegments.count < 2 {
-                    if let only = occupiedResidencySegments.first {
-                        HStack(spacing: 8) {
-                            Circle()
-                                .fill(only.color)
-                                .frame(width: 10, height: 10)
-                            Text("All \(only.count.formatted()) photos are in \(only.label).")
-                                .font(.title3)
-                        }
-                    }
-                } else {
-                    SegmentedBar(segments: occupiedResidencySegments, height: 14)
-                    HStack(alignment: .top, spacing: 28) {
-                        ForEach(occupiedResidencySegments) { segment in
-                            VStack(alignment: .leading, spacing: 2) {
-                                HStack(spacing: 6) {
-                                    Circle()
-                                        .fill(segment.color)
-                                        .frame(width: 8, height: 8)
-                                    Text(segment.label)
-                                        .font(.caption)
-                                        .foregroundStyle(.secondary)
-                                }
-                                Text(segment.count.formatted())
-                                    .font(.title3)
-                                    .monospacedDigit()
-                            }
-                        }
-                        Spacer()
-                    }
-                }
-                EmptyView()
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-        }
-    }
 
     // MARK: - Recent
 
