@@ -18,6 +18,7 @@ struct StorageGroupDetail: View {
 
     let group: StorageGroup
     @State private var confirmingStopTracking: String?
+    @State private var relocating: ExportRelocation?
 
     private var form: AppStore.StorageForm { store.storageForm(forStorageGroup: group.id) }
     private var backingSets: [String] { store.exportSetIDs(backingStorageGroup: group.id) }
@@ -32,6 +33,7 @@ struct StorageGroupDetail: View {
             ForEach(backingSets, id: \.self) { atStake($0) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+        .sheet(item: $relocating) { ExportRelocationSheet(plan: $0) }
     }
 
     /// The policy, then what is actually there, device by device.
@@ -167,6 +169,13 @@ struct StorageGroupDetail: View {
             HStack(spacing: 10) {
                 if !behind.isEmpty {
                     Button("Read them again") { store.backfillExportMetadata() }
+                }
+                // Offered per drive, because an export exists on several and
+                // only a connected one can be moved.
+                ForEach(store.targets) { target in
+                    if let plan = store.exportRelocationPlan(forSet: setID, onTarget: target.id) {
+                        Button("Keep in the app's folder on \(target.name)…") { relocating = plan }
+                    }
                 }
                 if !export.extractableZips.isEmpty {
                     Button("Copy them out of the download") {

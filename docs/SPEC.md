@@ -747,3 +747,25 @@ Earned against a real 248 GB archive; the stories are in git history.
     before the reader was versioned was read by something older than version 1
     by definition, and treating silence as current would exempt every existing
     archive from the one check this exists to make.
+
+63. Moving a file moves everything that names it. An export can be relocated
+    into the app's folder on the drive it already sits on — a same-volume
+    rename, instant however large. The bytes are the easy part. On a real
+    archive 42,754 recorded copies name their export by its *stem*, which no
+    move can disturb, and 6,482 name it by its **path inside the mount**: a
+    photo counted inside a zip records that zip's location. Moving the folder
+    without rewriting those leaves 6,482 copies reading as present, on a
+    connected drive, at a path with nothing there — the worst kind of wrong,
+    because every check that only consults the catalog agrees the archive is
+    fine. So the rewrite happens with the move, the count is on the preview
+    before anybody agrees to it, and it is a prefix swap rather than a search
+    and replace: the folder's name can occur again further along the same
+    string, inside the zip's own entry list, where it is an album and not a
+    location.
+
+64. Move the files first, then the catalog. A catalog told about a move that
+    did not happen describes an archive nobody has, and nothing will ever
+    correct it. A file that moved with the catalog not yet updated is found
+    again by the path repair that already runs on every connect. Only one of
+    those two is recoverable by doing nothing, and that is the one to fail
+    towards.

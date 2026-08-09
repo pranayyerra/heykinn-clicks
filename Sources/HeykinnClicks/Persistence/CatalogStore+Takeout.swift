@@ -84,3 +84,66 @@ extension CatalogStore {
         try database.run("DELETE FROM takeout_archives WHERE id = ?;", [.text(id.uuidString)])
     }
 }
+
+extension CatalogStore {
+
+    /// How many recorded copies name each mount-relative directory inside
+    /// themselves, for one drive.
+    ///
+    /// A photo counted inside a zip records that zip's path — moving the zip
+    /// without rewriting them leaves every one of those copies pointing at
+    /// nothing while still reading as present. This is what lets the move be
+    /// planned with that number on the table instead of discovering it after.
+    func zipMemberReplicaCountsByDirectory(onTarget targetID: UUID) throws -> [String: Int] {
+        let prefix = ReplicationService.zipMemberPrefix
+        return try database.query("""
+        SELECT relative_path FROM replica_states
+        WHERE drive_id = ? AND substr(relative_path, 1, ?) = ?;
+        """, [
+            .text(targetID.uuidString),
+            .int(Int64(prefix.count)),
+            .text(prefix),
+        ]) { $0.text(0) }
+        .reduce(into: [:]) { counts, path in
+            let payload = String(path.dropFirst(prefix.count))
+            guard let bang = payload.firstIndex(of: "!") else { return }
+            let zipRelative = String(payload[payload.startIndex..<bang])
+            counts[(zipRelative as NSString).deletingLastPathComponent, default: 0] += 1
+        }
+    }
+
+    /// Repoints every copy recorded inside a zip that has moved.
+    ///
+    /// A prefix swap rather than a `replace`: the old directory name could
+    /// legitimately occur again further along the path — inside the zip's own
+    /// entry list, after the `!` — and replacing every occurrence would corrupt
+    /// the entry while fixing the location.
+    @discardableResult
+    func repointZipMembers(
+        onTarget targetID: UUID, from oldDirectory: String, to newDirectory: String
+    ) throws -> Int {
+        guard oldDirectory != newDirectory else { return 0 }
+        let old = ReplicationService.zipMemberPrefix + oldDirectory + "/"
+        let new = ReplicationService.zipMemberPrefix + newDirectory + "/"
+        let affected = try database.query("""
+        SELECT count(*) FROM replica_states
+        WHERE drive_id = ? AND substr(relative_path, 1, ?) = ?;
+        """, [
+            .text(targetID.uuidString), .int(Int64(old.count)), .text(old),
+        ]) { Int($0.int(0)) }.first ?? 0
+        guard affected > 0 else { return 0 }
+
+        try database.run("""
+        UPDATE replica_states
+        SET relative_path = ? || substr(relative_path, ?)
+        WHERE drive_id = ? AND substr(relative_path, 1, ?) = ?;
+        """, [
+            .text(new),
+            .int(Int64(old.count + 1)),
+            .text(targetID.uuidString),
+            .int(Int64(old.count)),
+            .text(old),
+        ])
+        return affected
+    }
+}

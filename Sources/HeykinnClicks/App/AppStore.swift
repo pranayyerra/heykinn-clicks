@@ -5721,6 +5721,107 @@ final class AppStore: ObservableObject {
     /// unique — so the delivered copy moves *into* that row rather than beside
     /// it, and the row it came from goes away. It is not a lost copy; it is a
     /// copy this method itself moved.
+    // MARK: - Making an export the app's responsibility
+
+    /// What moving this export into the app's folder on one drive would do.
+    ///
+    /// Returns nil when there is nothing to plan — the drive is away, holds no
+    /// part of this export, or already keeps it where the app would put it.
+    func exportRelocationPlan(forSet setID: String, onTarget targetID: UUID) -> ExportRelocation? {
+        guard let target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
+            return nil
+        }
+        let byDirectory = (try? catalog.zipMemberReplicaCountsByDirectory(onTarget: targetID)) ?? [:]
+        let plan = ExportRelocation.plan(
+            setID: setID,
+            target: target,
+            mountURL: mountURL,
+            archives: takeoutArchives,
+            zipMemberReplicasByDirectory: byDirectory,
+            occupied: { FileManager.default.fileExists(atPath: $0) }
+        )
+        return plan.isEmpty && plan.blocked.isEmpty ? nil : plan
+    }
+
+    /// Moves the files, then makes the catalog say where they are.
+    ///
+    /// In that order, and never the reverse. A catalog that has been told about
+    /// a move that did not happen describes an archive nobody has; a file that
+    /// has moved with the catalog not yet updated is found again by the path
+    /// repair that already runs on every connect. Only one of those two is
+    /// recoverable by doing nothing.
+    @discardableResult
+    func relocateExport(_ plan: ExportRelocation) -> Int {
+        guard let target = targetsByID[plan.targetID],
+              let mountURL = reachablePaths[plan.targetID],
+              !isBusy(plan.targetID), !isQuiescing(plan.targetID), !isTransferringParts
+        else {
+            lastError = "That drive is busy or not connected."
+            return 0
+        }
+        let destination = URL(fileURLWithPath: plan.destinationDirectory, isDirectory: true)
+        do {
+            try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
+        } catch {
+            lastError = "Could not make a folder for the export on \(target.name): \(error.localizedDescription)"
+            return 0
+        }
+
+        var moved: [ExportRelocation.Move] = []
+        for move in plan.moves {
+            // Re-checked at the moment of the move, not only when it was
+            // planned: a preview somebody read a minute ago is not a promise
+            // about what is on the disk now.
+            guard !FileManager.default.fileExists(atPath: move.to) else { continue }
+            do {
+                try FileManager.default.moveItem(
+                    at: URL(fileURLWithPath: move.from), to: URL(fileURLWithPath: move.to)
+                )
+                moved.append(move)
+            } catch {
+                lastError = "Could not move \(move.displayName): \(error.localizedDescription)"
+                break
+            }
+        }
+        guard !moved.isEmpty else { return 0 }
+
+        var repointed = 0
+        do {
+            try catalog.transaction {
+                var directoriesMoved: Set<String> = []
+                for move in moved {
+                    guard var archive = takeoutArchives.first(where: { $0.id == move.archiveID })
+                    else { continue }
+                    if let from = ExportRelocation.relativeDirectory(of: move.from, onMount: mountURL) {
+                        directoriesMoved.insert(from)
+                    }
+                    archive.path = move.to
+                    archive.missingSince = nil
+                    try catalog.upsertTakeoutArchive(archive)
+                }
+                guard let to = ExportRelocation.relativeDirectory(
+                    of: plan.moves.first?.to ?? "", onMount: mountURL
+                ) else { return }
+                for from in directoriesMoved {
+                    repointed += try catalog.repointZipMembers(
+                        onTarget: plan.targetID, from: from, to: to
+                    )
+                }
+            }
+        } catch {
+            lastError = "The files moved but the catalog could not be updated: \(error.localizedDescription). Reconnecting the drive will find them."
+        }
+
+        audit(
+            .drive,
+            "\(Formatters.count(moved.count, "file")) of the export are now kept in the app's folder on \(target.name), at \(plan.destinationDirectory). Nothing was copied — each was renamed on the same disk"
+                + (repointed > 0 ? ", and \(Formatters.count(repointed, "recorded copy", "recorded copies")) that named the old folder were repointed." : "."),
+            targetID: plan.targetID
+        )
+        loadAll()
+        return moved.count
+    }
+
     @discardableResult
     func rehomeDeliveredParts(for targetID: UUID) -> Int {
         guard let target = targetsByID[targetID], let mountURL = reachablePaths[targetID] else {
