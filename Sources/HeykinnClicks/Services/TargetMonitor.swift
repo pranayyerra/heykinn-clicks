@@ -63,7 +63,28 @@ final class TargetMonitor: ObservableObject {
     }
 
     func rescan(targets: [ReplicationTarget]) {
-        let volumes = Self.enumerateVolumes()
+        apply(volumes: Self.enumerateVolumes(), targets: targets)
+    }
+
+    /// The same scan with the slow half moved off the main thread.
+    ///
+    /// Walking the mounted volumes reads a marker file from each one, and a
+    /// drive that is asleep, busy, or waiting on a permission prompt answers
+    /// that read whenever it feels like it. Done on the main thread during
+    /// `AppStore.init` — which is where startup does it — nothing draws until
+    /// every drive has replied, so an app whose entire subject is external
+    /// drives can be kept from ever showing a window by one of them.
+    ///
+    /// Only the enumeration moves. Matching volumes to targets and publishing
+    /// the result stay on the main actor, because they touch published state.
+    func rescanOffMainThread(targets: [ReplicationTarget]) async {
+        let volumes = await Task.detached(priority: .userInitiated) {
+            Self.enumerateVolumes()
+        }.value
+        apply(volumes: volumes, targets: targets)
+    }
+
+    private func apply(volumes: [VolumeInfo], targets: [ReplicationTarget]) {
         availableVolumes = volumes
 
         var reachable: [UUID: URL] = [:]

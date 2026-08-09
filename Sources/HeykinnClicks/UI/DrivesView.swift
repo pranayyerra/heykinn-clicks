@@ -197,11 +197,14 @@ struct DrivesView: View {
         .toolbar {
             ToolbarItem {
                 Button {
-                    store.rescanTargets()
-                    // On demand means on demand: check the paths still resolve
-                    // rather than only noticing at the next mount.
-                    for target in store.targets where store.reachablePaths[target.id] != nil {
-                        store.repairReplicaPaths(for: target.id)
+                    Task { @MainActor in
+                        await store.rescanTargetsOffMainThread()
+                        // On demand means on demand: check the paths still
+                        // resolve rather than only noticing at the next mount.
+                        // After the await, so it reads a settled scan.
+                        for target in store.targets where store.reachablePaths[target.id] != nil {
+                            store.repairReplicaPaths(for: target.id)
+                        }
                     }
                 } label: {
                     Label("Rescan", systemImage: "arrow.clockwise")

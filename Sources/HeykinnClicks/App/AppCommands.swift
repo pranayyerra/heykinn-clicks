@@ -81,12 +81,14 @@ struct HeykinnCommands: Commands {
                 .keyboardShortcut("4", modifiers: .command)
             Divider()
             Button("Look for Drives Again") {
-                store.rescanTargets()
-                // On demand means on demand: check the paths still resolve
-                // rather than only noticing at the next mount. Same work the
-                // Rescan button on Keep safe does.
-                for target in store.targets where store.reachablePaths[target.id] != nil {
-                    _ = store.repairReplicaPaths(for: target.id)
+                Task { @MainActor in
+                    await store.rescanTargetsOffMainThread()
+                    // On demand means on demand: check the paths still resolve
+                    // rather than only noticing at the next mount. Same work
+                    // the Rescan button on Keep safe does.
+                    for target in store.targets where store.reachablePaths[target.id] != nil {
+                        _ = store.repairReplicaPaths(for: target.id)
+                    }
                 }
             }
             .keyboardShortcut("r", modifiers: .command)

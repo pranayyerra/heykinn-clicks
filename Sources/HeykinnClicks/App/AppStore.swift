@@ -391,7 +391,10 @@ final class AppStore: ObservableObject {
         resolveAutomaticDestinations()
 
         targetMonitor.rescanRequested = { [weak self] in
-            self?.rescanTargets()
+            // A mount or unmount notification: nothing is waiting on the
+            // answer, and the volume that just appeared is exactly the one
+            // most likely to be slow to speak.
+            Task { @MainActor in await self?.rescanTargetsOffMainThread() }
         }
         targetMonitor.volumeWillUnmount = { [weak self] url in
             self?.handleWillUnmount(volumeURL: url)
@@ -424,11 +427,17 @@ final class AppStore: ObservableObject {
         // there is nothing to withdraw.
         withdrawUnnamedPlacements()
 
-        rescanTargets()
-        // Runs after the drive scan so drive-resident leftovers are visible.
-        reconcileAfterRestart()
-        refreshCatalogSnapshots()
-        backupCatalog()
+        // Off the main thread, and everything that needs its answer moved in
+        // with it. The window is drawn before any drive has been asked
+        // anything; the scan lands a moment later and the screens fill in.
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            await self.rescanTargetsOffMainThread()
+            // Runs after the drive scan so drive-resident leftovers are visible.
+            self.reconcileAfterRestart()
+            self.refreshCatalogSnapshots()
+            self.backupCatalog()
+        }
 
         let cache = thumbnails
         Task.detached(priority: .background) { cache.pruneDisk() }
@@ -437,7 +446,11 @@ final class AppStore: ObservableObject {
         // anything they miss (e.g. network volumes, missed events).
         Timer.scheduledTimer(withTimeInterval: 10, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                self?.rescanTargets()
+                // Off the main thread as well: this fires forever, and a drive
+                // that has gone to sleep would otherwise stutter the whole UI
+                // every ten seconds. Nothing here depends on the answer having
+                // already arrived.
+                await self?.rescanTargetsOffMainThread()
                 // Content can move under a target that never unmounts, and
                 // connect-time checks never fire for one left plugged in.
                 self?.startDueSyncsIfIdle()
@@ -2128,6 +2141,24 @@ final class AppStore: ObservableObject {
     func rescanTargets() {
         let previouslyConnected = Set(targetMonitor.reachablePaths.keys)
         targetMonitor.rescan(targets: targets)
+        reactToRescan(previouslyConnected: previouslyConnected)
+    }
+
+    /// The same rescan without holding the main thread while drives answer.
+    ///
+    /// Used at startup, where the alternative is that a sleeping drive — or a
+    /// permission prompt on a removable volume — stops the window appearing at
+    /// all. Everywhere else the scan stays synchronous on purpose: those calls
+    /// are somebody asking for it and are immediately followed by work that
+    /// needs the answer, and registering a device already broke once by running
+    /// the placement audit before the scan had happened.
+    func rescanTargetsOffMainThread() async {
+        let previouslyConnected = Set(targetMonitor.reachablePaths.keys)
+        await targetMonitor.rescanOffMainThread(targets: targets)
+        reactToRescan(previouslyConnected: previouslyConnected)
+    }
+
+    private func reactToRescan(previouslyConnected: Set<UUID>) {
         let now = Date()
         for (targetID, mountURL) in targetMonitor.reachablePaths {
             if let index = targets.firstIndex(where: { $0.id == targetID }) {
@@ -5055,6 +5086,9 @@ final class AppStore: ObservableObject {
             // also lets the connect sequence claim content the drive already
             // holds, so the audit that follows asks for what is genuinely
             // missing rather than queuing copies adoption then withdraws.
+            // Deliberately the blocking form. The audit two lines down can
+            // only place onto devices the scan has established are there, and
+            // this path already broke once by running in the other order.
             rescanTargets()
             // And before the audit for the same reason the rescan is: a group
             // that works its devices out has to name this one before anything
