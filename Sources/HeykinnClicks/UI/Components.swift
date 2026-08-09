@@ -651,6 +651,10 @@ enum VolumeCapacity {
 struct LabeledRow: View {
     let label: String
     let value: String
+    /// Shortens a long value to one line *in the layout*, keeping the whole of
+    /// it selectable. Truncating the string instead means the reader copies
+    /// the ellipsis too, which is worse than a wrapped line.
+    var truncates = false
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
@@ -658,7 +662,9 @@ struct LabeledRow: View {
                 .foregroundStyle(.secondary)
                 .frame(width: 140, alignment: .leading)
             Text(value)
-                .textSelection(.enabled)
+                .lineLimit(truncates ? 1 : nil)
+                .truncationMode(.middle)
+                .help(truncates ? value : "")
             Spacer()
         }
         .font(.callout)

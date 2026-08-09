@@ -63,7 +63,13 @@ struct AssetDetailView: View {
                             if let width = asset.pixelWidth, let height = asset.pixelHeight {
                                 LabeledRow(label: "Dimensions", value: "\(width) × \(height)")
                             }
-                            LabeledRow(label: "Content hash", value: String(asset.contentHash.prefix(20)) + "…")
+                            // The whole hash, truncated by the view rather
+                            // than by the string. Cutting it in code and
+                            // appending an ellipsis was invisible until text
+                            // became selectable — and then copying the one
+                            // value anybody would ever want to copy gave back
+                            // twenty characters and a "…".
+                            LabeledRow(label: "Content hash", value: asset.contentHash, truncates: true)
                             ForEach(asset.exifSummary.sorted(by: { $0.key < $1.key }), id: \.key) { key, value in
                                 LabeledRow(label: key, value: value)
                             }
