@@ -304,7 +304,12 @@ struct OverviewView: View {
                 ProtectionDonut(
                     segments: protectionSegments,
                     headline: donutHeadline,
-                    caption: localCount == 0 ? "nothing yet" : "on enough drives",
+                    // The ring measures policy — has each photo the number of
+                    // copies its group asked for — and "on enough drives" is
+                    // not that. Two copies where one is this Mac satisfies the
+                    // policy and is one drive, so the ring read 100% above a
+                    // headline saying twelve photos are on one drive.
+                    caption: localCount == 0 ? "nothing yet" : "have the copies asked for",
                     confirmed: localCount == 0 ? nil : confirmedCount
                 )
                 VStack(alignment: .leading, spacing: 12) {
@@ -389,6 +394,13 @@ struct OverviewView: View {
             // question, and one number cannot be right on one screen only.
             if let fewest = store.leastCopiesAnywhere, fewest > 1 {
                 return "Every photo is on \(Formatters.count(fewest, "drive"))."
+            }
+            // Policy can be met while the drive count is not: two copies where
+            // one of them is this Mac. Keep safe says so, and this screen must
+            // not disagree with it.
+            if let fewest = store.leastCopiesAnywhere, fewest < 2 {
+                let short = store.copyCoverage[fewest] ?? 0
+                return "\(Formatters.count(short, "photo")) \(short == 1 ? "is" : "are") on \(fewest == 0 ? "no drive" : "one drive only")."
             }
             return "All \(localCount.formatted()) photos are on all the drives they are meant to be on."
         }

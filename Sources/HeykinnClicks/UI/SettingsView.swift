@@ -26,28 +26,32 @@ private struct AutomationSettings: View {
     var body: some View {
         Form {
             Section {
-                Toggle("Sync a managed drive when it connects", isOn: $store.autoSyncOnConnect)
-                Text("Plugging a drive in starts working through its queue — copies it is missing, checks it owes — without waiting to be asked.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ExplainedToggle(
+                    "Sync a managed drive when it connects",
+                    isOn: $store.autoSyncOnConnect,
+                    help: "Plugging a drive in starts working through its queue — copies it is missing, checks it owes — without waiting to be asked."
+                )
             }
             Section {
-                Toggle("Bring Photos-library originals into the archive", isOn: $store.importFromApplePhotos)
-                Text("Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your drives like anything else; ones already held byte-for-byte are merged rather than stored twice. Connect and watch progress under Add photos.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ExplainedToggle(
+                    "Bring Photos-library originals into the archive",
+                    isOn: $store.importFromApplePhotos,
+                    help: "Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your drives like anything else; ones already held byte-for-byte are merged rather than stored twice. Connect and watch progress under Add photos."
+                )
             }
             Section {
-                Toggle("Handle Google exports found on a drive", isOn: $store.autoManageTakeout)
-                Text("Finds exports on a connected drive, unpacks and imports what is new, and recognises copies the drive already holds instead of copying them again.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ExplainedToggle(
+                    "Handle Google exports found on a drive",
+                    isOn: $store.autoManageTakeout,
+                    help: "Finds exports on a connected drive, unpacks and imports what is new, and recognises copies the drive already holds instead of copying them again."
+                )
             }
             Section {
-                Toggle("Free up space once your drives hold a photo", isOn: $store.reclaimStagingWhenSafe)
-                Text("Photos added from anywhere the app does not manage are copied onto this Mac first, so they are safe before any drive is plugged in. With this on, that working copy is released once your own drives hold the photo and have read it back to confirm it — the same standard the app uses to call a photo safe anywhere else. Your originals are never touched, and nothing is released while a photo is short of the copies you asked for.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                ExplainedToggle(
+                    "Free up space once your drives hold a photo",
+                    isOn: $store.reclaimStagingWhenSafe,
+                    help: "Photos added from anywhere the app does not manage are copied onto this Mac first, so they are safe before any drive is plugged in. With this on, that working copy is released once your own drives hold the photo and have read it back to confirm it — the same standard the app uses to call a photo safe anywhere else. Your originals are never touched, and nothing is released while a photo is short of the copies you asked for."
+                )
             }
         }
         .formStyle(.grouped)
@@ -185,15 +189,11 @@ private struct SafetySettings: View {
                 .font(.callout)
             }
             Section("Background checking") {
-                Toggle("Read a few files in the background", isOn: $store.backgroundRotPatrol)
-                Text("Every half hour, on an idle drive, the app re-reads the forty files it checked longest ago. Reading is the only thing that finds bit rot — comparing what the catalog recorded can never see a file decay on disk. It yields to imports and syncs, and skips a target that has work waiting.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            Section("Checking for damage") {
-                Text("Checking re-reads files already on a drive and confirms they are still byte-for-byte what was imported. It catches silent corruption — bit rot, a bad cable, an accidental edit — while the other drive still holds a good copy to restore from. It reads every byte, so it runs in batches rather than all at once, from Keep safe.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
+                ExplainedToggle(
+                    "Read a few files in the background",
+                    isOn: $store.backgroundRotPatrol,
+                    help: "Every half hour, on an idle drive, the app re-reads the forty files it checked longest ago. Reading is the only thing that finds bit rot — comparing what the catalog recorded can never see a file decay on disk. It yields to imports and syncs, and skips a target that has work waiting."
+                )
             }
             Section("Catalog backup") {
                 Text("The photos survive on the drives, but everything this app knows about them lives only in the catalog: which drives hold what, how copies were verified, how duplicates were grouped, and the descriptions, albums and people read out of your exports — that last part only exists here now. Verified snapshots ride along on each connected drive, so losing the Mac does not lose any of it. The newest \(CatalogBackupService.retainCount) are kept on each drive.")

@@ -1796,6 +1796,13 @@ final class AppStore: ObservableObject {
     struct Location: Identifiable, Hashable {
         var path: String
         var display: String
+        /// How many of this group's photos are in this folder.
+        ///
+        /// Attached to the folder rather than summed on the row above, because
+        /// "272 · 263 inside the download" is a sentence somebody has to
+        /// decode, and the same two numbers written beside the two folders
+        /// they describe are not.
+        var photos: Int = 0
         var id: String { path }
     }
 
@@ -1824,12 +1831,13 @@ final class AppStore: ObservableObject {
             guard let entry = byTarget[targetID] else { return nil }
             var where_: [Location] = []
             let mount = reachablePaths[targetID]?.path ?? targetsByID[targetID]?.lastKnownPath
-            if entry.inside > 0, let folder = locations[targetID] {
+            if entry.inside > 0, var folder = locations[targetID] {
+                folder.photos = entry.inside
                 where_.append(folder)
             }
-            if entry.inside < entry.photos.count,
-               let root = targetsByID[targetID]?.replicaRootComponent, let mount {
-                where_.append(Location(path: mount + "/" + root, display: root))
+            let ownFiles = entry.photos.count - entry.inside
+            if ownFiles > 0, let root = targetsByID[targetID]?.replicaRootComponent, let mount {
+                where_.append(Location(path: mount + "/" + root, display: root, photos: ownFiles))
             }
             return GroupHolding(
                 targetID: targetID, photos: entry.photos.count,
@@ -1927,6 +1935,14 @@ final class AppStore: ObservableObject {
     /// the archive is safe: "49,278 copies" is the same number whether every
     /// photo has two or half of them have three and the rest one.
     @Published private(set) var copyCoverage: [Int: Int] = [:]
+
+    /// Photos one of whose copies is on this Mac rather than a drive.
+    ///
+    /// Kept apart from `copyCoverage` rather than folded into it, because the
+    /// two facts want saying separately: how many drives hold a photo is the
+    /// safety answer, and "one of those places is the computer" is a caveat on
+    /// it, not a different number.
+    @Published private(set) var photosLeaningOnThisMac: Int = 0
 
     /// Photos whose every copy is inside a Takeout file.
     ///
@@ -2189,15 +2205,33 @@ final class AppStore: ObservableObject {
         // photo in one place satisfies a one-copy group and reads as fine.
         // "Every photo is on two drives" is the safety answer, and it is the
         // one somebody opens this screen to get.
+        // Drives, and this Mac, counted apart. They are not the same insurance:
+        // the host is the machine the drives exist to survive, so a photo on
+        // one drive plus this Mac is a photo on one drive. Counting them
+        // together let the headline announce "every photo is on 2 drives" while
+        // twelve of them were on one — the exact arrangement
+        // `automaticEligibleDeviceIDs` refuses to create, announced as safe.
+        let hostIDs = Set(targets.filter { $0.kind == .hostDevice }.map(\.id))
         var drivesHolding: [UUID: Set<UUID>] = [:]
+        var leaningOnHost: Set<UUID> = []
         var outsideAnArchive: Set<UUID> = []
         for replica in replicaStates where replica.state == .present {
-            drivesHolding[replica.assetID, default: []].insert(replica.targetID)
+            if hostIDs.contains(replica.targetID) {
+                leaningOnHost.insert(replica.assetID)
+            } else {
+                drivesHolding[replica.assetID, default: []].insert(replica.targetID)
+            }
             if !ReplicationService.isInsideADownload(replica.relativePath) {
                 outsideAnArchive.insert(replica.assetID)
             }
         }
+        // A photo held only by the host has no drive at all, and must not
+        // vanish from the distribution by having no entry in it.
+        for assetID in leaningOnHost where drivesHolding[assetID] == nil {
+            drivesHolding[assetID] = []
+        }
         copyCoverage = drivesHolding.values.reduce(into: [:]) { $0[$1.count, default: 0] += 1 }
+        photosLeaningOnThisMac = leaningOnHost.count
         archiveBackedOnlyCount = drivesHolding.keys.filter { !outsideAnArchive.contains($0) }.count
 
         // A Merkle tree per target used to be built here so two targets could

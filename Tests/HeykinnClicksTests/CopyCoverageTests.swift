@@ -405,3 +405,65 @@ extension CopyCoverageTests {
         XCTAssertEqual(form.copiedOut, 0, "it has no file of its own to survive on")
     }
 }
+
+/// This Mac is not a drive, and the headline must not count it as one.
+extension CopyCoverageTests {
+
+    /// Found by putting a group on one drive and this Mac and reading the
+    /// screen: it said "every photo is on 2 drives" while twelve of them were
+    /// on one drive plus the computer — the exact arrangement
+    /// `automaticEligibleDeviceIDs` refuses to create, announced as safe.
+    func testTheHostIsNotCountedAsADrive() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let drive = UUID(), mac = UUID()
+        try catalog.upsertTarget(ReplicationTarget(
+            id: drive, name: "Drive", kind: .externalVolume, volumeUUID: nil,
+            markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
+            lastKnownPath: "/Volumes/Drive", configuredPath: nil,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+        ))
+        try catalog.upsertTarget(ReplicationTarget(
+            id: mac, name: "This Mac", kind: .hostDevice, volumeUUID: nil,
+            markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
+            lastKnownPath: directory.path, configuredPath: directory.path,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+        ))
+        let leaning = asset("on-a-drive-and-the-mac.jpg")
+        try catalog.upsertAsset(leaning)
+        try hold(catalog, leaning.id, on: drive, path: "aa/x.jpg")
+        try hold(catalog, leaning.id, on: mac, path: "aa/x.jpg")
+
+        let store = makeStore(in: directory)
+        XCTAssertEqual(
+            store.copyCoverage, [1: 1],
+            "one drive, whatever else is also holding it"
+        )
+        XCTAssertEqual(store.photosLeaningOnThisMac, 1, "and the caveat is countable")
+    }
+
+    /// A photo the host alone holds is on no drive at all, and must still
+    /// appear in the distribution rather than falling out of it.
+    func testAPhotoOnlyOnThisMacIsOnNoDrive() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let mac = UUID()
+        try catalog.upsertTarget(ReplicationTarget(
+            id: mac, name: "This Mac", kind: .hostDevice, volumeUUID: nil,
+            markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
+            lastKnownPath: directory.path, configuredPath: directory.path,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+        ))
+        let stranded = asset("only-on-the-mac.jpg")
+        try catalog.upsertAsset(stranded)
+        try hold(catalog, stranded.id, on: mac, path: "aa/x.jpg")
+
+        let store = makeStore(in: directory)
+        XCTAssertEqual(store.copyCoverage, [0: 1])
+        XCTAssertEqual(store.leastCopiesAnywhere, 0)
+    }
+}

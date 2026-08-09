@@ -234,7 +234,7 @@ struct DriveCard: View {
                 Label("Check for damage", systemImage: "checkmark.shield")
             }
             .disabled(store.isSyncing)
-            .help("Re-reads a batch of files on this drive and confirms they are still byte-for-byte what was imported. Starts with the ones checked longest ago.")
+            .help("Re-reads a batch of files on this drive and confirms they are still byte-for-byte what was imported, starting with the ones checked longest ago. Reading is the only thing that finds silent corruption — bit rot, a bad cable, an accidental edit — and it finds it while the other drive still holds a good copy to restore from.")
 
             // "Look for copies this drive already has" was here too. It is the
             // right thing to do and the wrong place to offer it: a drive with

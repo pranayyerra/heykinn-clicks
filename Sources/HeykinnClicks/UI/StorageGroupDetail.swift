@@ -79,9 +79,7 @@ struct StorageGroupDetail: View {
                         .frame(width: 16)
                     Text(store.targetsByID[holding.targetID]?.name ?? "A device that is gone")
                     Spacer(minLength: 8)
-                    Text(holding.insideDownload > 0
-                         ? "\(holding.photos.formatted()) · \(holding.insideDownload.formatted()) inside the download"
-                         : "\(holding.photos.formatted()) as their own files")
+                    Text(Formatters.count(holding.photos, "photo"))
                         .foregroundStyle(.secondary)
                         .monospacedDigit()
                 }
@@ -92,8 +90,15 @@ struct StorageGroupDetail: View {
                 // to retype into Finder. A path that leads somewhere should go
                 // there.
                 ForEach(holding.locations) { location in
-                    FolderLink(location: location)
-                        .padding(.leading, 24)
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        FolderLink(location: location)
+                        Spacer(minLength: 8)
+                        Text(location.photos.formatted())
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .monospacedDigit()
+                    }
+                    .padding(.leading, 24)
                 }
             }
         }

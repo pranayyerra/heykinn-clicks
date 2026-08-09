@@ -64,3 +64,47 @@ struct SectionHeading<Trailing: View>: View {
         }
     }
 }
+
+/// A switch, with what it does behind an ⓘ rather than under it.
+///
+/// Settings was the densest prose in the app: five switches each trailing a
+/// paragraph, so the page read as an essay with controls in it. The words are
+/// worth keeping — a switch's consequence is not guessable, and "Free up space
+/// once your drives hold a photo" could plausibly mean several things — but
+/// they are read once and scrolled past for ever after.
+struct ExplainedToggle: View {
+    let title: String
+    @Binding var isOn: Bool
+    let help: String
+
+    @State private var isExplaining = false
+
+    init(_ title: String, isOn: Binding<Bool>, help: String) {
+        self.title = title
+        self._isOn = isOn
+        self.help = help
+    }
+
+    var body: some View {
+        Toggle(isOn: $isOn) {
+            HStack(spacing: 6) {
+                Text(title)
+                Button { isExplaining.toggle() } label: {
+                    Image(systemName: "info.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+                .help(help)
+                .accessibilityLabel("What \(title) does")
+                .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
+                    Text(help)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(width: 340, alignment: .leading)
+                        .padding(14)
+                }
+            }
+        }
+    }
+}
