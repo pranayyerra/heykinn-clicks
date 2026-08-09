@@ -140,6 +140,24 @@ struct SourceSettingsPicker: View {
                 ? "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) drives, and there \(store.automaticEligibleDeviceIDs.count == 1 ? "is" : "are") \(store.automaticEligibleDeviceIDs.count). Add another and this fills itself in."
                 : "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) devices, and \(destinationTargetIDs.count) is chosen. Photos will stop short until another is picked."
         }
+        // Said here, where the choice is made, rather than only afterwards.
+        //
+        // This picker counted devices and the screen that judges the result
+        // counts drives, so picking a drive and this Mac satisfied "two copies"
+        // in silence and then came back as an orange "12 photos are on one
+        // drive only". The app let somebody build the one arrangement it goes
+        // on to complain about, and said nothing at the moment it could have
+        // been useful.
+        //
+        // A warning, not a refusal: the Mac is a real second place, and
+        // somebody with one drive is better off using it than not. It just is
+        // not a second *drive*, and that is what the copy count implies.
+        let drivesChosen = destinationTargetIDs
+            .filter { store.targetsByID[$0]?.kind == .externalVolume }
+            .count
+        if drivesChosen < desiredCopies {
+            return "Only \(Formatters.count(drivesChosen, "of these is a drive", "of these are drives")). This Mac is the machine your drives exist to survive, so a copy here is not a second drive — these photos would read as being on \(Formatters.count(drivesChosen, "drive"))."
+        }
         return nil
     }
 
@@ -163,9 +181,11 @@ struct SourceSettingsPicker: View {
                     // device that is not plugged in is still a valid choice —
                     // the copy waits — but the reader should know which one
                     // they are picking.
-                    Text(detail(reachable: reachable, free: free))
+                    Text(target.kind == .hostDevice
+                         ? "This Mac — a real place, but not a second drive"
+                         : detail(reachable: reachable, free: free))
                         .font(.caption2)
-                        .foregroundStyle(.secondary)
+                        .foregroundStyle(target.kind == .hostDevice ? Color.orange : Color.secondary)
                 }
                 Spacer(minLength: 0)
                 if isOn, let position = destinationTargetIDs.firstIndex(of: target.id) {
