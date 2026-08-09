@@ -31,18 +31,6 @@ struct PhotoSource: Identifiable {
         }
     }
 
-    /// How much of this source is in the archive, 0…1. Nil when the source
-    /// cannot say — a folder import has no total to be a fraction of.
-    var fraction: Double? {
-        switch state {
-        case .allIn: return 1
-        case .partlyIn(let inArchive, let total):
-            guard total > 0 else { return nil }
-            return min(1, max(0, Double(inArchive) / Double(total)))
-        case .notSet, .nothingFound, .blocked: return nil
-        }
-    }
-
     var tint: Color {
         switch state {
         case .allIn: return .green
@@ -80,7 +68,6 @@ struct PhotoSource: Identifiable {
 /// is not being fed from is exactly what someone scanning this needs to see.
 struct SourceFlowView: View {
     let sources: [PhotoSource]
-    let photoCount: Int
     /// Sources whose detail is showing, so a node can say it is the one open
     /// rather than leaving the reader to match a panel to a box by position.
     var opened: Set<String> = []
@@ -94,66 +81,7 @@ struct SourceFlowView: View {
                 }
             }
             .frame(maxWidth: .infinity)
-
-            spine
-                .frame(width: 46)
-
-            archive
-                .fixedSize()
         }
-    }
-
-    /// A bracket gathering every source into one arrow. Deliberately not a line
-    /// per source: they do not arrive separately, they all end up in the same
-    /// archive, and drawing four converging lines implies four destinations.
-    private var spine: some View {
-        GeometryReader { proxy in
-            let midY = proxy.size.height / 2
-            let inset: CGFloat = 12
-            ZStack {
-                Path { path in
-                    path.move(to: CGPoint(x: 0, y: inset))
-                    path.addLine(to: CGPoint(x: 14, y: inset))
-                    path.addLine(to: CGPoint(x: 14, y: proxy.size.height - inset))
-                    path.addLine(to: CGPoint(x: 0, y: proxy.size.height - inset))
-                    path.move(to: CGPoint(x: 14, y: midY))
-                    path.addLine(to: CGPoint(x: 36, y: midY))
-                }
-                .stroke(
-                    Color.accentColor.opacity(anySet ? 0.55 : 0.2),
-                    style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round)
-                )
-                Image(systemName: "arrowtriangle.right.fill")
-                    .font(.caption2)
-                    .foregroundStyle(Color.accentColor.opacity(anySet ? 0.55 : 0.2))
-                    .position(x: 39, y: midY)
-            }
-        }
-        .accessibilityHidden(true)
-    }
-
-    private var anySet: Bool { sources.contains { $0.isSet } }
-
-    private var archive: some View {
-        VStack(spacing: 3) {
-            Image(systemName: "photo.stack")
-                .font(.title3)
-                .foregroundStyle(.tint)
-            Text("\(photoCount.formatted()) photos")
-                .font(.headline)
-                .monospacedDigit()
-            Text("your archive")
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-        }
-        .padding(10)
-        .frame(width: 150)
-        .background(.background, in: RoundedRectangle(cornerRadius: 14))
-        .overlay(
-            RoundedRectangle(cornerRadius: 14)
-                .stroke(Color.accentColor.opacity(0.4), lineWidth: 1.5)
-        )
-        .help("Every photo the app is keeping safe, from all of these places together.")
     }
 
     private func node(_ source: PhotoSource) -> some View {
@@ -175,11 +103,11 @@ struct SourceFlowView: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(2)
                         .fixedSize(horizontal: false, vertical: true)
-                    if let fraction = source.fraction {
-                        ProgressView(value: fraction)
-                            .tint(source.tint)
-                            .frame(height: 3)
-                    }
+                    // A `ProgressView` sat here showing how much of this
+                    // source was in the archive. Every import on a settled
+                    // machine finished long ago, so it was a bar pinned at
+                    // 100% for ever — chrome that reads as live status. The
+                    // status line below already says the same thing in words.
                     Text(source.status)
                         .font(.caption2)
                         .foregroundStyle(source.isSet ? source.tint : Color.secondary)

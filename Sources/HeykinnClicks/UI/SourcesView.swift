@@ -158,14 +158,12 @@ struct SourcesView: View {
             VStack(alignment: .leading, spacing: 16) {
                 introduction
 
-                // The diagram is the list. It already draws every source with
-                // its name, its state and how much of it has made it across —
-                // repeating that as a row of headers underneath was the same
-                // fact twice on one screen, which is the thing this screen was
-                // being fixed for.
+                // The list is the list. It draws every place photos arrive
+                // from, with its name and its state — and nothing about where
+                // they are kept, which is Keep safe's subject and was being
+                // answered here in a second voice.
                 SourceFlowView(
                     sources: flowSources,
-                    photoCount: store.assets.count,
                     opened: expanded,
                     onSelect: { toggle($0.id) }
                 )
@@ -342,8 +340,6 @@ struct SourcesView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-
-            reclamationPreview
         }
     }
 
@@ -356,46 +352,6 @@ struct SourcesView: View {
     /// fact about this connector's library. Worded so the reader learns what it
     /// is for before they are given a number: the point is paying iCloud for
     /// copies of photos you already own outright.
-    @ViewBuilder
-    private var reclamationPreview: some View {
-        let plan = store.reclamationPlan
-        if !plan.isEmpty {
-            Divider()
-            VStack(alignment: .leading, spacing: 6) {
-                Text("Freeing up iCloud")
-                    .font(.callout)
-                Text("Once the app can prove your own drives hold a photo safely, its iCloud copy is no longer paying for itself.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Text(
-                    plan.releasableAssetIDs.isEmpty
-                        ? "Nothing is ready to be freed yet."
-                        : "\(Formatters.count(plan.releasableAssetIDs.count, "photo")) — \(Formatters.bytes.string(fromByteCount: plan.releasableBytes)) — are safe enough on your own drives that their iCloud copy could go."
-                )
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
-
-                ForEach(ReclamationPlanner.Blocker.allCases, id: \.self) { blocker in
-                    if let count = plan.blocked[blocker], count > 0 {
-                        Label(
-                            "\(count.formatted()) not ready: \(blocker.displayName)",
-                            systemImage: "circle.dotted"
-                        )
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                    }
-                }
-
-                Text("This is a preview. Nothing is deleted from iCloud, and that part of the app is not built yet — when it is, it will go on this proof rather than on asking you to confirm.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
     private func appleHeadline(indexed: Int, awaiting: Int) -> String {
         if store.applePhotosLibraryCount == 0 {
             return "The library is empty, or its photos are not stored on this Mac."

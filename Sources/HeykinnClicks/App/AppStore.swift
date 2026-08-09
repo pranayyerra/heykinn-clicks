@@ -1711,6 +1711,71 @@ final class AppStore: ObservableObject {
 
     // MARK: - Catalog backup
 
+    /// How a set's photos physically exist, split by form.
+    ///
+    /// Two groups can ask for the same copies on the same drives and be in very
+    /// different situations. On a real archive all three said "two copies on
+    /// Owner's Back and My Passport" while one was twelve real files, one had
+    /// 17,964 photos living inside .zip files, and one — named after the Photos
+    /// library — was mostly held by a Google download, because the same picture
+    /// arrived from both places and the archive keeps a single row for it.
+    ///
+    /// Origin and storage are different facts, and a name taken from the import
+    /// says only the first. This says the second.
+    struct StorageForm {
+        /// Counted inside a download rather than copied out of it.
+        var insideDownload = 0
+        /// Written out as its own file somewhere.
+        var copiedOut = 0
+        /// Held *only* inside a download — the ones a deleted .zip would take.
+        var onlyInsideDownload = 0
+    }
+
+    /// Counted in photos, not files — a Live Photo is one photo though it is a
+    /// still and a movie on disk. Counting files here put "24,355 counted
+    /// inside a Google download" directly under "21,117 photos", which reads as
+    /// the app contradicting itself on one line.
+    func storageForm(forStorageGroup groupID: UUID) -> StorageForm {
+        var inside: Set<UUID> = []
+        var out: Set<UUID> = []
+        for replica in replicaStates where replica.state == .present {
+            guard storageGroupIDByAsset[replica.assetID] == groupID,
+                  assetsByID[replica.assetID]?.isLivePhotoMotion == false
+            else { continue }
+            if replica.relativePath?.hasPrefix(ReplicationService.archivePartPrefix) == true {
+                inside.insert(replica.assetID)
+            } else {
+                out.insert(replica.assetID)
+            }
+        }
+        return StorageForm(
+            insideDownload: inside.count,
+            copiedOut: out.count,
+            onlyInsideDownload: inside.subtracting(out).count
+        )
+    }
+
+    /// The download sets holding any of this group's photos, newest first.
+    ///
+    /// Lets a group show the part grid for the download that actually backs it,
+    /// which is the only place that grid has ever belonged: it is a picture of
+    /// where files are, wedged until now into a card about an import.
+    func exportSetIDs(backingStorageGroup groupID: UUID) -> [String] {
+        var stems: Set<String> = []
+        for replica in replicaStates where replica.state == .present {
+            guard storageGroupIDByAsset[replica.assetID] == groupID,
+                  let path = replica.relativePath,
+                  path.hasPrefix(ReplicationService.archivePartPrefix)
+            else { continue }
+            stems.insert(String(path.dropFirst(ReplicationService.archivePartPrefix.count)))
+        }
+        guard !stems.isEmpty else { return [] }
+        let sets = takeoutArchives
+            .filter { stems.contains($0.displayName) }
+            .compactMap(\.exportSetID)
+        return Array(Set(sets)).sorted(by: >)
+    }
+
     /// Photos that would have no copy anywhere if this download's files went.
     ///
     /// The app counts photos *inside* the Takeout files rather than copying

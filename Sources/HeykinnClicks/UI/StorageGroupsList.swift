@@ -9,6 +9,7 @@ import SwiftUI
 struct StorageGroupsList: View {
     @EnvironmentObject private var store: AppStore
     @State private var editing: StorageGroup?
+    @State private var opened: StorageGroup?
     @State private var renaming: StorageGroup?
     @State private var renameText = ""
     @State private var deleting: StorageGroup?
@@ -75,6 +76,7 @@ struct StorageGroupsList: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         }
         .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
+        .sheet(item: $opened) { StorageGroupDetail(group: $0) }
         .sheet(isPresented: $placingStranded) {
             MoveToStorageGroupSheet(assetIDs: store.ungroupedAssetIDs)
         }
@@ -94,6 +96,20 @@ struct StorageGroupsList: View {
         }
     }
 
+    @ViewBuilder
+    private func keptLine(_ group: StorageGroup) -> some View {
+        let form = store.storageForm(forStorageGroup: group.id)
+        if form.onlyInsideDownload > 0 {
+            Text(form.copiedOut > 0
+                 ? "\(form.onlyInsideDownload.formatted()) of them exist only inside a Google download"
+                 : "all of them exist only inside a Google download")
+                .font(.caption2)
+                .foregroundStyle(.orange)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private func row(_ group: StorageGroup) -> some View {
         let held = counts[group.id] ?? 0
         return HStack(spacing: 10) {
@@ -109,6 +125,11 @@ struct StorageGroupsList: View {
                     .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
+                // How the copies exist, which the count above cannot say. Three
+                // sets on a real archive read identically here while one was
+                // twelve real files and another had 17,964 photos living inside
+                // .zip files.
+                keptLine(group)
                 // Where its photos came from. This screen is the only place a
                 // group is edited, so it has to say what it is about to change
                 // — a group and the import that made it share a name until
@@ -125,7 +146,7 @@ struct StorageGroupsList: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-            Button("Change…") { editing = group }
+            Button("Open…") { opened = group }
                 .buttonStyle(.link)
                 .font(.caption)
             Menu {

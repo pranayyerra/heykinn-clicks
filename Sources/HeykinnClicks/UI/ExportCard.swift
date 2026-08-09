@@ -141,17 +141,6 @@ struct ExportCard: View {
     let export: ExportSummary
     @Binding var importRequest: TakeoutImportRequest?
     @EnvironmentObject private var store: AppStore
-    @EnvironmentObject private var commands: AppCommandBus
-    @State private var confirmingStopTracking = false
-
-    /// What stopping tracking would actually cost, in photos.
-    private var strandedWarning: String {
-        let stranded = store.photosHeldOnlyBy(exportSetID: export.setID)
-        guard stranded > 0 else {
-            return "The .zip files stay where they are. Every photo in this download has a copy elsewhere, so nothing is left without one."
-        }
-        return "The .zip files stay where they are, but the app counts \(Formatters.count(stranded, "photo")) *inside* them rather than holding a separate copy. Stop tracking and \(stranded == 1 ? "it is" : "they are") left with no copy the app knows about anywhere."
-    }
 
     private var driveNames: [UUID: String] {
         Dictionary(uniqueKeysWithValues: store.targets.map { ($0.id, $0.name) })
@@ -182,11 +171,6 @@ struct ExportCard: View {
                                 )
                             }
                         }
-                        if !export.extractableZips.isEmpty {
-                            Button("Unzip \(Formatters.count(export.extractableZips.count, "file")) onto the drive") {
-                                store.extractTakeoutZips(export.extractableZips.map(\.id))
-                            }
-                        }
                         // Reading the descriptions is not checking the copies,
                         // so it sits above the divider with the other things
                         // that read the download rather than judge it.
@@ -196,46 +180,10 @@ struct ExportCard: View {
                         Button("Work out which photo each description is about") {
                             store.projectCapturedMetadata()
                         }
-                        Divider()
-                        // One verb with the depth inside it. Two peers —
-                        // "spot-check" and "in full (slow)" — asked the reader
-                        // to rank two mechanisms they have no way to tell
-                        // apart, when the answer is always "start with the fast
-                        // one". The slow one is still reachable, as an option
-                        // on the same act rather than a rival to it.
-                        Menu("Check these files for damage") {
-                            Button("Read a sample of each file") {
-                                store.spotCheckExportParts()
-                            }
-                            Button("Read every byte — slow, and the only proof") {
-                                store.verifyExportPartsByChecksum()
-                            }
-                        }
-                        Divider()
-                        Button("Stop tracking this download…", role: .destructive) {
-                            confirmingStopTracking = true
-                        }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
                     .menuStyle(.borderlessButton)
-                    .confirmationDialog(
-                        "Stop tracking this download?",
-                        isPresented: $confirmingStopTracking,
-                        titleVisibility: .visible
-                    ) {
-                        Button("Stop tracking", role: .destructive) {
-                            for archive in export.archives { store.forgetTakeoutArchive(archive.id) }
-                        }
-                        Button("Cancel", role: .cancel) {}
-                    } message: {
-                        // The old label promised "deletes nothing", which is
-                        // true about files and badly wrong about photos: the
-                        // app counts these inside the download rather than
-                        // copying them out, so forgetting the download drops
-                        // every photo that has no copy elsewhere to nowhere.
-                        Text(strandedWarning)
-                    }
                     .fixedSize()
                     .disabled(store.takeoutActivity != nil || store.isImporting)
                 }
@@ -244,26 +192,17 @@ struct ExportCard: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
 
-                let protection = export.protection(driveNames: driveNames)
-                Label(protection.text, systemImage: protection.symbol)
-                    .font(.callout)
-                    .foregroundStyle(protection.tint)
+                // The redundancy verdict and the grid of which drive holds
+                // which file were both here, on a card about an import. They
+                // are storage, and they now live with the set of photos they
+                // describe — Keep safe, where a set opens. This card grew into
+                // a storage screen because the grid had nowhere else to go.
 
-                if !export.parts.isEmpty {
-                    ExportPartGrid(
-                        parts: export.parts,
-                        archives: export.archives,
-                        managedTargetIDs: export.plan.destinations(forSet: export.setID),
-                        copiesRequired: export.copiesRequired,
-                        driveNames: driveNames
-                    )
-                }
-
-                // The same affordance a folder has, in the same words. An
-                // export is a source like any other: it says how many copies of
-                // its photos to keep and which devices hold them, and the place
-                // to change that is next to the report of where they are.
-                storageLine
+                // `storageLine` and its "Change under Keep safe" link were
+                // here. Both are gone rather than repointed: a set of photos
+                // now states its own copies where it is opened, and a link out
+                // of an import card to explain storage was only ever a symptom
+                // of storage being explained here at all.
 
                 transferPlan
 
@@ -281,41 +220,22 @@ struct ExportCard: View {
         }
     }
 
-    /// What keeps this export's photos. Reported, never edited here.
-    ///
-    /// This card used to offer "change where these are kept", which meant two
-    /// screens could write the same setting. Everything that went wrong went
-    /// wrong there: a source does not own a group, so the card had to work out
-    /// whether editing was safe, and got it wrong when a group held another
-    /// export's photos too. There is one editing surface now — Policies, where
-    /// a group's whole membership is visible — and this says what is true and
-    /// points at it.
-    @ViewBuilder
-    private var storageLine: some View {
-        HStack(alignment: .firstTextBaseline, spacing: 6) {
-            switch store.groupPlacement(forExportSet: export.setID) {
-            case .exclusive(let group):
-                Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))")
-                    .font(.caption)
-                    .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            case .shared(let group, let otherPhotos):
-                Text("Kept as \(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs)), in the group \(group.label) — which also holds \(Formatters.count(otherPhotos, "photo")) from elsewhere.")
-                    .font(.caption)
-                    .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
-                    .fixedSize(horizontal: false, vertical: true)
-            case .split(let groups, let photoCount):
-                Text("These \(Formatters.count(photoCount, "photo")) are kept in \(Formatters.count(groups.count, "group")): \(ExportSummary.list(groups.map(\.label))).")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            case .none:
-                EmptyView()
-            }
-            Button("Change under Keep safe") { commands.requestedPage = .targets }
-                .buttonStyle(.link)
-                .font(.caption)
+    private func routeSummary(_ transfers: [ExportPartTransfer]) -> String {
+        var phrases: [String] = []
+        func name(_ id: UUID) -> String { driveNames[id] ?? "the other drive" }
+        if let direct = transfers.first(where: { if case .driveToDrive = $0.route { return true } else { return false } }),
+           case .driveToDrive(let from, let to) = direct.route {
+            phrases.append("\(name(from)) → \(name(to))")
         }
+        if let park = transfers.first(where: { if case .driveToHoldingArea = $0.route { return true } else { return false } }),
+           case .driveToHoldingArea(let from, let intendedFor) = park.route {
+            phrases.append("\(name(from)) → this Mac, to hand on to \(name(intendedFor))")
+        }
+        if let deliver = transfers.first(where: { if case .holdingAreaToDrive = $0.route { return true } else { return false } }),
+           case .holdingAreaToDrive(let to) = deliver.route {
+            phrases.append("this Mac → \(name(to))")
+        }
+        return phrases.joined(separator: ", ")
     }
 
     /// What is actually going to happen about a shortfall, rather than only
@@ -361,24 +281,6 @@ struct ExportCard: View {
             .font(.caption)
             .foregroundStyle(.orange)
         }
-    }
-
-    private func routeSummary(_ transfers: [ExportPartTransfer]) -> String {
-        var phrases: [String] = []
-        func name(_ id: UUID) -> String { driveNames[id] ?? "the other drive" }
-        if let direct = transfers.first(where: { if case .driveToDrive = $0.route { return true } else { return false } }),
-           case .driveToDrive(let from, let to) = direct.route {
-            phrases.append("\(name(from)) → \(name(to))")
-        }
-        if let park = transfers.first(where: { if case .driveToHoldingArea = $0.route { return true } else { return false } }),
-           case .driveToHoldingArea(let from, let intendedFor) = park.route {
-            phrases.append("\(name(from)) → this Mac, to hand on to \(name(intendedFor))")
-        }
-        if let deliver = transfers.first(where: { if case .holdingAreaToDrive = $0.route { return true } else { return false } }),
-           case .holdingAreaToDrive(let to) = deliver.route {
-            phrases.append("this Mac → \(name(to))")
-        }
-        return phrases.joined(separator: ", ")
     }
 
     private var subtitle: String {

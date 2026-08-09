@@ -11,7 +11,6 @@ import SwiftUI
 /// the mechanism rather than under the place the photos came from.
 struct FolderSourceList: View {
     @EnvironmentObject private var store: AppStore
-    @EnvironmentObject private var commands: AppCommandBus
     @State private var opened: UUID?
 
     /// Folder imports, newest first.
@@ -249,9 +248,6 @@ struct FolderSourceList: View {
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    Button("Change under Keep safe") { commands.requestedPage = .targets }
-                        .buttonStyle(.link)
-                        .font(.caption)
                 }
                 .padding(.top, 2)
             }

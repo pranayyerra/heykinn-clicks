@@ -173,3 +173,119 @@ extension CopyCoverageTests {
         )
     }
 }
+
+/// How a set's photos physically exist — the fact a copy count cannot carry.
+extension CopyCoverageTests {
+
+    /// Two sets asking for the same copies on the same drives can be in very
+    /// different situations, and the row said the same sentence for both.
+    ///
+    /// On a real archive all three read "two copies on Owner's Back and My
+    /// Passport" while one was twelve real files and another had 17,964 photos
+    /// living inside .zip files.
+    func testStorageFormSplitsCountedInsideADownloadFromCopiedOut() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let groupID = UUID()
+        try catalog.upsertStorageGroup(StorageGroup(
+            id: groupID, label: "Takeout", desiredCopies: 2,
+            destinationTargetIDs: [], destinationMode: .automatic, createdAt: Date()
+        ))
+        let part = ReplicationService.archivePartPrefix + "takeout-set-001.zip"
+        let driveA = UUID(), driveB = UUID()
+
+        // One held only by the download, one also written out, one plain file.
+        let onlyZip = asset("in-zip.jpg"), both = asset("both.jpg"), plain = asset("plain.jpg")
+        for one in [onlyZip, both, plain] { try catalog.upsertAsset(one) }
+        try catalog.assignStorageGroup(groupID, toAssets: [onlyZip.id, both.id, plain.id])
+        try hold(catalog, onlyZip.id, on: driveA, path: part)
+        try hold(catalog, both.id, on: driveA, path: part)
+        try hold(catalog, both.id, on: driveB, path: "bb/both.jpg")
+        try hold(catalog, plain.id, on: driveA, path: "pp/plain.jpg")
+
+        let store = makeStore(in: directory)
+        let form = store.storageForm(forStorageGroup: groupID)
+        XCTAssertEqual(form.insideDownload, 2)
+        XCTAssertEqual(form.copiedOut, 2)
+        XCTAssertEqual(
+            form.onlyInsideDownload, 1,
+            "and only the one with no file of its own is at the download's mercy"
+        )
+        // The two the screen draws are `onlyInsideDownload` and `copiedOut`,
+        // and they have to be exclusive or the bar claims a set is bigger than
+        // it is. `insideDownload` overlaps `copiedOut` by design — a photo can
+        // be counted inside a download on one drive and written out on another
+        // — which is what made the first version print 21,117 and 5,658 under
+        // a total of 21,117.
+        XCTAssertEqual(
+            form.onlyInsideDownload + form.copiedOut, 3,
+            "the split adds up to the photos it describes"
+        )
+        XCTAssertGreaterThan(
+            form.insideDownload + form.copiedOut, 3,
+            "which the other pair does not, because they overlap"
+        )
+    }
+
+    /// Counted in photos, like every other number the app shows. A Live Photo
+    /// is one photo though it is a still and a movie on disk, and counting
+    /// files here printed "24,355 counted inside a Google download" directly
+    /// under "21,117 photos" — the same screen contradicting itself.
+    func testStorageFormCountsPhotosNotFiles() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let groupID = UUID()
+        try catalog.upsertStorageGroup(StorageGroup(
+            id: groupID, label: "Live", desiredCopies: 1,
+            destinationTargetIDs: [], destinationMode: .automatic, createdAt: Date()
+        ))
+        let still = asset("live.heic")
+        var motion = asset("live.mov")
+        // What makes a row a motion part: it names the still it belongs to.
+        motion.livePhotoStillID = still.id
+        try catalog.upsertAsset(still)
+        try catalog.upsertAsset(motion)
+        try catalog.assignStorageGroup(groupID, toAssets: [still.id, motion.id])
+
+        let drive = UUID()
+        let part = ReplicationService.archivePartPrefix + "takeout-set-001.zip"
+        try hold(catalog, still.id, on: drive, path: part)
+        try hold(catalog, motion.id, on: drive, path: part)
+
+        let store = makeStore(in: directory)
+        XCTAssertEqual(
+            store.storageForm(forStorageGroup: groupID).insideDownload, 1,
+            "one photo, though two files back it"
+        )
+    }
+
+    /// A set backed by a download can show that download's parts — which is the
+    /// only place that grid has ever belonged. It was on the import card
+    /// because nowhere else existed.
+    func testASetNamesTheDownloadsBackingIt() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let groupID = UUID()
+        try catalog.upsertStorageGroup(StorageGroup(
+            id: groupID, label: "Photos library", desiredCopies: 2,
+            destinationTargetIDs: [], destinationMode: .automatic, createdAt: Date()
+        ))
+        try catalog.upsertTakeoutArchive(archive(named: "takeout-abc-001.zip", set: "abc"))
+        let one = asset("dedup.jpg")
+        try catalog.upsertAsset(one)
+        try catalog.assignStorageGroup(groupID, toAssets: [one.id])
+        try hold(catalog, one.id, on: UUID(),
+                 path: ReplicationService.archivePartPrefix + "takeout-abc-001.zip")
+
+        let store = makeStore(in: directory)
+        // A set named after the Photos library, held by a Google download —
+        // the real case, produced by the same picture arriving twice.
+        XCTAssertEqual(store.exportSetIDs(backingStorageGroup: groupID), ["abc"])
+    }
+}
