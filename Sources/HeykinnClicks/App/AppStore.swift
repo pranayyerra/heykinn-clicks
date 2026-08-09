@@ -290,6 +290,19 @@ final class AppStore: ObservableObject {
         Dictionary(uniqueKeysWithValues: targets.map { ($0.id, $0) })
     }
 
+    /// Reloads the work queue and nothing else.
+    ///
+    /// Queueing forty background verification reads called `loadAll()`, which
+    /// re-reads every asset, replica, tag and album payload in the catalog and
+    /// rebuilds every derived table from them — because the queue happens to
+    /// live in the same database. Nothing derived is computed from the queue,
+    /// so nothing derived needs rebuilding. The rot patrol runs every half
+    /// hour, so this was a full archive recompute twice an hour, for ever.
+    private func reloadReplicationQueue() {
+        guard let queue = try? catalog.fetchReplicationTasks() else { return }
+        replicationTasks = queue
+    }
+
     private func rebuildIndexes() {
         assetsByID = Dictionary(assets.map { ($0.id, $0) }, uniquingKeysWith: { _, latest in latest })
         replicasByAssetID = Dictionary(grouping: replicaStates, by: \.assetID)
@@ -762,9 +775,28 @@ final class AppStore: ObservableObject {
         let stems = archivePlan.parts.map(\.displayName)
         guard !stems.isEmpty else { return [:] }
 
+        // Only a replica stored inside a download can carry a part stem, and
+        // one the app wrote itself carries it exactly — `archivepart:` plus the
+        // stem and nothing else. Both shortcuts matter: this used to run a
+        // substring search for each of the export's stems against each of the
+        // archive's replicas, which on real numbers is 26 searches over 49,278
+        // paths — 1.3 million of them — twice per drive connect.
+        //
+        // The scan is kept as a fallback rather than removed, because a zip
+        // member records the zip's name and its entry, and the stem is in the
+        // middle of that.
+        let stemSet = Set(stems)
         var byPart: [String: Set<UUID>] = [:]
         for replica in replicaStates where replica.state == .present {
-            guard let relative = replica.relativePath else { continue }
+            guard let relative = replica.relativePath,
+                  ReplicationService.isInsideADownload(relative) else { continue }
+            if relative.hasPrefix(ReplicationService.archivePartPrefix) {
+                let stem = String(relative.dropFirst(ReplicationService.archivePartPrefix.count))
+                if stemSet.contains(stem) {
+                    byPart[stem, default: []].insert(replica.assetID)
+                    continue
+                }
+            }
             guard let stem = stems.first(where: { relative.contains($0) }) else { continue }
             byPart[stem, default: []].insert(replica.assetID)
         }
@@ -820,7 +852,17 @@ final class AppStore: ObservableObject {
                     cancelled += 1
                 }
             }
-            guard !covered.isEmpty else { return }
+            // Nothing written means nothing to reload, and nothing to say.
+            //
+            // The guard above only asks whether any part *meets policy*, which
+            // on a settled archive is every part, every time — so this ran the
+            // full reload and wrote an audit line reading "Recorded 0 copies"
+            // on every drive connect. Twice, because the pipeline calls this
+            // before and after reconciling. Each reload re-reads the catalog
+            // and recomputes every derived table on the main actor, which is
+            // what made the app ignore clicks for the first minute after
+            // launch. The work is only justified by a change to justify it.
+            guard claimed + cancelled + pendingCleared > 0 else { return }
             audit(
                 .replication,
                 "Archive redundancy: \(archivePlan.partsMeetingPolicy.count) of \(Formatters.count(archivePlan.parts.count, "export part")) are on as many devices as their export asks for, covering \(Formatters.count(covered.count, "asset")). Recorded \(Formatters.count(claimed, "copy", "copies")) against the parts holding them, replacing \(Formatters.count(pendingCleared, "pending entry", "pending entries")), and withdrew \(cancelled) file copies that are no longer needed."
@@ -4760,14 +4802,19 @@ final class AppStore: ObservableObject {
         }
         // Sets span targets: drive B's part 3 zip and drive A's imported part 3
         // folder are the same content.
-        func globalSets() -> [String: [TakeoutArchive]] {
-            Dictionary(grouping: takeoutArchives.filter { $0.exportSetID != nil }) { $0.exportSetID! }
-        }
-        func partImportedSomewhere(_ archive: TakeoutArchive) -> Bool {
+        //
+        // Grouped once per pass rather than once per archive. It was a function
+        // called from inside a filter over every archive, so a drive holding
+        // twelve parts regrouped the whole table twelve times to answer twelve
+        // questions about it.
+        func partImportedSomewhere(_ archive: TakeoutArchive, in sets: [String: [TakeoutArchive]]) -> Bool {
             guard let setID = archive.exportSetID else { return false }
-            return globalSets()[setID]?.contains {
+            return sets[setID]?.contains {
                 $0.partNumber == archive.partNumber && $0.isImported
             } ?? false
+        }
+        func globalSets() -> [String: [TakeoutArchive]] {
+            Dictionary(grouping: takeoutArchives.filter { $0.exportSetID != nil }) { $0.exportSetID! }
         }
 
         // 2. Reconcile known content present on this drive — but only where it
@@ -4798,29 +4845,41 @@ final class AppStore: ObservableObject {
         // whereas reconciling a zip means decompressing every entry inside it.
         applyArchiveLevelRedundancy()
 
+        // Whether any stage below actually touched the catalog. The pipeline
+        // ended with an unconditional reload, so plugging in a drive that turns
+        // out to hold exactly what the catalog already says re-read every table
+        // and rebuilt every derived one for nothing.
+        var changedTheCatalog = false
+
         if driveIsMissingReplicas() {
+            // Fresh per iteration on purpose: reconciling a part can mark it
+            // imported, and the next candidate has to see that.
             for archive in onDrive() where !archive.isImported
-                && partImportedSomewhere(archive)
+                && partImportedSomewhere(archive, in: globalSets())
                 && !partAlreadyBackedByThisDrive(archive) {
+                changedTheCatalog = true
                 await performTakeoutReconciliation(archive, targetID: targetID, mountURL: mount)
                 if !driveIsMissingReplicas() { break }
             }
         }
 
         // 3. Extract zips for new parts only.
+        let setsBeforeExtract = globalSets()
         let extractable = onDrive().filter { archive in
-            guard archive.kind == .zip, !archive.isImported, !partImportedSomewhere(archive) else { return false }
+            guard archive.kind == .zip, !archive.isImported,
+                  !partImportedSomewhere(archive, in: setsBeforeExtract) else { return false }
             if FileManager.default.fileExists(atPath: TakeoutExtractor.destinationURL(forZip: archive.url).path) {
                 return false
             }
             if let setID = archive.exportSetID,
-               let siblings = globalSets()[setID],
+               let siblings = setsBeforeExtract[setID],
                siblings.contains(where: { $0.partNumber == archive.partNumber && $0.kind == .folder }) {
                 return false
             }
             return true
         }
         if !extractable.isEmpty {
+            changedTheCatalog = true
             await performTakeoutExtraction(extractable.map(\.id))
             await performTakeoutScan(rootURL: mount, targetID: targetID)
         }
@@ -4828,10 +4887,12 @@ final class AppStore: ObservableObject {
         // 4. Import genuinely new content, folders preferred per part.
         let currentSets = Dictionary(grouping: onDrive().filter { $0.exportSetID != nil }) { $0.exportSetID! }
             .map { TakeoutExportSet(setID: $0.key, parts: $0.value) }
+        let setsBeforeImport = globalSets()
         var toImport = currentSets.flatMap(\.unimportedPreferredParts)
-            .filter { !partImportedSomewhere($0) }
+            .filter { !partImportedSomewhere($0, in: setsBeforeImport) }
         toImport += onDrive().filter { $0.exportSetID == nil && !$0.isImported }
         if !toImport.isEmpty {
+            changedTheCatalog = true
             // Never assume cloud presence: the app has no Google or Apple
             // account connection and cannot check. Automatic imports record
             // Local presence only — which is the one thing hashing proves.
@@ -4852,6 +4913,7 @@ final class AppStore: ObservableObject {
         // depends on what else is plugged in, and is decided in the planner.
         refreshPartTransferPlan()
         if !partTransferPlan.isEmpty {
+            changedTheCatalog = true
             await performExportPartTransfers()
         }
 
@@ -4863,7 +4925,7 @@ final class AppStore: ObservableObject {
         // drive is ~128 GB of reads for a benefit only a future second drive
         // might need. Fingerprints are computed lazily, for the one or two
         // candidate donors involved in an actual reconciliation.
-        loadAll()
+        if changedTheCatalog { loadAll() }
     }
 
     /// Fingerprints a zip on demand (one sequential read), caching the hash.
@@ -6568,7 +6630,7 @@ final class AppStore: ObservableObject {
                         + (remaining > 0 ? "; \(remaining) more will follow in later sweeps." : "."),
                 targetID: targetID
             )
-            loadAll()
+            reloadReplicationQueue()
             syncDrive(targetID)
         } catch {
             lastError = "Verification enqueue failed: \(error.localizedDescription)"

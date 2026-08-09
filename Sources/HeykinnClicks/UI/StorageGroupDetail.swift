@@ -17,7 +17,6 @@ struct StorageGroupDetail: View {
     @EnvironmentObject private var store: AppStore
 
     let group: StorageGroup
-    @State private var editing = false
     @State private var confirmingStopTracking: String?
 
     private var form: AppStore.StorageForm { store.storageForm(forStorageGroup: group.id) }
@@ -33,7 +32,6 @@ struct StorageGroupDetail: View {
             ForEach(backingSets, id: \.self) { atStake($0) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .sheet(isPresented: $editing) { EditStorageGroupSheet(group: group) }
     }
 
     /// The policy, then what is actually there, device by device.
@@ -51,14 +49,13 @@ struct StorageGroupDetail: View {
             // The policy, then the observation. They agree here and will not
             // always, and the difference is the whole reason both are shown —
             // a copy count is what was asked for, not what is.
-            HStack(alignment: .firstTextBaseline) {
-                Text("Keeping \(Formatters.copies(group.desiredCopies))")
-                    .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
-                Button("Change…") { editing = true }
-                    .buttonStyle(.link)
-                Spacer(minLength: 0)
-            }
-            .font(.callout)
+            // No "Change…" here. Editing is one door now — the Edit button on
+            // the panel that contains this — and a second link to a sheet that
+            // does the same job differently is how two ways of setting the same
+            // policy drift apart.
+            Text("Keeping \(Formatters.copies(group.desiredCopies))")
+                .font(.callout)
+                .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
             if store.idleDeviceCount(forStorageGroup: group) > 0 {
                 Text("You have more drives than this asks copies for, so \(Formatters.count(store.idleDeviceCount(forStorageGroup: group), "drive")) holds none of it.")
                     .font(.caption)

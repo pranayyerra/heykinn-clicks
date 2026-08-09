@@ -78,7 +78,12 @@ struct StorageMatrix: View {
     }
     @State private var opened: Opened?
 
-    @State private var editing: StorageGroup?
+    /// The change being composed. Its rules live in `StoragePlacementDraft`,
+    /// which is where they can be tested; this only holds it and draws it.
+    @State private var draft: StoragePlacementDraft?
+    @State private var plan: RetargetPlan?
+    @State private var confirmingApply = false
+
     @State private var renaming: StorageGroup?
     @State private var renameText = ""
     @State private var deleting: StorageGroup?
@@ -104,12 +109,10 @@ struct StorageMatrix: View {
                     grid
                     legend
                 }
-                if let opened { expansion(opened) }
                 footerControls
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
-        .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
         .sheet(isPresented: $placingStranded) {
             MoveToStorageGroupSheet(assetIDs: store.ungroupedAssetIDs)
         }
@@ -141,11 +144,53 @@ struct StorageMatrix: View {
                     Color.clear.frame(width: 1, height: 1)
                     ForEach(places) { columnHeader($0) }
                 }
+                // A device's panel opens against the header row it came from,
+                // which is the only place in the table a column is named.
+                if case .place(let id) = opened, let target = store.targetsByID[id] {
+                    GridRow {
+                        panel(symbol: target.kind == .hostDevice ? "laptopcomputer" : "externaldrive.fill",
+                              title: target.name) {
+                            DriveCard(drive: target, drawsContainer: false, onForget: { onForget(target) })
+                        }
+                        .gridCellColumns(places.count + 1)
+                    }
+                }
                 ForEach(groups) { group in
                     GridRow {
                         rowHeader(group)
                         ForEach(places) { place in
                             cell(group: group, place: place)
+                        }
+                    }
+                    // Directly under its own row, not under the table. With one
+                    // group the difference is cosmetic; with twenty it is the
+                    // difference between reading a group's detail beside the
+                    // row you opened and scrolling past nineteen others to
+                    // find it, then scrolling back to act on it.
+                    if opened == .group(group.id) {
+                        GridRow {
+                            panel(
+                                symbol: "square.stack.3d.up",
+                                title: group.label,
+                                trailing: {
+                                    // Editing is a mode you ask for. Cells that
+                                    // could be dragged at any moment would make
+                                    // every glance at the table a chance to
+                                    // move an archive by accident.
+                                    if draft?.groupID != group.id {
+                                        Button("Edit") { beginEditing(group) }
+                                            .font(.caption)
+                                            .help("Move where this group is kept, and how many copies it keeps.")
+                                    }
+                                }
+                            ) {
+                                if draft?.groupID == group.id {
+                                    editor(group)
+                                } else {
+                                    StorageGroupDetail(group: group)
+                                }
+                            }
+                            .gridCellColumns(places.count + 1)
                         }
                     }
                 }
@@ -175,6 +220,7 @@ struct StorageMatrix: View {
         let isOpen = opened == .place(place.id)
         Button {
             if let target = place.target {
+                endEditing()
                 withAnimation(.easeInOut(duration: 0.18)) {
                     opened = isOpen ? nil : .place(target.id)
                 }
@@ -237,6 +283,10 @@ struct StorageMatrix: View {
         let short = store.photosShortByGroup[group.id] ?? 0
         HStack(spacing: 4) {
             Button {
+                // Opening something else ends an edit in progress. A draft that
+                // survives out of sight is a change somebody stops being able
+                // to see and still applies.
+                if draft?.groupID != group.id { endEditing() }
                 withAnimation(.easeInOut(duration: 0.18)) {
                     opened = isOpen ? nil : .group(group.id)
                 }
@@ -272,7 +322,7 @@ struct StorageMatrix: View {
             .buttonStyle(.plain)
 
             Menu {
-                Button("Change copies and devices…") { editing = group }
+                Button("Edit where it is kept") { beginEditing(group) }
                 Button("Rename…") {
                     renameText = group.label
                     renaming = group
@@ -348,6 +398,99 @@ struct StorageMatrix: View {
 
     @ViewBuilder
     private func cell(group: StorageGroup, place: ArchivePlace) -> some View {
+        if draft?.groupID == group.id {
+            editableCell(place)
+        } else {
+            readingCell(group: group, place: place)
+        }
+    }
+
+    /// A row being edited: where the group is kept, as something you can pick
+    /// up and put down.
+    ///
+    /// Retargeting was a sheet with a list of checkboxes — uncheck one device,
+    /// check another, read a summary, save. That is four decisions to express
+    /// one: *this goes there*. Dragging says it once, in the row that shows
+    /// what moving it would mean.
+    @ViewBuilder
+    private func editableCell(_ place: ArchivePlace) -> some View {
+        let shape = RoundedRectangle(cornerRadius: 6)
+        let holds = place.target.map { draft?.destinations.contains($0.id) ?? false } ?? false
+
+        Group {
+            if let target = place.target, holds {
+                HStack(spacing: 5) {
+                    Image(systemName: "square.stack.3d.up.fill")
+                        .font(.caption2)
+                    Text("kept here")
+                        .font(.caption)
+                    Spacer(minLength: 0)
+                    Button {
+                        withAnimation(.easeInOut(duration: 0.15)) { removeDestination(target.id) }
+                    } label: {
+                        Image(systemName: "xmark.circle.fill").font(.caption2)
+                    }
+                    .buttonStyle(.plain)
+                    .help("Stop keeping this group on \(target.name)")
+                }
+                .foregroundStyle(Color.accentColor)
+                .padding(.horizontal, 8)
+                .padding(.vertical, 8)
+                .frame(width: cellWidth, alignment: .leading)
+                .background(Color.accentColor.opacity(0.14), in: shape)
+                .overlay(shape.strokeBorder(Color.accentColor.opacity(0.5), lineWidth: 1))
+                .draggable(target.id.uuidString) {
+                    Label("kept here", systemImage: "square.stack.3d.up.fill")
+                        .padding(6)
+                        .background(.thickMaterial, in: RoundedRectangle(cornerRadius: 6))
+                }
+                .help("Drag this onto another device to move it there.")
+            } else if let target = place.target {
+                // A Button, not a tappable view. `dropDestination` swallows
+                // `onTapGesture` — a cell built that way accepted drops and
+                // ignored every click, which is the half nobody would report
+                // because the other half looked fine.
+                Button {
+                    withAnimation(.easeInOut(duration: 0.15)) { addDestination(target.id) }
+                } label: {
+                    HStack(spacing: 5) {
+                        Image(systemName: "plus.circle").font(.caption2)
+                        Text("keep here too").font(.caption)
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+                    .frame(width: cellWidth, alignment: .leading)
+                    .contentShape(shape)
+                    .background {
+                        shape.strokeBorder(
+                            Color.secondary.opacity(0.4),
+                            style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                        )
+                    }
+                }
+                .buttonStyle(.plain)
+                .dropDestination(for: String.self) { items, _ in
+                    move(from: items.first, to: target.id)
+                }
+                .help("Drop a placement here, or click to add \(target.name) as another home.")
+            } else {
+                // A device that is not set up cannot be given anything. Drawn
+                // all the same, because the column exists and a gap with no
+                // explanation reads as a bug.
+                Text("not set up")
+                    .font(.caption2)
+                    .foregroundStyle(Color.secondary.opacity(0.5))
+                    .frame(width: cellWidth, alignment: .leading)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 8)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func readingCell(group: StorageGroup, place: ArchivePlace) -> some View {
         let entry = place.target.flatMap { store.cell(group: group.id, place: $0.id) }
         let named = place.target.map { group.destinationTargetIDs.contains($0.id) } ?? false
         let shape = RoundedRectangle(cornerRadius: 6)
@@ -394,6 +537,153 @@ struct StorageMatrix: View {
             }
         }
         .help(cellExplanation(group: group, place: place, entry: entry, named: named))
+    }
+
+    // MARK: - Editing a row
+
+    private func move(from raw: String?, to targetID: UUID) -> Bool {
+        guard let raw, let from = UUID(uuidString: raw), var next = draft else { return false }
+        guard next.move(from: from, to: targetID) else { return false }
+        withAnimation(.easeInOut(duration: 0.15)) { draft = next }
+        refreshPlanForDraft()
+        return true
+    }
+
+    private func addDestination(_ targetID: UUID) {
+        guard var next = draft, next.add(targetID) else { return }
+        draft = next
+        refreshPlanForDraft()
+    }
+
+    private func removeDestination(_ targetID: UUID) {
+        guard var next = draft, next.remove(targetID) else { return }
+        draft = next
+        refreshPlanForDraft()
+    }
+
+    private func beginEditing(_ group: StorageGroup) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            opened = .group(group.id)
+            draft = StoragePlacementDraft(group: group)
+        }
+        refreshPlan(for: group)
+    }
+
+    private func endEditing() {
+        withAnimation(.easeInOut(duration: 0.18)) { draft = nil }
+        plan = nil
+    }
+
+    /// The plan walks every asset in the group, so it is recomputed when the
+    /// draft changes rather than read from a body that runs on every redraw.
+    private func refreshPlan(for group: StorageGroup) {
+        guard let draft else { plan = nil; return }
+        plan = store.retargetPlan(
+            for: group, newDestinations: draft.destinations, newCopies: draft.copies
+        )
+    }
+
+    private func refreshPlanForDraft() {
+        guard let draft, let group = store.storageGroups.first(where: { $0.id == draft.groupID })
+        else { return }
+        refreshPlan(for: group)
+    }
+
+    /// The row's editor: the count, what the change would do, and one way out
+    /// in each direction.
+    @ViewBuilder
+    private func editor(_ group: StorageGroup) -> some View {
+        if let draft, draft.groupID == group.id {
+            let issue = draft.problem
+            let changed = draft.differs(from: group)
+
+            VStack(alignment: .leading, spacing: 12) {
+                Text("Drag **kept here** onto another device to move it. Click a dashed cell to add one.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                HStack(spacing: 10) {
+                    Stepper(value: Binding(
+                        get: { self.draft?.copies ?? group.desiredCopies },
+                        set: { new in
+                            guard var next = self.draft else { return }
+                            next.copies = new
+                            self.draft = next
+                            refreshPlan(for: group)
+                        }
+                    ), in: 1...max(1, store.targets.count)) {
+                        HStack(spacing: 6) {
+                            Text("Keep")
+                                .font(.callout)
+                            Text("\(draft.copies)")
+                                .font(.title3.monospacedDigit().weight(.medium))
+                                .frame(minWidth: 18)
+                            Text(draft.copies == 1 ? "copy of every photo" : "copies of every photo")
+                                .font(.callout)
+                        }
+                    }
+                    .fixedSize()
+                    Spacer(minLength: 0)
+                }
+
+                if draft.mode == .automatic {
+                    Label(
+                        "This group works out its own devices. Moving one fixes it to the devices you name.",
+                        systemImage: "wand.and.stars"
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+
+                if let issue {
+                    Label(issue, systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if changed, let plan, !plan.isEmpty {
+                    Divider()
+                    RetargetSummary(plan: plan)
+                } else if changed {
+                    Label("Nothing to copy or delete — the photos are already where this puts them.",
+                          systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
+                HStack {
+                    Button("Cancel") { endEditing() }
+                    Spacer()
+                    Button(plan?.isNonDestructive == false ? "Apply and move…" : "Apply") {
+                        if plan?.isNonDestructive == false { confirmingApply = true } else { apply(group) }
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(issue != nil || !changed)
+                }
+                .font(.callout)
+            }
+            .confirmationDialog(
+                "Move \(group.label)?",
+                isPresented: $confirmingApply,
+                titleVisibility: .visible
+            ) {
+                Button("Copy now, delete later", role: .destructive) { apply(group) }
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("\(Formatters.count(plan?.totalToCopy ?? 0, "photo")) will be copied first. Only once every new copy has been read back and matched will the \(Formatters.count(plan?.totalToDelete ?? 0, "copy", "copies")) the app wrote elsewhere be deleted. Nothing you put on those disks yourself is touched.")
+            }
+        }
+    }
+
+    private func apply(_ group: StorageGroup) {
+        guard let draft, draft.canBeSaved else { return }
+        store.applyStorageGroupSettings(
+            group,
+            desiredCopies: draft.copies,
+            destinations: draft.destinations,
+            mode: draft.mode
+        )
+        endEditing()
     }
 
     private func cellTint(_ entry: AppStore.GroupPlaceCell) -> Color {
@@ -466,25 +756,30 @@ struct StorageMatrix: View {
         }
     }
 
-    // MARK: - What opens under the grid
+    // MARK: - What opens inside the grid
 
+    /// The container both panels sit in. It names what it is about, because
+    /// the thing that opened it can now be several rows away — a column header
+    /// at the top of the table, or a group row above nineteen others.
     @ViewBuilder
-    private func expansion(_ opened: Opened) -> some View {
+    private func panel<Content: View, Trailing: View>(
+        symbol: String,
+        title: String,
+        @ViewBuilder trailing: () -> Trailing = { EmptyView() },
+        @ViewBuilder content: () -> Content
+    ) -> some View {
         VStack(alignment: .leading, spacing: 10) {
-            // Both panels were written to open directly under the thing that
-            // names them, and neither prints its own name because of it. Under
-            // a table that is no longer true — a column's header can be four
-            // rows above the panel it opened, with two other columns in
-            // between — so the panel has to say what it is about.
             HStack(spacing: 6) {
-                Image(systemName: openedSymbol(opened))
+                Image(systemName: symbol)
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                Text(openedName(opened))
+                Text(title)
                     .font(.callout.weight(.semibold))
                 Spacer(minLength: 8)
+                trailing()
                 Button {
-                    withAnimation(.easeInOut(duration: 0.18)) { self.opened = nil }
+                    endEditing()
+                    withAnimation(.easeInOut(duration: 0.18)) { opened = nil }
                 } label: {
                     Image(systemName: "xmark")
                         .font(.caption2)
@@ -494,16 +789,7 @@ struct StorageMatrix: View {
                 .help("Close")
             }
             Divider()
-            switch opened {
-            case .group(let id):
-                if let group = store.storageGroups.first(where: { $0.id == id }) {
-                    StorageGroupDetail(group: group)
-                }
-            case .place(let id):
-                if let target = store.targetsByID[id] {
-                    DriveCard(drive: target, drawsContainer: false, onForget: { onForget(target) })
-                }
-            }
+            content()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
         .padding(12)
@@ -513,23 +799,6 @@ struct StorageMatrix: View {
                 .stroke(Color.accentColor.opacity(0.3), lineWidth: 1)
         )
         .transition(.opacity)
-    }
-
-    private func openedName(_ opened: Opened) -> String {
-        switch opened {
-        case .group(let id):
-            return store.storageGroups.first { $0.id == id }?.label ?? "This group"
-        case .place(let id):
-            return store.targetsByID[id]?.name ?? "This device"
-        }
-    }
-
-    private func openedSymbol(_ opened: Opened) -> String {
-        switch opened {
-        case .group: return "square.stack.3d.up"
-        case .place(let id):
-            return store.targetsByID[id]?.kind == .hostDevice ? "laptopcomputer" : "externaldrive.fill"
-        }
     }
 
     // MARK: - Below the table
@@ -561,9 +830,9 @@ struct StorageMatrix: View {
             .padding(.vertical, 2)
         }
         Button {
-            // Straight into the settings, because a group whose devices nobody
+            // Straight into the editor, because a group whose devices nobody
             // has chosen keeps nothing.
-            if let made = store.createStorageGroup(label: "New group") { editing = made }
+            if let made = store.createStorageGroup(label: "New group") { beginEditing(made) }
         } label: {
             Label("New group", systemImage: "plus")
                 .font(.callout)

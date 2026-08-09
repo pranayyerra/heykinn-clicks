@@ -700,3 +700,34 @@ Earned against a real 248 GB archive; the stories are in git history.
     before the last one. Two real bugs and one harmless startup were producing
     the same symptom. Watch the process settle before believing what the
     screen says about a click.
+
+59. A draft is where illegal states are allowed to exist. A sheet of checkboxes
+    could only offer legal moves, so it never needed the idea. Direct
+    manipulation cannot: picking a group's last placement up off a device is
+    half of putting it down somewhere else, and turning the copy count past the
+    number of devices named is how you discover you need another one. Both are
+    reasonable things to be in the middle of and neither is a reasonable thing
+    to save. So the edit is composed in a value the catalog never sees,
+    `problem` says whether it could be saved, and the whole of it is committed
+    in one write or discarded. Prevent the *commit*, not the gesture — refusing
+    the drag hides the rule and leaves somebody guessing why the app fought
+    them.
+
+60. A control with two ways in needs testing both ways. The cell that accepts a
+    dragged placement also accepts a click to add one. `dropDestination`
+    silently swallows `onTapGesture`, so the drop worked and the click did
+    nothing — and the reverse arrangement, a `Button`, takes the mouse-down a
+    drag begins. Neither failure is visible while testing the other. A
+    synthetic click cannot start a macOS drag session either, so the gesture
+    itself is only ever verified by hand: what can be tested is the rule
+    underneath, which is why it lives in `StoragePlacementDraft` and not in a
+    view.
+
+61. Reload what changed, not everything. Three places wrote a little and re-read
+    the whole catalog: queueing forty background verification reads, recording
+    archive-level redundancy that recorded nothing, and the Takeout pipeline's
+    closing refresh after a drive turned out to hold exactly what was expected.
+    Each cost a full read of every table and a rebuild of every derived one, on
+    the main actor. The queue has nothing derived from it at all. Reach for the
+    narrow reload, and make the wide one conditional on having done something to
+    justify it.
