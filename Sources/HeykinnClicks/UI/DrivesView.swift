@@ -5,48 +5,63 @@ struct DrivesView: View {
     @State private var registrationCandidate: VolumeInfo?
     @State private var registrationName = ""
     @State private var isHostFolderPickerPresented = false
-    @State private var selectedPlace: UUID?
     @State private var targetToForget: ReplicationTarget?
 
-    /// The answer, before the diagram of it.
+    /// The answer, given the weight of an answer.
     ///
-    /// This screen is what "Is it safe" opens on, and it opened on a picture:
+    /// This screen is what "is it safe" opens on, and it opened on a picture:
     /// a hub, some spokes, and half a window of white space under them. A
     /// diagram is a good way to show *where* the copies are and a poor way to
     /// answer *whether they are enough* — the reader had to count the green
-    /// boxes and know what green meant. So the sentence comes first and the
-    /// map illustrates it, which is also what fills the space the map left.
+    /// boxes and know what green meant. So the sentence comes first.
+    ///
+    /// It is set in a tinted panel rather than as the first line of a stack
+    /// because it is not the first of several things; it is the conclusion, and
+    /// everything below it is the working. The Takeout caveat sits inside the
+    /// same panel for the same reason — it qualifies this sentence, and as a
+    /// separate block underneath it read as a second, unrelated alarm.
     @ViewBuilder
     private var verdict: some View {
         let damaged = store.protectionStates.values.filter { $0 == .driftDetected }.count
         let short = store.protectionStates.values.filter { $0.verdict == .shortOfPolicy }.count
         let holders = store.targets.count
         let reachable = store.targets.filter { store.reachablePaths[$0.id] != nil }.count
+        // The mark has to agree with the sentence beside it: whatever the
+        // headline reports as short, this is not green for.
+        let thin = (store.leastCopiesAnywhere ?? 2) < 2
+        let tint: Color = damaged > 0 ? .red : (short > 0 || thin) ? .orange : .green
 
-        HStack(alignment: .top, spacing: 12) {
-            // The mark has to agree with the sentence beside it: whatever the
-            // headline reports as short, this is not green for.
-            let thin = (store.leastCopiesAnywhere ?? 2) < 2
-            Image(systemName: damaged > 0 ? "exclamationmark.triangle.fill"
-                  : (short > 0 || thin) ? "exclamationmark.circle.fill" : "checkmark.seal.fill")
-                .font(.title)
-                .foregroundStyle(damaged > 0 ? .red : (short > 0 || thin) ? .orange : .green)
-            VStack(alignment: .leading, spacing: 3) {
-                Text(verdictHeadline(damaged: damaged, short: short, holders: holders))
-                    .font(.title3)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text(verdictDetail(reachable: reachable, holders: holders))
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: damaged > 0 ? "exclamationmark.triangle.fill"
+                      : (short > 0 || thin) ? "exclamationmark.circle.fill" : "checkmark.seal.fill")
+                    .font(.largeTitle)
+                    .foregroundStyle(tint)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(verdictHeadline(damaged: damaged, short: short, holders: holders))
+                        .font(.title2.weight(.medium))
+                        .fixedSize(horizontal: false, vertical: true)
+                    Text(verdictDetail(reachable: reachable, holders: holders))
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                Spacer(minLength: 0)
             }
-            Spacer(minLength: 0)
+            archiveBackedNote
         }
+        .padding(16)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(tint.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(
+            RoundedRectangle(cornerRadius: 14)
+                .stroke(tint.opacity(0.22), lineWidth: 1)
+        )
     }
 
     /// Two copies that can be lost by one action.
     ///
-    /// The photos here are not short of anything — on a real archive all 18,136
+    /// The photos here are not short of anything — on a real archive all 21,380
     /// of them sit on both drives, and every check the app runs says so. What
     /// they share is *how* they would go: their copies are the same Takeout
     /// files on each drive, so deleting those files, on both, loses photos that
@@ -121,21 +136,12 @@ struct DrivesView: View {
 
                 verdict
 
-                archiveBackedNote
-
-                ArchivePlaceList(
+                StorageMatrix(
                     places: places,
-                    selection: $selectedPlace,
-                    onActivateEmpty: activate
-                ) { place in
-                    if let target = place.target {
-                        DriveCard(
-                            drive: target,
-                            drawsContainer: false,
-                            onForget: { targetToForget = target }
-                        )
-                    }
-                }
+                    archivePhotoCount: store.localPhotoCount,
+                    onActivateEmpty: activate,
+                    onForget: { targetToForget = $0 }
+                )
 
                 // Both of these are answers to "is it safe", and both are
                 // empty on a healthy archive — which is exactly why they were
@@ -155,8 +161,6 @@ struct DrivesView: View {
                         MigrationsSummary()
                     }
                 }
-
-                StorageGroupsList()
 
                 if !store.heldExportParts.isEmpty || !store.partTransferPlan.transfers.isEmpty {
                     CardBox(title: "Export parts in transit", systemImage: "shippingbox") {
@@ -231,7 +235,6 @@ struct DrivesView: View {
         ) {
             Button("Forget it", role: .destructive) {
                 if let targetToForget { store.forgetTarget(targetToForget.id) }
-                selectedPlace = nil
                 targetToForget = nil
             }
             Button("Cancel", role: .cancel) { targetToForget = nil }
@@ -288,6 +291,7 @@ struct DrivesView: View {
                 heldPhotos: breakdown.presentPhotos,
                 heldBytes: breakdown.presentBytes,
                 neverCheckedPhotos: breakdown.neverCheckedPhotos,
+                soleCustodyPhotos: store.photosOnlyOn[target.id] ?? 0,
                 target: target
             )
         }

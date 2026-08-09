@@ -643,7 +643,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     forgetting a Takeout download counted the photos that would be left with no
     copy — and built its lookup from the export's set id while replicas record
     the part's file name. Nothing matched, so it reported zero and said the
-    download could be forgotten safely, on an archive where 24,618 photos live
+    download could be forgotten safely, on an archive where 21,380 photos live
     only inside it. The test agreed, because it had been written from the same
     assumption. When a number exists to stop somebody, check it against the
     real shape and assert that the wrong shape finds nothing.
@@ -672,3 +672,31 @@ Earned against a real 248 GB archive; the stories are in git history.
     test asserting exactly what the code already believed. A test earns its
     keep by being written from the *shape of the real data* — which means
     looking at the data — or by asserting that the wrong shape finds nothing.
+
+56. A subset is counted in the units of the set it sits under. Keep safe led
+    with "Every photo is in 2 places", totalling 21,401, and said directly
+    underneath that "24,618 of them are inside your Google Takeout files" — a
+    subset larger than the set it was drawn from, printed one line apart. Both
+    numbers came off the same pass over replicas; only one of them had been
+    filtered to photos, because a Live Photo is one photo and two files. A
+    reader who notices that stops believing the rest of the screen, and they
+    are right to. Where two numbers appear in one sentence, they are counted
+    by one rule.
+
+57. A walk of the whole archive must not hide behind a computed property.
+    `photoCountByStorageGroup` looked like a field and walked 24,639 assets on
+    every read. That was survivable while one list read it once, and became a
+    ten-second freeze when the grid read it per cell — and from inside a sort
+    comparator, where every comparison paid for a full pass. What made it hard
+    to find is that it did not present as slowness: the top row of the grid
+    simply did not respond to clicks, three times in a row, while the rows
+    below it opened instantly. Cost that scales with the archive belongs where
+    the archive changes, not where it is drawn.
+
+58. Verify against an idle app, or verify nothing. The same freeze was being
+    caused a second way — the Takeout pipeline and the volume scan run on the
+    main actor after a drive connects — so for the first minute after launch
+    every click appeared to be ignored and every screenshot showed the state
+    before the last one. Two real bugs and one harmless startup were producing
+    the same symptom. Watch the process settle before believing what the
+    screen says about a click.

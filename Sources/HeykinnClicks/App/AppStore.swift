@@ -1765,6 +1765,8 @@ final class AppStore: ObservableObject {
         var inside: [UUID: Set<UUID>] = [:]            // group → photos inside a download
         var outside: [UUID: Set<UUID>] = [:]           // group → photos with a file of their own
         var perTarget: [UUID: [UUID: (Set<UUID>, Int)]] = [:]  // group → target → (photos, inside)
+        var waiting: [UUID: [UUID: Int]] = [:]         // group → target → still to copy
+        var broken: [UUID: [UUID: Int]] = [:]          // group → target → no longer matching
         var stems: [UUID: Set<String>] = [:]           // group → archive part names
         // Per export set: photos it holds, and photos held anywhere else.
         var heldByStem: [String: Set<UUID>] = [:]
@@ -1797,6 +1799,51 @@ final class AppStore: ObservableObject {
                 stems[groupID, default: []]
                     .insert(String(path.dropFirst(ReplicationService.archivePartPrefix.count)))
             }
+        }
+
+        // What is *not* there yet, on the same axes. The grid needs a cell to
+        // be able to say "asked for, still arriving" — a cell that can only
+        // count what is present cannot tell a device that has finished from one
+        // that has not started, and both draw as the same empty square.
+        for replica in replicaStates {
+            guard replica.state == .pending || replica.state == .drift,
+                  let groupID = storageGroupIDByAsset[replica.assetID],
+                  assetsByID[replica.assetID]?.isLivePhotoMotion == false
+            else { continue }
+            if replica.state == .drift {
+                broken[groupID, default: [:]][replica.targetID, default: 0] += 1
+            } else {
+                waiting[groupID, default: [:]][replica.targetID, default: 0] += 1
+            }
+        }
+        groupPlaceCells = storageGroups.reduce(into: [:]) { result, group in
+            var row: [UUID: GroupPlaceCell] = [:]
+            for (targetID, entry) in perTarget[group.id] ?? [:] {
+                row[targetID] = GroupPlaceCell(
+                    photos: entry.0.count, insideDownload: entry.1,
+                    waiting: waiting[group.id]?[targetID] ?? 0,
+                    damaged: broken[group.id]?[targetID] ?? 0
+                )
+            }
+            // A device that is owed photos but holds none of them yet has no
+            // present replicas at all, so it appears in neither loop above.
+            for (targetID, count) in waiting[group.id] ?? [:] where row[targetID] == nil {
+                row[targetID] = GroupPlaceCell(photos: 0, insideDownload: 0, waiting: count, damaged: 0)
+            }
+            for (targetID, count) in broken[group.id] ?? [:] where row[targetID] == nil {
+                row[targetID] = GroupPlaceCell(photos: 0, insideDownload: 0, waiting: 0, damaged: count)
+            }
+            result[group.id] = row
+        }
+        photoCountByStorageGroup = assets.reduce(into: [:]) { counts, asset in
+            guard !asset.isLivePhotoMotion, let groupID = storageGroupIDByAsset[asset.id] else { return }
+            counts[groupID, default: 0] += 1
+        }
+        photosShortByGroup = protectionStates.reduce(into: [:]) { counts, entry in
+            guard entry.value.verdict == .shortOfPolicy,
+                  let groupID = storageGroupIDByAsset[entry.key]
+            else { return }
+            counts[groupID, default: 0] += 1
         }
 
         storageFormByGroup = storageGroups.reduce(into: [:]) { result, group in
@@ -1865,6 +1912,35 @@ final class AppStore: ObservableObject {
     /// the Photos library group had 263 of its 272 counted inside the download
     /// on one drive and only 172 on the other, so one drive was carrying 91
     /// more of them as their own files than the other.
+    /// One group's photos, on one place.
+    ///
+    /// The cell of the Keep safe grid, and the smallest true statement the
+    /// storage model can make: everything else on that screen is a sum of
+    /// these — a row is a group's copies, a column is a device's contents.
+    struct GroupPlaceCell: Equatable {
+        var photos: Int
+        var insideDownload: Int
+        var waiting: Int
+        var damaged: Int
+
+        var isEmpty: Bool { photos == 0 && waiting == 0 && damaged == 0 }
+    }
+
+    /// group → place → what is there. Empty for a pair with nothing between
+    /// them, which the grid draws as "not asked to hold it".
+    @Published private(set) var groupPlaceCells: [UUID: [UUID: GroupPlaceCell]] = [:]
+
+    /// Photos in each group that are on fewer places than the group asks for.
+    ///
+    /// A group's row can look full and still be short: the cells count photos
+    /// per place, and 100 photos spread as 60 here and 40 there fills two cells
+    /// while every one of them has a single copy.
+    @Published private(set) var photosShortByGroup: [UUID: Int] = [:]
+
+    func cell(group: UUID, place: UUID) -> GroupPlaceCell? {
+        groupPlaceCells[group]?[place]
+    }
+
     struct GroupHolding: Identifiable {
         var targetID: UUID
         var photos: Int
@@ -1967,7 +2043,7 @@ final class AppStore: ObservableObject {
 
     /// Photos whose every copy is inside a Takeout file.
     ///
-    /// These are not short of copies — on a real archive all 18,136 of them sit
+    /// These are not short of copies — on a real archive all 21,380 of them sit
     /// on both drives — which is exactly why nothing flagged them. What they
     /// share is a way of being lost: the copies are the *same* zip files on
     /// each drive, so deleting those, or one of them going bad in the same way,
@@ -1977,6 +2053,19 @@ final class AppStore: ObservableObject {
 
     /// The fewest drives any photo is on, or nil when the archive is empty.
     var leastCopiesAnywhere: Int? { copyCoverage.keys.min() }
+
+    /// Per device, how many photos it is the *only* holder of — what would be
+    /// gone if that device were.
+    ///
+    /// Everything else on this screen counts what a device has. That is the
+    /// wrong half of the question. Nobody opens Keep safe wondering how many
+    /// photos are on My Passport; they wonder what happens when it dies. A
+    /// device holding 21,389 of 21,401 photos sounds vital and is in fact
+    /// expendable, because every one of those photos is somewhere else too —
+    /// and a device holding 12 sounds trivial and would be a catastrophe if
+    /// those 12 were nowhere else. Held count cannot tell those two apart.
+    /// This is the number that can.
+    @Published private(set) var photosOnlyOn: [UUID: Int] = [:]
 
     /// Snapshots per drive, newest first — surfaced under Keep safe.
     @Published private(set) var catalogSnapshots: [UUID: [CatalogSnapshot]] = [:]
@@ -2241,9 +2330,19 @@ final class AppStore: ObservableObject {
         // honest reason — capacity. A boot disk rarely has room for the whole
         // archive. Preferring a drive is a sensible default; calling a
         // deliberate choice of this Mac a lesser copy was not true.
+        //
+        // Motion halves are excluded for the same reason `driveBreakdowns`
+        // excludes them a few lines up: every sentence built from these counts
+        // says "photo". Counting them made the two halves of this screen
+        // contradict each other in print — "every photo is in 2 places",
+        // totalling 21,401, directly above "24,618 of *them* are inside your
+        // Google Takeout files". A subset larger than the set it is drawn from
+        // is the sort of thing a reader notices and then stops believing the
+        // rest of the screen. The Takeout figure is 21,380.
         var placesHolding: [UUID: Set<UUID>] = [:]
         var outsideAnArchive: Set<UUID> = []
         for replica in replicaStates where replica.state == .present {
+            guard assetsByID[replica.assetID]?.isLivePhotoMotion != true else { continue }
             placesHolding[replica.assetID, default: []].insert(replica.targetID)
             if !ReplicationService.isInsideADownload(replica.relativePath) {
                 outsideAnArchive.insert(replica.assetID)
@@ -2251,6 +2350,12 @@ final class AppStore: ObservableObject {
         }
         copyCoverage = placesHolding.values.reduce(into: [:]) { $0[$1.count, default: 0] += 1 }
         archiveBackedOnlyCount = placesHolding.keys.filter { !outsideAnArchive.contains($0) }.count
+        // Off the same pass: a photo held by exactly one place is a photo that
+        // place would take with it.
+        photosOnlyOn = placesHolding.values.reduce(into: [:]) { counts, holders in
+            guard holders.count == 1, let only = holders.first else { return }
+            counts[only, default: 0] += 1
+        }
         // Once, here, rather than four times per redraw from a view's body.
         recomputeGroupStorage()
 
@@ -3614,14 +3719,14 @@ final class AppStore: ObservableObject {
     }
 
     /// How many photos are in each group — the count the management UI shows.
-    var photoCountByStorageGroup: [UUID: Int] {
-        var counts: [UUID: Int] = [:]
-        for asset in assets where !asset.isLivePhotoMotion {
-            guard let groupID = storageGroupIDByAsset[asset.id] else { continue }
-            counts[groupID, default: 0] += 1
-        }
-        return counts
-    }
+    ///
+    /// Stored, not computed. It was a computed property walking every asset in
+    /// the archive, which was survivable while one list read it once and became
+    /// a ten-second freeze when the grid started reading it per cell — and,
+    /// worse, from inside a sort comparator, where each comparison paid for a
+    /// full pass over 24,639 assets. Recomputed with the rest of the storage
+    /// picture instead, which is the only time it can change.
+    @Published private(set) var photoCountByStorageGroup: [UUID: Int] = [:]
 
     /// Where a group's photos came from, when they all came from one place.
     ///

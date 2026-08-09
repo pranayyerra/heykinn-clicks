@@ -13,7 +13,7 @@ import SwiftUI
 /// click for a popover that stays put while it is read.
 ///
 /// **Descriptions go behind the mark; findings never do.** "Each group says how
-/// many copies to keep" describes the furniture. "24,618 of them are inside
+/// many copies to keep" describes the furniture. "21,380 of them are inside
 /// your Google Takeout files" is something true about this archive right now,
 /// and hiding it would be hiding the answer rather than the instructions.
 struct SectionHeading<Trailing: View>: View {

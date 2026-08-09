@@ -99,6 +99,109 @@ final class CopyCoverageTests: XCTestCase {
         XCTAssertEqual(store.archiveBackedOnlyCount, 1, "and only one of them really is")
     }
 
+    /// The screen printed a subset larger than the set it came from.
+    ///
+    /// Keep safe led with "Every photo is in 2 places", totalling 21,401, and
+    /// then said "24,618 of them are inside your Google Takeout files". Both
+    /// numbers came from here; only one of them counted photos. A Live Photo is
+    /// one photo and two files, and the coverage pass was walking replicas
+    /// without asking which of them were the motion halves — so every sentence
+    /// built on it silently switched units mid-screen.
+    func testCoverageCountsPhotosNotFilesSoALivePhotoIsOne() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let still = asset("live.heic")
+        var motion = asset("live.mov")
+        motion.livePhotoStillID = still.id
+        let driveA = UUID(), driveB = UUID()
+        for one in [still, motion] { try catalog.upsertAsset(one) }
+        let part = ReplicationService.archivePartPrefix + "takeout-001.zip"
+        for one in [still, motion] {
+            try hold(catalog, one.id, on: driveA, path: part)
+            try hold(catalog, one.id, on: driveB, path: part)
+        }
+
+        let store = makeStore(in: directory)
+        XCTAssertEqual(
+            store.copyCoverage, [2: 1],
+            "one photo in two places, not two photos — the .mov is the same photo's other half"
+        )
+        XCTAssertEqual(
+            store.archiveBackedOnlyCount, 1,
+            "and the Takeout figure has to be a subset of that same one"
+        )
+    }
+
+    /// What a device's failure would cost, which no held count can say.
+    ///
+    /// A device with 21,389 of 21,401 photos sounds indispensable and is
+    /// expendable; one with 12 sounds trivial and is a catastrophe if those 12
+    /// are nowhere else. The two are indistinguishable by size.
+    func testSoleCustodyCountsWhatEachPlaceWouldTakeWithIt() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let big = UUID(), small = UUID()
+        // The big drive holds three photos and is the only home of none of
+        // them; the small one holds a single photo nobody else has.
+        let shared1 = asset("a.jpg"), shared2 = asset("b.jpg"), shared3 = asset("c.jpg")
+        let orphan = asset("only-here.jpg")
+        for one in [shared1, shared2, shared3, orphan] { try catalog.upsertAsset(one) }
+        for one in [shared1, shared2, shared3] {
+            try hold(catalog, one.id, on: big, path: "x/\(one.originalFilename)")
+            try hold(catalog, one.id, on: small, path: "x/\(one.originalFilename)")
+        }
+        try hold(catalog, orphan.id, on: small, path: "x/only-here.jpg")
+
+        let store = makeStore(in: directory)
+        XCTAssertEqual(store.photosOnlyOn[big] ?? 0, 0, "losing the big drive would lose nothing")
+        XCTAssertEqual(
+            store.photosOnlyOn[small] ?? 0, 1,
+            "losing the smaller one loses a photo, which its size gives no hint of"
+        )
+    }
+
+    /// The cell of the Keep safe grid: one group's photos, on one place.
+    ///
+    /// Including the case a cell exists to distinguish — a device a group names
+    /// but has not filled yet. Counting only what is present cannot tell that
+    /// apart from a device the group never asked for, and both would draw as
+    /// the same blank square.
+    func testGridCellsSeparateWhatIsThereFromWhatIsOwed() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let here = UUID(), owed = UUID(), unused = UUID()
+        let groupID = UUID()
+        try catalog.upsertStorageGroup(StorageGroup(
+            id: groupID, label: "Books", desiredCopies: 2,
+            destinationTargetIDs: [here, owed], destinationMode: .chosen, createdAt: Date()
+        ))
+        let one = asset("one.jpg"), two = asset("two.jpg")
+        for a in [one, two] { try catalog.upsertAsset(a) }
+        try catalog.assignStorageGroup(groupID, toAssets: [one.id, two.id])
+        try hold(catalog, one.id, on: here, path: "p/one.jpg")
+        try hold(catalog, two.id, on: here, path: "p/two.jpg")
+        try catalog.upsertReplicaState(TargetReplicaState(
+            assetID: one.id, targetID: owed, state: .pending, relativePath: nil, lastVerifiedAt: nil
+        ))
+
+        let store = makeStore(in: directory)
+        XCTAssertEqual(store.cell(group: groupID, place: here)?.photos, 2)
+        XCTAssertEqual(store.cell(group: groupID, place: here)?.waiting, 0)
+        let owedCell = store.cell(group: groupID, place: owed)
+        XCTAssertEqual(owedCell?.photos, 0, "nothing has landed there")
+        XCTAssertEqual(owedCell?.waiting, 1, "but it is owed one, which is why the cell exists")
+        XCTAssertNil(
+            store.cell(group: groupID, place: unused),
+            "a device the group never named has no cell at all"
+        )
+    }
+
     /// An empty archive has no answer, and must not invent a reassuring one.
     func testAnEmptyArchiveReportsNothing() throws {
         let store = makeStore(in: try makeDirectory())
