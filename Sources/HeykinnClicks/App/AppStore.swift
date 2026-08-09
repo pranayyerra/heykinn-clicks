@@ -1748,25 +1748,114 @@ final class AppStore: ObservableObject {
     /// still and a movie on disk. Counting files here put "24,355 counted
     /// inside a Google download" directly under "21,117 photos", which reads as
     /// the app contradicting itself on one line.
-    func storageForm(forStorageGroup groupID: UUID) -> StorageForm {
-        var inside: Set<UUID> = []
-        var out: Set<UUID> = []
+    /// Everything a group's storage view needs, worked out once per catalog
+    /// load instead of once per redraw.
+    ///
+    /// These four answers each used to walk all 49,278 replica rows, and the
+    /// group detail asked for all four from its `body` — so opening the 21,117
+    /// photo group re-scanned the archive five times over, and again on every
+    /// redraw while it was open. It took visibly long enough to look broken.
+    /// One pass builds them all.
+    @Published private(set) var storageFormByGroup: [UUID: StorageForm] = [:]
+    @Published private(set) var holdingsByGroup: [UUID: [GroupHolding]] = [:]
+    @Published private(set) var exportSetIDsByGroup: [UUID: [String]] = [:]
+    @Published private(set) var strandedByExportSet: [String: Int] = [:]
+
+    private func recomputeGroupStorage() {
+        var inside: [UUID: Set<UUID>] = [:]            // group → photos inside a download
+        var outside: [UUID: Set<UUID>] = [:]           // group → photos with a file of their own
+        var perTarget: [UUID: [UUID: (Set<UUID>, Int)]] = [:]  // group → target → (photos, inside)
+        var stems: [UUID: Set<String>] = [:]           // group → archive part names
+        // Per export set: photos it holds, and photos held anywhere else.
+        var heldByStem: [String: Set<UUID>] = [:]
+        var heldElsewhere: Set<UUID> = []
+
         for replica in replicaStates where replica.state == .present {
-            guard storageGroupIDByAsset[replica.assetID] == groupID,
-                  assetsByID[replica.assetID]?.isLivePhotoMotion == false
-            else { continue }
-            if ReplicationService.isInsideADownload(replica.relativePath) {
-                inside.insert(replica.assetID)
+            let assetID = replica.assetID
+            let path = replica.relativePath
+            let inADownload = ReplicationService.isInsideADownload(path)
+
+            if let stem = path.flatMap(Self.downloadFileName) {
+                heldByStem[stem, default: []].insert(assetID)
             } else {
-                out.insert(replica.assetID)
+                heldElsewhere.insert(assetID)
+            }
+
+            guard let groupID = storageGroupIDByAsset[assetID],
+                  assetsByID[assetID]?.isLivePhotoMotion == false
+            else { continue }
+
+            if inADownload { inside[groupID, default: []].insert(assetID) }
+            else { outside[groupID, default: []].insert(assetID) }
+
+            var entry = perTarget[groupID]?[replica.targetID] ?? ([], 0)
+            entry.0.insert(assetID)
+            if inADownload { entry.1 += 1 }
+            perTarget[groupID, default: [:]][replica.targetID] = entry
+
+            if let path, path.hasPrefix(ReplicationService.archivePartPrefix) {
+                stems[groupID, default: []]
+                    .insert(String(path.dropFirst(ReplicationService.archivePartPrefix.count)))
             }
         }
-        return StorageForm(
-            insideDownload: inside.count,
-            copiedOut: out.count,
-            onlyInsideDownload: inside.subtracting(out).count
+
+        storageFormByGroup = storageGroups.reduce(into: [:]) { result, group in
+            let within = inside[group.id] ?? []
+            let out = outside[group.id] ?? []
+            result[group.id] = StorageForm(
+                insideDownload: within.count,
+                copiedOut: out.count,
+                onlyInsideDownload: within.subtracting(out).count
+            )
+        }
+
+        let setsByStem = Dictionary(
+            takeoutArchives.compactMap { archive in
+                archive.exportSetID.map { ($0, archive.displayName) }
+            }.map { ($1, $0) },
+            uniquingKeysWith: { first, _ in first }
         )
+        exportSetIDsByGroup = storageGroups.reduce(into: [:]) { result, group in
+            let found = (stems[group.id] ?? []).compactMap { setsByStem[$0] }
+            result[group.id] = Array(Set(found)).sorted(by: >)
+        }
+        holdingsByGroup = storageGroups.reduce(into: [:]) { result, group in
+            result[group.id] = buildHoldings(group: group, perTarget: perTarget[group.id] ?? [:])
+        }
+        strandedByExportSet = Dictionary(
+            grouping: takeoutArchives.compactMap { archive in
+                archive.exportSetID.map { ($0, archive.displayName) }
+            }, by: { $0.0 }
+        ).mapValues { pairs in
+            let held = pairs.reduce(into: Set<UUID>()) { $0.formUnion(heldByStem[$1.1] ?? []) }
+            return held.subtracting(heldElsewhere).count
+        }
     }
+
+    /// The download file a replica is satisfied by, whichever form it took.
+    private static func downloadFileName(_ relativePath: String) -> String? {
+        if relativePath.hasPrefix(ReplicationService.archivePartPrefix) {
+            return String(relativePath.dropFirst(ReplicationService.archivePartPrefix.count))
+        }
+        return nil
+    }
+
+    func storageForm(forStorageGroup groupID: UUID) -> StorageForm {
+        storageFormByGroup[groupID] ?? StorageForm()
+    }
+
+    func holdings(forStorageGroup groupID: UUID) -> [GroupHolding] {
+        holdingsByGroup[groupID] ?? []
+    }
+
+    func exportSetIDs(backingStorageGroup groupID: UUID) -> [String] {
+        exportSetIDsByGroup[groupID] ?? []
+    }
+
+    func photosHeldOnlyBy(exportSetID: String) -> Int {
+        strandedByExportSet[exportSetID] ?? 0
+    }
+
 
     /// What each device actually holds of one group, and in what form.
     ///
@@ -1806,42 +1895,34 @@ final class AppStore: ObservableObject {
         var id: String { path }
     }
 
-    func holdings(forStorageGroup groupID: UUID) -> [GroupHolding] {
-        var byTarget: [UUID: (photos: Set<UUID>, inside: Int)] = [:]
-        for replica in replicaStates where replica.state == .present {
-            guard storageGroupIDByAsset[replica.assetID] == groupID,
-                  assetsByID[replica.assetID]?.isLivePhotoMotion == false
-            else { continue }
-            var entry = byTarget[replica.targetID] ?? ([], 0)
-            entry.photos.insert(replica.assetID)
-            if ReplicationService.isInsideADownload(replica.relativePath) {
-                entry.inside += 1
-            }
-            byTarget[replica.targetID] = entry
-        }
-        let locations = downloadFolders(forStorageGroup: groupID)
-        // Named devices first and in the order the group names them, so the
-        // list reads the same way the copies line above it does; anything else
-        // holding some follows, because a device nobody named still has bytes.
-        let named = storageGroupsByID[groupID]?.destinationTargetIDs ?? []
-        let rest = byTarget.keys.filter { !named.contains($0) }.sorted {
+
+    private func buildHoldings(
+        group: StorageGroup,
+        perTarget: [UUID: (Set<UUID>, Int)]
+    ) -> [GroupHolding] {
+        let locations = downloadFolders(forStorageGroup: group.id)
+        let named = group.destinationTargetIDs
+        let rest = perTarget.keys.filter { !named.contains($0) }.sorted {
             (targetsByID[$0]?.name ?? "") < (targetsByID[$1]?.name ?? "")
         }
         return (named + rest).compactMap { targetID -> GroupHolding? in
-            guard let entry = byTarget[targetID] else { return nil }
+            guard let entry = perTarget[targetID] else { return nil }
             var where_: [Location] = []
             let mount = reachablePaths[targetID]?.path ?? targetsByID[targetID]?.lastKnownPath
-            if entry.inside > 0, var folder = locations[targetID] {
-                folder.photos = entry.inside
+            if entry.1 > 0, var folder = locations[targetID] {
+                // The download folder holds however many are counted inside it.
+                // Dropping this line in the rewrite left every download folder
+                // reading "0" beside a device reporting 21,117 photos.
+                folder.photos = entry.1
                 where_.append(folder)
             }
-            let ownFiles = entry.photos.count - entry.inside
+            let ownFiles = entry.0.count - entry.1
             if ownFiles > 0, let root = targetsByID[targetID]?.replicaRootComponent, let mount {
                 where_.append(Location(path: mount + "/" + root, display: root, photos: ownFiles))
             }
             return GroupHolding(
-                targetID: targetID, photos: entry.photos.count,
-                insideDownload: entry.inside, locations: where_
+                targetID: targetID, photos: entry.0.count,
+                insideDownload: entry.1, locations: where_
             )
         }
     }
@@ -1875,59 +1956,7 @@ final class AppStore: ObservableObject {
         return byTarget
     }
 
-    /// The download sets holding any of this group's photos, newest first.
-    ///
-    /// Lets a group show the part grid for the download that actually backs it,
-    /// which is the only place that grid has ever belonged: it is a picture of
-    /// where files are, wedged until now into a card about an import.
-    func exportSetIDs(backingStorageGroup groupID: UUID) -> [String] {
-        var stems: Set<String> = []
-        for replica in replicaStates where replica.state == .present {
-            guard storageGroupIDByAsset[replica.assetID] == groupID,
-                  let path = replica.relativePath,
-                  path.hasPrefix(ReplicationService.archivePartPrefix)
-            else { continue }
-            stems.insert(String(path.dropFirst(ReplicationService.archivePartPrefix.count)))
-        }
-        guard !stems.isEmpty else { return [] }
-        let sets = takeoutArchives
-            .filter { stems.contains($0.displayName) }
-            .compactMap(\.exportSetID)
-        return Array(Set(sets)).sorted(by: >)
-    }
 
-    /// Photos that would have no copy anywhere if this download's files went.
-    ///
-    /// The app counts photos *inside* the Takeout files rather than copying
-    /// them out, so "stop tracking this download" is not the paperwork it
-    /// sounds like — on a real archive it would drop 18,136 photos to nowhere
-    /// while the button said "deletes nothing", which is true about files and
-    /// badly wrong about photos.
-    /// Matched against the export's own part names rather than a prefix built
-    /// from the set id, because those are two different strings: a part is
-    /// recorded as `archivepart:takeout-20260710T081521Z-2-001` while the set
-    /// id is `20260710T081521Z-2`. Constructing the prefix matched nothing, so
-    /// the count came out zero and the dialog said the download could be
-    /// forgotten safely — the one answer it must never give wrongly.
-    func photosHeldOnlyBy(exportSetID: String) -> Int {
-        let stems = Set(
-            takeoutArchives
-                .filter { $0.exportSetID == exportSetID }
-                .map { ReplicationService.archivePartPrefix + $0.displayName }
-        )
-        guard !stems.isEmpty else { return 0 }
-
-        var elsewhere: Set<UUID> = []
-        var here: Set<UUID> = []
-        for replica in replicaStates where replica.state == .present {
-            if let path = replica.relativePath, stems.contains(path) {
-                here.insert(replica.assetID)
-            } else {
-                elsewhere.insert(replica.assetID)
-            }
-        }
-        return here.subtracting(elsewhere).count
-    }
 
     /// How many photos sit on how many drives, keyed by the number of drives.
     ///
@@ -2222,6 +2251,8 @@ final class AppStore: ObservableObject {
         }
         copyCoverage = placesHolding.values.reduce(into: [:]) { $0[$1.count, default: 0] += 1 }
         archiveBackedOnlyCount = placesHolding.keys.filter { !outsideAnArchive.contains($0) }.count
+        // Once, here, rather than four times per redraw from a view's body.
+        recomputeGroupStorage()
 
         // A Merkle tree per target used to be built here so two targets could
         // be compared by their roots. Both trees took their leaf digests from

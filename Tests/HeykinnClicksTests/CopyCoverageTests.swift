@@ -164,10 +164,12 @@ extension CopyCoverageTests {
         XCTAssertEqual(store.photosHeldOnlyBy(exportSetID: "set"), 0)
     }
 
-    private func archive(named name: String, set: String) -> TakeoutArchive {
+    private func archive(
+        named name: String, set: String, on targetID: UUID? = nil
+    ) -> TakeoutArchive {
         TakeoutArchive(
             id: UUID(), path: "/Volumes/Drive/\(name)", kind: .zip, sizeBytes: 1,
-            targetID: nil, discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
+            targetID: targetID, discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
             importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
             exportSetID: set, partNumber: 1
         )
@@ -468,5 +470,49 @@ extension CopyCoverageTests {
         let store = makeStore(in: directory)
         XCTAssertEqual(store.copyCoverage, [1: 1])
         XCTAssertEqual(store.leastCopiesAnywhere, 1)
+    }
+}
+
+/// The folder counts, which a rewrite silently zeroed.
+extension CopyCoverageTests {
+
+    /// Each folder says how many of the group's photos are in it. Precomputing
+    /// the holdings dropped the line that set this, and every download folder
+    /// read "0" beside a device reporting 21,117 photos — a number wrong in a
+    /// way that looks like a real answer.
+    func testEachFolderCarriesItsOwnCount() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let groupID = UUID(), drive = UUID()
+        try catalog.upsertTarget(ReplicationTarget(
+            id: drive, name: "Drive", kind: .externalVolume, volumeUUID: nil,
+            markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
+            lastKnownPath: "/Volumes/Drive", configuredPath: nil,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+        ))
+        try catalog.upsertStorageGroup(StorageGroup(
+            id: groupID, label: "Mixed", desiredCopies: 1,
+            destinationTargetIDs: [drive], destinationMode: .chosen, createdAt: Date()
+        ))
+        try catalog.upsertTakeoutArchive(
+            archive(named: "takeout-set-001.zip", set: "set", on: drive)
+        )
+
+        let inZip = asset("a.jpg"), ownFile = asset("b.jpg")
+        for one in [inZip, ownFile] { try catalog.upsertAsset(one) }
+        try catalog.assignStorageGroup(groupID, toAssets: [inZip.id, ownFile.id])
+        try hold(catalog, inZip.id, on: drive,
+                 path: ReplicationService.archivePartPrefix + "takeout-set-001.zip")
+        try hold(catalog, ownFile.id, on: drive, path: "bb/b.jpg")
+
+        let store = makeStore(in: directory)
+        let holding = try XCTUnwrap(store.holdings(forStorageGroup: groupID).first)
+        XCTAssertEqual(holding.photos, 2)
+        XCTAssertEqual(
+            holding.locations.map(\.photos).sorted(), [1, 1],
+            "one in the download's folder, one in the replica root — neither zero"
+        )
     }
 }

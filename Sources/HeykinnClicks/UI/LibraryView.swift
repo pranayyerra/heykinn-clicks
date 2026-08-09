@@ -96,9 +96,18 @@ struct LibraryView: View {
                     albumHeader
                     ForEach(monthGroups, id: \.month) { group in
                         Section {
+                            // Selection is off inside the grid. Every `Text`
+                            // in the window became selectable, and here that
+                            // is a caption under each of 24,639 thumbnails —
+                            // enough hit-testing that the I-beam took a
+                            // noticeable moment to appear anywhere on the
+                            // screen. Nobody copies a filename out of a grid;
+                            // the ones worth copying are on the photo's own
+                            // page, which keeps it.
                             LazyVGrid(columns: [GridItem(.adaptive(minimum: 140), spacing: 10)], spacing: 10) {
                                 ForEach(group.assets) { asset in
                                     gridItem(asset)
+                                        .textSelection(.disabled)
                                 }
                             }
                             .padding(.horizontal)
