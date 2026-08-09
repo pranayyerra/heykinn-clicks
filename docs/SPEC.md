@@ -623,3 +623,21 @@ Earned against a real 248 GB archive; the stories are in git history.
     (`pending`, `missing`, withdrawable) and rows that assert bytes are on a
     disk (`present`, `drift`, never forgotten — releasing them is a separate
     decision the user makes).
+
+51. Do not offer a choice whose right answer the app already knows. Four of the
+    five actions on a drive were its own bookkeeping wearing a menu — confirm
+    your own consistency, clear a queue, sweep folders a sweep already sweeps
+    after every sync, and one that was the button it was listed inside. None is
+    a decision a person has information to make. The related rule: an action
+    belongs at the moment it means something. "Look for copies this drive
+    already has" is right when a drive is plugged in and pointless as a menu
+    item months later.
+
+52. A reassurance that fails open is worse than no reassurance. The dialog for
+    forgetting a Takeout download counted the photos that would be left with no
+    copy — and built its lookup from the export's set id while replicas record
+    the part's file name. Nothing matched, so it reported zero and said the
+    download could be forgotten safely, on an archive where 18,136 photos live
+    only inside it. The test agreed, because it had been written from the same
+    assumption. When a number exists to stop somebody, check it against the
+    real shape and assert that the wrong shape finds nothing.
