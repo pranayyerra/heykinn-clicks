@@ -65,7 +65,8 @@ struct SourcesView: View {
             name: "Photos app",
             symbol: "photo.on.rectangle.angled",
             state: state,
-            detail: "The Photos library on this Mac"
+            detail: "The Photos library on this Mac",
+            help: Self.explanation(for: "apple")
         )
     }
 
@@ -92,7 +93,8 @@ struct SourcesView: View {
             state: state,
             detail: store.takeoutArchives.isEmpty
                 ? "A copy of your photos from takeout.google.com"
-                : "Counted in files, because Google splits one download into several"
+                : "Counted in files, because Google splits one download into several",
+            help: Self.explanation(for: "google")
         )
     }
 
@@ -141,7 +143,8 @@ struct SourcesView: View {
             name: "Folders you have added",
             symbol: "folder",
             state: fromFolders == 0 ? .notSet : .allIn(count: fromFolders),
-            detail: detail
+            detail: detail,
+            help: Self.explanation(for: "folders")
         )
     }
 
@@ -202,25 +205,14 @@ struct SourcesView: View {
     }
 
     /// The opened source's detail, titled so it is obvious which node it
-    /// belongs to and closable from its own header.
+    /// belongs to.
+    ///
+    /// No header of its own. It opens inside the row that names it, and the
+    /// row's chevron already closes it — a title and a Hide button here were
+    /// the same two things a line apart.
     @ViewBuilder
     private func detailPanel(_ source: PhotoSource) -> some View {
         VStack(alignment: .leading, spacing: 0) {
-            HStack(spacing: 10) {
-                Image(systemName: source.symbol)
-                    .foregroundStyle(source.isSet ? source.tint : Color.secondary)
-                SectionHeading(source.name, help: Self.explanation(for: source.id))
-                    .fixedSize()
-                Spacer(minLength: 0)
-                Button {
-                    toggle(source.id)
-                } label: {
-                    Label("Hide", systemImage: "chevron.up")
-                        .font(.caption)
-                }
-                .buttonStyle(.link)
-            }
-            .padding(12)
 
             Group {
                 switch source.id {

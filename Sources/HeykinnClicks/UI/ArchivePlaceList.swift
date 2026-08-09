@@ -95,10 +95,16 @@ struct ArchivePlaceList<Detail: View>: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(place.name)
                         .fontWeight(selection == place.id ? .semibold : .regular)
-                    Text(holdings(place))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
+                    // Yields when the row is open. The card underneath says
+                    // the same holdings in more detail, and a summary of the
+                    // thing directly below it is the repetition inline detail
+                    // exists to remove.
+                    if selection != place.id {
+                        Text(holdings(place))
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                 }
                 Spacer(minLength: 8)
                 Text(place.target == nil ? "not set up"

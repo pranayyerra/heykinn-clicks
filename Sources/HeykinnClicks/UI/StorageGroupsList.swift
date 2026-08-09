@@ -110,11 +110,15 @@ struct StorageGroupsList: View {
                     .font(.callout.weight(.medium))
                 // What it asks for and where, in one line, because those two
                 // are the whole of what a group is.
-                Text("\(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))")
-                    .font(.caption)
-                    .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
-                    .lineLimit(2)
-                    .fixedSize(horizontal: false, vertical: true)
+                // Yields when the group is open: "Where they are" says the
+                // same count and names the same devices, one line down.
+                if expanded != group.id {
+                    Text("\(Formatters.copies(group.desiredCopies)) on \(store.deviceNames(group.destinationTargetIDs))")
+                        .font(.caption)
+                        .foregroundStyle(group.isSatisfiable ? Color.secondary : Color.orange)
+                        .lineLimit(2)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 // A line saying how many of these exist only inside a Google
                 // download used to sit here, in orange. It answered a question
                 // this section does not ask. "How many copies, and where" is

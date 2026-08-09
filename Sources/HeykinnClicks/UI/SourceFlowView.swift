@@ -23,6 +23,8 @@ struct PhotoSource: Identifiable {
     /// The plain sentence under the name. What this source *is*, when nothing
     /// has been set up; what it holds, once something has.
     var detail: String
+    /// What this way in is, for the ⓘ beside its name.
+    var help: String?
 
     var isSet: Bool {
         switch state {
@@ -100,14 +102,24 @@ struct SourceFlowView<Detail: View>: View {
                     .frame(width: 22)
                     .foregroundStyle(source.isSet ? source.tint : Color.secondary)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(source.name)
-                        .font(.subheadline.weight(.semibold))
-                        .lineLimit(1)
-                    Text(source.detail)
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(2)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(spacing: 6) {
+                        Text(source.name)
+                            .font(.subheadline.weight(.semibold))
+                            .lineLimit(1)
+                        if let help = source.help {
+                            ExplainerMark(subject: source.name, help: help)
+                        }
+                    }
+                    // Yields when the row is open: what this line summarises is
+                    // spelled out directly underneath, and saying it twice a
+                    // line apart is the thing inline detail was meant to stop.
+                    if !isOpen {
+                        Text(source.detail)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                            .lineLimit(2)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     // A `ProgressView` sat here showing how much of this
                     // source was in the archive. Every import on a settled
                     // machine finished long ago, so it was a bar pinned at
