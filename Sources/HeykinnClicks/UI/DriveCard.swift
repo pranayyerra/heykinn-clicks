@@ -217,7 +217,7 @@ struct DriveCard: View {
         VStack(alignment: .leading, spacing: 4) {
             ProgressView(value: progress.fractionComplete)
             HStack {
-                Text(progress.currentItem.map { "Syncing \($0)" } ?? "Syncing…")
+                Text(progress.currentItem.map { "\(progress.currentVerb) \($0)" } ?? "Working…")
                     .lineLimit(1)
                 Spacer()
                 Text("\(progress.completedTasks + progress.failedTasks) of \(progress.totalTasks)\(progress.failedTasks > 0 ? " (\(progress.failedTasks) failed)" : "")")

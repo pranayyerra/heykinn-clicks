@@ -192,7 +192,7 @@ private struct SafetySettings: View {
                 ExplainedToggle(
                     "Read a few files in the background",
                     isOn: $store.backgroundRotPatrol,
-                    help: "Every half hour, on an idle drive, the app re-reads the forty files it checked longest ago. Reading is the only thing that finds bit rot — comparing what the catalog recorded can never see a file decay on disk. It yields to imports and syncs, and skips a target that has work waiting."
+                    help: "Every half hour, on an idle drive, the app re-reads the forty files it checked longest ago. Reading is the only thing that finds bit rot — comparing what the catalog recorded can never see a file decay on disk. Photos counted inside a Google export are left to the export's own checks: they have no file of their own to read, and confirming the export is still on the disk is not reading anything. It yields to imports and syncs, and skips a target that has work waiting."
                 )
             }
             Section("Catalog backup") {

@@ -133,13 +133,19 @@ enum ReplicationService {
     /// on another connected drive (including archive-backed Takeout files).
     /// Assets that live only on targets are copied drive-to-drive without ever
     /// being staged on the Mac.
+    /// - Parameter archivePathsByStem: where each export part actually is on
+    ///   this drive. Without it a part-backed replica can only be confirmed by
+    ///   searching the volume for something with that name, which is a
+    ///   recursive walk of the whole disk to answer a question the catalog
+    ///   already knows the answer to.
     static func perform(
         _ task: ReplicationTask,
         drive: ReplicationTarget,
         mountURL: URL,
         asset: Asset?,
         sourceURL: URL?,
-        existingReplica: TargetReplicaState? = nil
+        existingReplica: TargetReplicaState? = nil,
+        archivePathsByStem: [String: String] = [:]
     ) -> ReplicaTaskResult {
         var task = task
         guard let asset else {
@@ -158,7 +164,10 @@ enum ReplicationService {
                 )
                 message = "Copied \(asset.originalFilename) to \(drive.name)"
             case .verify:
-                replica = try performVerify(asset: asset, drive: drive, mountURL: mountURL, existingReplica: existingReplica)
+                replica = try performVerify(
+                    asset: asset, drive: drive, mountURL: mountURL,
+                    existingReplica: existingReplica, archivePathsByStem: archivePathsByStem
+                )
                 let verdict = replica.state == .present ? "verified" : replica.state.displayName.lowercased()
                 message = "\(asset.originalFilename) on \(drive.name): \(verdict)"
             case .remove:
@@ -319,20 +328,43 @@ enum ReplicationService {
         asset: Asset,
         drive: ReplicationTarget,
         mountURL: URL,
-        existingReplica: TargetReplicaState?
+        existingReplica: TargetReplicaState?,
+        archivePathsByStem: [String: String] = [:]
     ) throws -> TargetReplicaState {
         // A part-backed replica is satisfied by the drive still holding that
         // export part. Checking the part is the honest unit of work here:
         // decompressing every entry to confirm one photo would be absurd when
         // the part is what the policy actually counts.
         if let stem = archivePartStem(existingReplica) {
+            // `lastVerifiedAt` is carried over, not stamped with now.
+            //
+            // It means "the bytes of this copy were read back and matched",
+            // and confirming that an export part is still on the disk reads
+            // none of them. Stamping it here is how 21,117 photos came to be
+            // reported as "all read back" on the strength of a file existing
+            // with the right name — the reassurance the whole patrol exists to
+            // earn, awarded for the one check that cannot earn it.
             var replica = TargetReplicaState(
                 assetID: asset.id,
                 targetID: drive.id,
                 state: .missing,
                 relativePath: existingReplica?.relativePath,
-                lastVerifiedAt: Date()
+                lastVerifiedAt: existingReplica?.lastVerifiedAt
             )
+            // Where the catalog says it is, in one `stat`.
+            //
+            // This used to enumerate the volume from its mount point looking
+            // for a file whose *name* matched the stem — a recursive walk of a
+            // 2 TB disk, run once per photo, to rediscover a path already
+            // recorded. Forty of those is the background patrol, on a drive
+            // that is marked in-use for the duration.
+            if let path = archivePathsByStem[stem], FileManager.default.fileExists(atPath: path) {
+                replica.state = .present
+                return replica
+            }
+            // Nothing recorded for this stem — a part the catalog has lost
+            // track of. The search is kept as the fallback, because finding it
+            // once is what lets the path be repaired.
             guard let enumerator = FileManager.default.enumerator(
                 at: mountURL,
                 includingPropertiesForKeys: nil,

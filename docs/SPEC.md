@@ -779,6 +779,19 @@ Earned against a real 248 GB archive; the stories are in git history.
     the same bytes again, which the name never mentioned. Both belong in the
     label.
 
+68. A check that reads nothing may not set the field that means "read". The
+    background patrol exists because reading bytes is the only thing that finds
+    rot. For a copy counted inside an export part there are no bytes of its own
+    to read, so it was confirmed by looking for a file with the right name — and
+    then stamped `lastVerifiedAt` anyway. That is how 21,117 photos came to be
+    reported as *all read back*: the reassurance the patrol exists to earn,
+    awarded for the one check incapable of earning it. Worse, finding that name
+    meant enumerating a 2 TB volume from its mount point, once per photo, to
+    rediscover a path the catalog already held — so the forty files read every
+    half hour were almost never files, almost never read, and cost a recursive
+    walk of the disk each. Ask what a check proves before deciding what it is
+    allowed to record.
+
 64. Move the files first, then the catalog. A catalog told about a move that
     did not happen describes an archive nobody has, and nothing will ever
     correct it. A file that moved with the catalog not yet updated is found

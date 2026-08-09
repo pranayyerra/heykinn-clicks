@@ -6672,6 +6672,13 @@ final class AppStore: ObservableObject {
             currentItem: nil
         )
         let assetsSnapshot = assetsByID
+        // Every export part this drive holds, by stem: what a part-backed
+        // verification needs, gathered once for the whole run rather than
+        // rediscovered by walking the volume for each photo.
+        let archivePaths = takeoutArchives.reduce(into: [String: String]()) { paths, archive in
+            guard archive.targetID == targetID, archive.holdsBytes else { return }
+            paths[archive.displayNameWithoutExtension] = archive.path
+        }
         let replicasByKey = Dictionary(uniqueKeysWithValues: replicaStates.map { ($0.id, $0) })
 
         Task { @MainActor in
@@ -6699,11 +6706,16 @@ final class AppStore: ObservableObject {
                 let asset = assetsSnapshot[task.assetID]
                 let existingReplica = replicasByKey["\(task.assetID.uuidString)/\(task.targetID.uuidString)"]
                 syncProgress?.currentItem = asset?.originalFilename
+                syncProgress?.currentAction = task.action
                 // Source can be Mac staging or any readable copy on another
                 // connected drive, so drive-only assets replicate drive-to-drive.
                 let sourceURL = asset.flatMap { localFileURL(for: $0) }
                 let result = await Task.detached(priority: .utility) {
-                    ReplicationService.perform(task, drive: drive, mountURL: mountURL, asset: asset, sourceURL: sourceURL, existingReplica: existingReplica)
+                    ReplicationService.perform(
+                        task, drive: drive, mountURL: mountURL, asset: asset,
+                        sourceURL: sourceURL, existingReplica: existingReplica,
+                        archivePathsByStem: archivePaths
+                    )
                 }.value
                 do {
                     if !result.isTransient {
@@ -6844,6 +6856,20 @@ final class AppStore: ObservableObject {
                 && readable($0.state)
                 && !alreadyQueued.contains($0.assetID)
                 && (assetIDs?.contains($0.assetID) ?? true)
+                // The patrol exists to *read bytes* — that is the only thing
+                // that finds rot. A copy counted inside an export part has no
+                // file of its own to read: confirming it means confirming the
+                // part is still there, which `checkArchivePresence` already
+                // does for every part on every connect, in one stat each.
+                // Patrolling them per photo spent the whole budget rediscovering
+                // that, and on this archive that is 42,754 of 49,278 copies —
+                // so the forty files read every half hour were almost never
+                // files, and almost never read.
+                //
+                // Whether a part's bytes are still good is a question about the
+                // part, and it has its own answer: the spot check and the
+                // full-checksum pass on the export itself.
+                && !(isPatrol && ReplicationService.isInsideADownload($0.relativePath))
         }
 
         // Every readable copy of those assets, on every device — not just this

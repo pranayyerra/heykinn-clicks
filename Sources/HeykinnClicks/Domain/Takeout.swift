@@ -64,6 +64,13 @@ struct TakeoutArchive: Identifiable, Hashable {
     var missingSince: Date? = nil
 
     var displayName: String { (path as NSString).lastPathComponent }
+
+    /// The part stem, which is what a replica records: the file name with any
+    /// `.zip` taken off, so a part and the folder unpacked from it answer to
+    /// the same name.
+    var displayNameWithoutExtension: String {
+        kind == .zip ? (displayName as NSString).deletingPathExtension : displayName
+    }
     var url: URL { URL(fileURLWithPath: path) }
     var isImported: Bool { importedAt != nil }
     /// Whether this archive's bytes can still be counted as a copy of its part.

@@ -303,6 +303,20 @@ struct SyncProgress: Equatable {
     var completedTasks: Int
     var failedTasks: Int
     var currentItem: String?
+    /// What is being done to it. A queue of re-reads reported itself as
+    /// "Syncing IMG_3636.HEIC", which reads as copying — the one thing a
+    /// verification never does, and the thing somebody watching a drive they
+    /// were about to unplug most wants to know it is not doing.
+    var currentAction: ReplicationAction?
+
+    /// The verb for what is happening, in the present continuous.
+    var currentVerb: String {
+        switch currentAction {
+        case .verify: return "Checking"
+        case .remove: return "Removing"
+        case .copy, .none: return "Copying"
+        }
+    }
 
     var fractionComplete: Double {
         totalTasks == 0 ? 0 : Double(completedTasks + failedTasks) / Double(totalTasks)
