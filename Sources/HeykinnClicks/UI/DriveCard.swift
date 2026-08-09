@@ -217,58 +217,39 @@ struct DriveCard: View {
 
     private var actions: some View {
         HStack {
-            Menu {
-                Button("Check a batch now") { store.queueVerificationSweep(drive.id) }
-                    .disabled(store.isSyncing)
-                // "Re-read only what differs" lived here, driven by the tree
-                // comparison. It is gone with the tree: under k-of-n a
-                // difference between two devices is the placement, not damage,
-                // so the action would have aimed expensive reads at healthy
-                // files. Finding copies the archive is short is now the
-                // placement audit, which queues copies rather than reads.
-                Button("Check the archive is fully placed") { store.auditPlacement() }
-                    .disabled(store.isSyncing)
-                // Removing a replica used to delete the file and leave its
-                // folder, so a drained drive kept up to 256 empty directories.
-                // Removal prunes as it goes now; this clears what earlier
-                // versions left, which is a folder the user can see and the
-                // app otherwise would not revisit.
-                Button("Tidy up empty folders") { store.tidyEmptyReplicaFolders(drive.id) }
-                    .disabled(store.isSyncing || store.reachablePaths[drive.id] == nil)
-                if summary.verifyCount > 0 {
-                    Button("Clear \(Formatters.count(summary.verifyCount, "queued check"))", role: .destructive) {
-                        store.clearQueuedTasks(for: drive.id, action: .verify)
-                    }
-                }
-                // The way out of an archive that was built in the wrong order.
-                // Photos imported before this drive was registered were copied
-                // here under the app's own names while the originals sat on it
-                // all along; reading the drive back finds them and credits the
-                // copy it already had.
-                // External volumes only. A host device's mount *is* the app's
-                // own copy folder, so this would sweep the archive's own
-                // replicas back in as a user folder — the store refuses that
-                // now, but offering an action whose only outcome is an error is
-                // its own bug. There is nothing to find either way: the user
-                // never put anything there.
-                if drive.kind == .externalVolume, let mount = store.reachablePaths[drive.id] {
-                    Divider()
-                    Button("Look for copies this drive already has") {
-                        store.importFolders([mount])
-                    }
-                    .disabled(store.isImporting || store.isSyncing)
-                }
-                if let onForget {
-                    Divider()
-                    Button("Forget this target…", role: .destructive, action: onForget)
-                }
+            // One verb. There were four here, three of which were the app's own
+            // bookkeeping wearing a menu: "Check the archive is fully placed"
+            // asked the app to confirm its own consistency, "Clear N queued
+            // checks" was queue surgery, and "Tidy up empty folders" apologised
+            // for a bug older versions caused. None is a decision a person has
+            // information to make, so the app makes them — the placement audit
+            // already runs on every connect and every settings change, and
+            // removal prunes as it goes.
+            //
+            // "Check a batch now" was the fourth and it was this button, listed
+            // again inside itself.
+            Button {
+                store.queueVerificationSweep(drive.id)
             } label: {
                 Label("Check for damage", systemImage: "checkmark.shield")
-            } primaryAction: {
-                store.queueVerificationSweep(drive.id)
             }
             .disabled(store.isSyncing)
             .help("Re-reads a batch of files on this drive and confirms they are still byte-for-byte what was imported. Starts with the ones checked longest ago.")
+
+            // "Look for copies this drive already has" was here too. It is the
+            // right thing to do and the wrong place to offer it: a drive with
+            // photos on it is already met with that offer when it is plugged
+            // in, which is the moment it means something. A second door to it,
+            // months later, is a question with no reason to answer no.
+            if let onForget {
+                Menu {
+                    Button("Forget this drive…", role: .destructive, action: onForget)
+                } label: {
+                    Image(systemName: "ellipsis.circle")
+                }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
 
             Spacer()
 

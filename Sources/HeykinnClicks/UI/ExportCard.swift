@@ -142,6 +142,16 @@ struct ExportCard: View {
     @Binding var importRequest: TakeoutImportRequest?
     @EnvironmentObject private var store: AppStore
     @EnvironmentObject private var commands: AppCommandBus
+    @State private var confirmingStopTracking = false
+
+    /// What stopping tracking would actually cost, in photos.
+    private var strandedWarning: String {
+        let stranded = store.photosHeldOnlyBy(exportSetID: export.setID)
+        guard stranded > 0 else {
+            return "The .zip files stay where they are. Every photo in this download has a copy elsewhere, so nothing is left without one."
+        }
+        return "The .zip files stay where they are, but the app counts \(Formatters.count(stranded, "photo")) *inside* them rather than holding a separate copy. Stop tracking and \(stranded == 1 ? "it is" : "they are") left with no copy the app knows about anywhere."
+    }
 
     private var driveNames: [UUID: String] {
         Dictionary(uniqueKeysWithValues: store.targets.map { ($0.id, $0.name) })
@@ -187,20 +197,45 @@ struct ExportCard: View {
                             store.projectCapturedMetadata()
                         }
                         Divider()
-                        Button("Spot-check that the copies match") {
-                            store.spotCheckExportParts()
-                        }
-                        Button("Check the copies in full (slow)…") {
-                            store.verifyExportPartsByChecksum()
+                        // One verb with the depth inside it. Two peers —
+                        // "spot-check" and "in full (slow)" — asked the reader
+                        // to rank two mechanisms they have no way to tell
+                        // apart, when the answer is always "start with the fast
+                        // one". The slow one is still reachable, as an option
+                        // on the same act rather than a rival to it.
+                        Menu("Check these files for damage") {
+                            Button("Read a sample of each file") {
+                                store.spotCheckExportParts()
+                            }
+                            Button("Read every byte — slow, and the only proof") {
+                                store.verifyExportPartsByChecksum()
+                            }
                         }
                         Divider()
-                        Button("Stop tracking this download (deletes nothing)", role: .destructive) {
-                            for archive in export.archives { store.forgetTakeoutArchive(archive.id) }
+                        Button("Stop tracking this download…", role: .destructive) {
+                            confirmingStopTracking = true
                         }
                     } label: {
                         Image(systemName: "ellipsis.circle")
                     }
                     .menuStyle(.borderlessButton)
+                    .confirmationDialog(
+                        "Stop tracking this download?",
+                        isPresented: $confirmingStopTracking,
+                        titleVisibility: .visible
+                    ) {
+                        Button("Stop tracking", role: .destructive) {
+                            for archive in export.archives { store.forgetTakeoutArchive(archive.id) }
+                        }
+                        Button("Cancel", role: .cancel) {}
+                    } message: {
+                        // The old label promised "deletes nothing", which is
+                        // true about files and badly wrong about photos: the
+                        // app counts these inside the download rather than
+                        // copying them out, so forgetting the download drops
+                        // every photo that has no copy elsewhere to nowhere.
+                        Text(strandedWarning)
+                    }
                     .fixedSize()
                     .disabled(store.takeoutActivity != nil || store.isImporting)
                 }

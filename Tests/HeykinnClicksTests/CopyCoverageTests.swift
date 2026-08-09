@@ -107,3 +107,69 @@ final class CopyCoverageTests: XCTestCase {
         XCTAssertEqual(store.archiveBackedOnlyCount, 0)
     }
 }
+
+/// What forgetting a download would actually cost.
+extension CopyCoverageTests {
+
+    /// "Stop tracking this download (deletes nothing)" was true about files and
+    /// badly wrong about photos. The app counts photos *inside* the Takeout
+    /// files rather than copying them out, so on a real archive that button
+    /// would have dropped 18,136 photos to no copy at all while promising the
+    /// opposite.
+    func testPhotosHeldOnlyInsideADownloadAreCounted() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let stranded = asset("only-in-zip.jpg"), alsoOut = asset("also-copied.jpg")
+        let driveA = UUID(), driveB = UUID()
+        for one in [stranded, alsoOut] { try catalog.upsertAsset(one) }
+
+        // The real shapes, which are two different strings: the part is
+        // recorded under its file name and the set id is the token inside it.
+        // The first version of this test built the path out of the set id, so
+        // it agreed with a lookup that matched nothing on a real archive — and
+        // the dialog it backs said 18,136 photos could be forgotten safely.
+        let set = "20260710T081521Z-2"
+        try catalog.upsertTakeoutArchive(archive(named: "takeout-\(set)-001.zip", set: set))
+        let part = ReplicationService.archivePartPrefix + "takeout-\(set)-001.zip"
+        try hold(catalog, stranded.id, on: driveA, path: part)
+        try hold(catalog, stranded.id, on: driveB, path: part)
+        try hold(catalog, alsoOut.id, on: driveA, path: part)
+        try hold(catalog, alsoOut.id, on: driveB, path: "cc/also-copied.jpg")
+
+        let store = makeStore(in: directory)
+        XCTAssertEqual(store.photosHeldOnlyBy(exportSetID: set), 1)
+        XCTAssertEqual(
+            store.photosHeldOnlyBy(exportSetID: "takeout-\(set)"), 0,
+            "and a set id nothing is filed under finds nothing, rather than matching by luck"
+        )
+    }
+
+    /// A download every photo of which is also copied out costs nothing to
+    /// forget, and must not be made to sound like it does.
+    func testADownloadNothingDependsOnStrandsNobody() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let one = asset("copied.jpg")
+        try catalog.upsertAsset(one)
+        try catalog.upsertTakeoutArchive(archive(named: "takeout-set-001.zip", set: "set"))
+        try hold(catalog, one.id, on: UUID(),
+                 path: ReplicationService.archivePartPrefix + "takeout-set-001.zip")
+        try hold(catalog, one.id, on: UUID(), path: "cc/copied.jpg")
+
+        let store = makeStore(in: directory)
+        XCTAssertEqual(store.photosHeldOnlyBy(exportSetID: "set"), 0)
+    }
+
+    private func archive(named name: String, set: String) -> TakeoutArchive {
+        TakeoutArchive(
+            id: UUID(), path: "/Volumes/Drive/\(name)", kind: .zip, sizeBytes: 1,
+            targetID: nil, discoveredAt: Date(), importedAt: Date(), importBatchID: nil,
+            importedAssetCount: 0, skippedDuplicateCount: 0, note: nil,
+            exportSetID: set, partNumber: 1
+        )
+    }
+}

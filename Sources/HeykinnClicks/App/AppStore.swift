@@ -1711,6 +1711,39 @@ final class AppStore: ObservableObject {
 
     // MARK: - Catalog backup
 
+    /// Photos that would have no copy anywhere if this download's files went.
+    ///
+    /// The app counts photos *inside* the Takeout files rather than copying
+    /// them out, so "stop tracking this download" is not the paperwork it
+    /// sounds like — on a real archive it would drop 18,136 photos to nowhere
+    /// while the button said "deletes nothing", which is true about files and
+    /// badly wrong about photos.
+    /// Matched against the export's own part names rather than a prefix built
+    /// from the set id, because those are two different strings: a part is
+    /// recorded as `archivepart:takeout-20260710T081521Z-2-001` while the set
+    /// id is `20260710T081521Z-2`. Constructing the prefix matched nothing, so
+    /// the count came out zero and the dialog said the download could be
+    /// forgotten safely — the one answer it must never give wrongly.
+    func photosHeldOnlyBy(exportSetID: String) -> Int {
+        let stems = Set(
+            takeoutArchives
+                .filter { $0.exportSetID == exportSetID }
+                .map { ReplicationService.archivePartPrefix + $0.displayName }
+        )
+        guard !stems.isEmpty else { return 0 }
+
+        var elsewhere: Set<UUID> = []
+        var here: Set<UUID> = []
+        for replica in replicaStates where replica.state == .present {
+            if let path = replica.relativePath, stems.contains(path) {
+                here.insert(replica.assetID)
+            } else {
+                elsewhere.insert(replica.assetID)
+            }
+        }
+        return here.subtracting(elsewhere).count
+    }
+
     /// How many photos sit on how many drives, keyed by the number of drives.
     ///
     /// The distribution rather than a total, because a total cannot say whether
@@ -5021,35 +5054,6 @@ final class AppStore: ObservableObject {
 
     /// Clears empty replica bucket directories from a connected device.
     ///
-    /// The same sweep that runs after a sync, available on demand — because
-    /// the directories already on a user's drives were left by versions that
-    /// removed files without pruning, and waiting for a sync that happens to
-    /// remove something is a long wait for a folder they can see right now.
-    ///
-    /// Removes directories only, never files, and only inside the managed
-    /// replica root. A bucket still holding a photo is left alone by
-    /// `pruneEmptyBuckets` itself, which asks the filesystem rather than the
-    /// catalog — so a replica the catalog has lost track of still protects its
-    /// directory from being removed.
-    func tidyEmptyReplicaFolders(_ targetID: UUID) {
-        guard let drive = targetsByID[targetID] else { return }
-        guard let mount = reachablePaths[targetID] else {
-            lastError = "\(drive.name) is not connected."
-            return
-        }
-        let removed = ReplicationService.pruneEmptyBuckets(drive: drive, mountURL: mount)
-        guard removed > 0 else {
-            audit(.drive, "Checked \(drive.name) for empty folders left where copies used to be; there were none.", targetID: targetID)
-            return
-        }
-        audit(
-            .drive,
-            "Removed \(Formatters.count(removed, "empty folder")) from \(drive.name), left behind where copies used to be. No files were touched.",
-            targetID: targetID
-        )
-        loadAll()
-    }
-
     /// Drops a target from the registry, freeing its slot.
     ///
     /// Nothing on the target is deleted — forgetting says what the app manages,
@@ -6073,25 +6077,6 @@ final class AppStore: ObservableObject {
             }
         }
         return summary
-    }
-
-    /// Drops queued tasks of one action for a drive. Only ever discards work
-    /// that can be re-queued on demand — never replica state or files.
-    func clearQueuedTasks(for targetID: UUID, action: ReplicationAction) {
-        let doomed = replicationTasks.filter {
-            $0.targetID == targetID && $0.state == .queued && $0.action == action
-        }
-        guard !doomed.isEmpty else { return }
-        do {
-            try catalog.transaction {
-                for task in doomed { try catalog.deleteReplicationTask(id: task.id) }
-            }
-            let targetName = targetsByID[targetID]?.name ?? "drive"
-            audit(.replication, "Cleared \(Formatters.count(doomed.count, "queued \(action.rawValue) task")) for \(targetName); they can be re-queued at any time.", targetID: targetID)
-            loadAll()
-        } catch {
-            lastError = "Could not clear queued tasks: \(error.localizedDescription)"
-        }
     }
 
     func lastCompletedSync(for targetID: UUID) -> Date? {
