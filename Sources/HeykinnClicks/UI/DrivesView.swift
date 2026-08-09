@@ -144,7 +144,11 @@ struct DrivesView: View {
                     }
                 }
                 if !store.migrationJobs.filter({ $0.state.isActive }).isEmpty {
-                    CardBox(title: "Photos on the move", systemImage: "arrow.left.arrow.right") {
+                    CardBox(
+                        title: "Photos on the move",
+                        systemImage: "arrow.left.arrow.right",
+                        help: "While a move is running its photos are in both places. Finishing it is what puts them back to one."
+                    ) {
                         MigrationsSummary()
                     }
                 }

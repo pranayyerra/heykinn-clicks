@@ -9,7 +9,7 @@ import SwiftUI
 struct StorageGroupsList: View {
     @EnvironmentObject private var store: AppStore
     @State private var editing: StorageGroup?
-    @State private var opened: StorageGroup?
+    @State private var expanded: UUID?
     @State private var renaming: StorageGroup?
     @State private var renameText = ""
     @State private var deleting: StorageGroup?
@@ -23,15 +23,20 @@ struct StorageGroupsList: View {
         // now, which is a scrolling column of cards, and "how many copies, and
         // where" is one line's remove from "where are my copies". They were two
         // destinations asking halves of the same question.
-        CardBox(title: "How many copies, and where", systemImage: "square.stack.3d.up") {
+        CardBox(
+            title: "How many copies, and where",
+            systemImage: "square.stack.3d.up",
+            help: "Each group of photos says how many copies to keep. A photo is in exactly one group."
+        ) {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Each group of photos says how many copies to keep. A photo is in exactly one group.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
             ForEach(store.storageGroups.sorted(by: { $0.createdAt < $1.createdAt })) { group in
                 Divider()
                 row(group)
+                if expanded == group.id {
+                    StorageGroupDetail(group: group)
+                        .padding(.leading, 28)
+                        .padding(.bottom, 4)
+                }
             }
             if store.storageGroups.isEmpty {
                 Text("No groups yet. One is made for you each time you add photos.")
@@ -76,7 +81,6 @@ struct StorageGroupsList: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         }
         .sheet(item: $editing) { EditStorageGroupSheet(group: $0) }
-        .sheet(item: $opened) { StorageGroupDetail(group: $0) }
         .sheet(isPresented: $placingStranded) {
             MoveToStorageGroupSheet(assetIDs: store.ungroupedAssetIDs)
         }
@@ -136,9 +140,11 @@ struct StorageGroupsList: View {
                 .font(.caption)
                 .monospacedDigit()
                 .foregroundStyle(.secondary)
-            Button("Open…") { opened = group }
-                .buttonStyle(.link)
-                .font(.caption)
+            Button(expanded == group.id ? "Close" : "Open") {
+                expanded = expanded == group.id ? nil : group.id
+            }
+            .buttonStyle(.link)
+            .font(.caption)
             Menu {
                 Button("Rename…") {
                     renameText = group.label
@@ -155,6 +161,8 @@ struct StorageGroupsList: View {
             .fixedSize()
         }
         .padding(.vertical, 2)
+        .contentShape(Rectangle())
+        .onTapGesture { expanded = expanded == group.id ? nil : group.id }
     }
 }
 

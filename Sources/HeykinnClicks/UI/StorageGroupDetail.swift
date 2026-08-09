@@ -15,7 +15,6 @@ import SwiftUI
 /// is history and cannot change; how the photos are kept is a fact about now.
 struct StorageGroupDetail: View {
     @EnvironmentObject private var store: AppStore
-    @Environment(\.dismiss) private var dismiss
 
     let group: StorageGroup
     @State private var editing = false
@@ -26,43 +25,16 @@ struct StorageGroupDetail: View {
     private var backingSets: [String] { store.exportSetIDs(backingStorageGroup: group.id) }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            header
-            Divider()
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    whereTheyAre
-                    ForEach(backingSets, id: \.self) { atStake($0) }
-                }
-                .padding(18)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            Divider()
-            HStack {
-                Spacer()
-                Button("Done") { dismiss() }
-                    .keyboardShortcut(.defaultAction)
-            }
-            .padding(12)
-        }
-        .frame(width: 520, height: 520)
-        .sheet(isPresented: $editing) { EditStorageGroupSheet(group: group) }
-    }
-
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(group.label)
-                .font(.title3)
-                .bold()
-            // Where they came from. History, and it does not change — which is
-            // exactly why it must not be read as a claim about storage.
-            Text(arrival)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+        // No header, no Done, no fixed size: this opens inside the row it
+        // belongs to. A sheet had to restate the group's name and photo count
+        // to be intelligible on its own, which put both on screen twice and
+        // covered the list somebody was reading them against.
+        VStack(alignment: .leading, spacing: 14) {
+            whereTheyAre
+            ForEach(backingSets, id: \.self) { atStake($0) }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
+        .sheet(isPresented: $editing) { EditStorageGroupSheet(group: group) }
     }
 
     /// The policy, then what is actually there, device by device.
@@ -212,14 +184,6 @@ struct StorageGroupDetail: View {
         } message: {
             Text(strandedWarning(setID))
         }
-    }
-
-    private var arrival: String {
-        let count = "\(Formatters.count(photoCount, "photo"))"
-        guard let provenance = store.provenanceSummary(forStorageGroup: group.id) else {
-            return count
-        }
-        return "\(count) · \(provenance)"
     }
 
     private func strandedWarning(_ setID: String) -> String {

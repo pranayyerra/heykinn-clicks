@@ -598,15 +598,39 @@ struct StatTile: View {
 struct CardBox<Content: View>: View {
     let title: String
     var systemImage: String?
+    /// What this card is for, behind an ⓘ rather than printed under the title.
+    /// See `SectionHeading` for why.
+    var help: String?
     var accessory: AnyView?
     @ViewBuilder let content: Content
+
+    @State private var isExplaining = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
                 Label {
-                    Text(title)
-                        .font(.headline)
+                    HStack(spacing: 6) {
+                        Text(title)
+                            .font(.headline)
+                        if let help {
+                            Button { isExplaining.toggle() } label: {
+                                Image(systemName: "info.circle")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                            }
+                            .buttonStyle(.plain)
+                            .help(help)
+                            .accessibilityLabel("What \(title) means")
+                            .popover(isPresented: $isExplaining, arrowEdge: .bottom) {
+                                Text(help)
+                                    .font(.callout)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                    .frame(width: 320, alignment: .leading)
+                                    .padding(14)
+                            }
+                        }
+                    }
                 } icon: {
                     if let systemImage {
                         Image(systemName: systemImage)

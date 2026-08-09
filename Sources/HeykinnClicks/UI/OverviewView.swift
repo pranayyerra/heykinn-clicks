@@ -589,7 +589,11 @@ struct OverviewView: View {
     }
 
     private var residencyCard: some View {
-        CardBox(title: "Where your photos live", systemImage: "map") {
+        CardBox(
+            title: "Where your photos live",
+            systemImage: "map",
+            help: "Every photo lives in exactly one place. Move them between places from Keep safe."
+        ) {
             VStack(alignment: .leading, spacing: 10) {
                 if occupiedResidencySegments.count < 2 {
                     if let only = occupiedResidencySegments.first {
@@ -622,7 +626,7 @@ struct OverviewView: View {
                         Spacer()
                     }
                 }
-                Text("Every photo lives in exactly one place. Move them between places from Keep safe.")
+                EmptyView()
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }

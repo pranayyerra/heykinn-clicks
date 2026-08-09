@@ -209,8 +209,8 @@ struct SourcesView: View {
             HStack(spacing: 10) {
                 Image(systemName: source.symbol)
                     .foregroundStyle(source.isSet ? source.tint : Color.secondary)
-                Text(source.name)
-                    .font(.headline)
+                SectionHeading(source.name, help: Self.explanation(for: source.id))
+                    .fixedSize()
                 Spacer(minLength: 0)
                 Button {
                     toggle(source.id)
@@ -392,14 +392,28 @@ struct SourcesView: View {
             }
         } else {
             VStack(alignment: .leading, spacing: 10) {
-                Text("Google splits one download into several large .zip files. Each block below is one of them — click one to see which drive holds it, as the .zip or unpacked into a folder.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
                 ForEach(exports) { export in
                     ExportCard(export: export, importRequest: $importRequest)
                 }
             }
+        }
+    }
+
+    /// What each way in is, for the ⓘ beside its name.
+    ///
+    /// Only for a section with something in it. Where a section is *empty*
+    /// these words are not furniture, they are the entire content — "None
+    /// found yet" followed by nothing would be a screen that has stopped
+    /// talking to somebody who has not started yet — so the empty states keep
+    /// their prose where it is.
+    static func explanation(for sourceID: String) -> String {
+        switch sourceID {
+        case "apple":
+            return "The Photos library on this Mac. Connecting lets the app look through it, spot the photos this archive already has, and copy in the ones it is missing. It reads the library and never changes it."
+        case "google":
+            return "Google splits one download into several large .zip files. Each block is one of them — click one to see which drive holds it, as the .zip or unpacked into a folder."
+        default:
+            return "An old backup, a memory card, a Downloads folder — anywhere photos and videos are sitting loose. The app copies them into the archive and leaves the folder exactly as it found it."
         }
     }
 

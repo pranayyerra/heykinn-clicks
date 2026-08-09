@@ -288,7 +288,7 @@ struct MigrationsSummary: View {
                         .foregroundStyle(.secondary)
                 }
             }
-            Text("While a move is running its photos are in both places. Finishing it is what puts them back to one.")
+            EmptyView()
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
