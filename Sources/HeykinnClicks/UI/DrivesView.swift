@@ -127,18 +127,10 @@ struct DrivesView: View {
                     places: places,
                     selection: $selectedPlace,
                     onActivateEmpty: activate
-                )
-
-                // Detail lives under the list rather than in the row: a row has
-                // room for a name, its holdings and a state, not for capacity,
-                // progress and the controls that act on them.
-                if let target = selectedTarget {
-                    DriveCard(drive: target, onForget: { targetToForget = target })
-                } else if !store.targets.isEmpty {
-                    Text("Click a drive above for its detail and controls.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                ) { place in
+                    if let target = place.target {
+                        DriveCard(drive: target, onForget: { targetToForget = target })
+                    }
                 }
 
                 // Both of these are answers to "is it safe", and both are

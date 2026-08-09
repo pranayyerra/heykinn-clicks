@@ -166,16 +166,16 @@ struct SourcesView: View {
                     sources: flowSources,
                     opened: expanded,
                     onSelect: { toggle($0.id) }
-                )
+                ) { source in
+                    // Inside the row, not under the list. Three lists on three
+                    // screens now open the same way, and none of them has to
+                    // repeat a name to say which thing it is describing.
+                    detailPanel(source)
+                }
                 .padding(.vertical, 4)
 
                 if let activity = store.takeoutActivity {
                     TakeoutActivityBanner(activity: activity)
-                }
-
-                // Opened detail, directly under the thing it belongs to.
-                ForEach(flowSources.filter { expanded.contains($0.id) }) { source in
-                    detailPanel(source)
                 }
             }
             .padding(20)

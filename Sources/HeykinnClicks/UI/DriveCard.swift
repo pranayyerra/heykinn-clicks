@@ -57,14 +57,17 @@ struct DriveCard: View {
         }
     }
 
+    /// The drive's state, without its name.
+    ///
+    /// The card opens inside the row that names it, so repeating the name puts
+    /// it on screen twice a line apart. What the row cannot say — releasing,
+    /// in use, safe to eject — is what is left.
     private var header: some View {
         HStack(alignment: .top, spacing: 10) {
             Image(systemName: isConnected ? "externaldrive.fill.badge.checkmark" : "externaldrive.badge.xmark")
                 .font(.title2)
                 .foregroundStyle(isConnected ? Color.green : Color.secondary)
             VStack(alignment: .leading, spacing: 2) {
-                Text(drive.name)
-                    .font(.headline)
                 if isConnected {
                     if store.isQuiescing(drive.id) {
                         statusLine("Releasing…", symbol: "hourglass", tint: .orange)

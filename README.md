@@ -22,10 +22,12 @@ authority for metadata, residency, duplicate state, policies, migration jobs,
 the target registry, per-target backlog, protection state, and audit history.
 Nothing about system state depends on a target being attached.
 
-**Local is a logical domain held by replication targets.** A target is a
-device: either **this machine** (a folder on its own disk) or an **external
-volume**. Register as many as you like; any number may be reachable at once,
-from none to all.
+**Local is a logical domain held by registered devices.** A device is either
+**this machine** (a folder on its own disk) or an **external volume**. Both hold
+real copies, verified the same way; automatic placement prefers external volumes
+because a boot disk rarely has room for a whole archive, not because a copy on
+this Mac is worth less. Register as many as you like; any number may be
+reachable at once, from none to all.
 
 **You decide where each source lives.** A **source** is each thing you added —
 one folder, one Google export, one Apple Photos import. It carries its own
@@ -84,7 +86,7 @@ state: `StagedOnly` → `ReplicatedToOneDrive` → `AwaitingFirstCheck` →
 hash), `VerificationOverdue` (replica integrity not re-checked recently) and
 `NotApplicable` (asset is not Local-resident). `AwaitingFirstCheck` means the
 copies exist but none has been read back — it satisfies what the asset's
-source asks for, and is deliberately distinct from a check that has gone stale. An asset can
+group asks for, and is deliberately distinct from a check that has gone stale. An asset can
 validly be residency=Local, protection=ReplicatedToOneDrive, present on Drive A,
 pending on Drive B — the model represents that directly.
 
@@ -163,7 +165,7 @@ Sources/HeykinnClicks/
 │   ├── TargetMonitor.swift      volume enumeration, marker identity, mount notifications
 │   ├── AccessGrants.swift       remembered per-volume decisions + security-scoped
 │   │                            bookmarks; the store behind ⌘, → Access
-│   ├── PlacementPlanner.swift   places copies on the devices a source names;
+│   ├── PlacementPlanner.swift   places copies on the devices a group names;
 │   │                            free space validates, never chooses
 │   ├── ReplicationService.swift copy/verify/remove backlog execution (hash-verified,
 │   │                            temp-file + atomic rename; interruption-safe)

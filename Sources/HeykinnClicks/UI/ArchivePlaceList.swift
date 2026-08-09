@@ -52,16 +52,25 @@ struct ArchivePlace: Identifiable {
 /// rather than three archives — and then had nowhere to put what each place
 /// actually holds, which is the question the screen exists to answer. A spoke
 /// has room for a name and a state; a row has room for the numbers.
-struct ArchivePlaceList: View {
+struct ArchivePlaceList<Detail: View>: View {
     var places: [ArchivePlace]
     @Binding var selection: UUID?
     var onActivateEmpty: (ArchivePlace) -> Void
+    /// What a place shows when it is opened, drawn inside the row rather than
+    /// under the list. The same pattern the groups use: the row is the header,
+    /// so the detail does not have to repeat the name to make sense.
+    @ViewBuilder var detail: (ArchivePlace) -> Detail
 
     var body: some View {
         VStack(spacing: 0) {
             ForEach(Array(places.enumerated()), id: \.element.id) { index, place in
                 if index > 0 { Divider() }
                 row(place)
+                if selection == place.id {
+                    detail(place)
+                        .padding(.horizontal, 12)
+                        .padding(.bottom, 10)
+                }
             }
         }
         .background(.quaternary.opacity(0.4), in: RoundedRectangle(cornerRadius: 10))
@@ -70,7 +79,14 @@ struct ArchivePlaceList: View {
     @ViewBuilder
     private func row(_ place: ArchivePlace) -> some View {
         Button {
-            if place.target == nil { onActivateEmpty(place) } else { selection = place.id }
+            if place.target == nil {
+                onActivateEmpty(place)
+            } else {
+                // Toggles. A row that opens and will not close is a row that
+                // has to be closed by opening something else, which is not
+                // closing it — it is moving the problem.
+                selection = selection == place.id ? nil : place.id
+            }
         } label: {
             HStack(alignment: .firstTextBaseline, spacing: 10) {
                 Image(systemName: place.symbol)

@@ -15,8 +15,9 @@ One person's lifetime photo and video archive, owned outright.
 - Every asset lives in **exactly one deliberate place** — the Local domain
   (the user's own devices) or a chosen cloud — and the app can **prove**
   where, never assume it.
-- Local content is held as **as many verified copies as its source asks for**,
-  on the devices that source names, so no single device failing, decaying, or
+- Local content is held as **as many verified copies as its group asks for**,
+  on the devices that group names — worked out from the registered drives, or
+  chosen — so no single device failing, decaying, or
   going missing takes the archive with it — and damage is found before the
   content is needed.
 - Once account connectors exist, the app **verifies cloud presence itself**,
@@ -127,7 +128,7 @@ Shipped and tested; the pointers are where to look.
   devices; assets link to it. An export's row is identified by its **set id**
   — the timestamp Google stamps across every part of one download — rather than
   by a path, because its zips can sit on three drives with unpacked folders
-  beside them and all of that is one export. The three nodes on the Sources screen are
+  beside them and all of that is one export. The three rows on Add photos are
   groupings of these, not stand-ins for them: `Domain/Source.swift`.
 
   Adding one asks — a sheet, prefilled with the previous answer, so the tenth
@@ -135,8 +136,10 @@ Shipped and tested; the pointers are where to look.
   Nothing imports before it is answered, because placement without a
   destination is the app guessing.
 
-- **Placement follows the source's destinations** — copies go to the devices
-  the source names, in the number it asks for. Free space is *validation*, not
+- **Placement follows the group's destinations** — copies go to the devices
+  the group names, in the number it asks for. A group either works its devices
+  out from the registered drives or has them chosen; either way the list is the
+  group's, never a source's. Free space is *validation*, not
   policy: a destination without room produces a reported shortfall, never a
   silent substitution onto some other device. A destination that already holds
   the source's own files counts there in place and is sent nothing:
@@ -269,8 +272,8 @@ Apple frameworks only — zero third-party dependencies.
    The one exception is a stop-gap and is treated as one: a photo in *no* group
    follows the add-sheet defaults, because placing nothing would stop protecting
    content that was protected yesterday. That state is reachable (an import
-   through no source flow names no group), so it is surfaced on the Policies
-   screen and fixable there — never left as a silent answer nobody can see.
+   through no source flow names no group), so it is surfaced under Keep safe
+   and fixable there — never left as a silent answer nobody can see.
 
    **There is no archive-wide copy count.** Not as a policy, and not as a
    default that binds anything: the only surviving global is
@@ -379,7 +382,7 @@ and reclamation from Google stays a manual act the app can only guide.
 5. **Reclamation (Apple).** Proven local redundancy automatically releases the
    cloud copy — no prompt, no per-asset confirmation. The preconditions *are*
    the safety mechanism: Local residency; as many copies on targets (not
-   staging) as the asset's source asks for; every copy read back and matched at
+   staging) as the asset's group asks for; every copy read back and matched at
    least once; the provider confirming the same content immediately before
    release. **The read-only half of this has shipped**: the app computes and
    displays what it would release, and what is holding the rest up, and removes
@@ -640,7 +643,32 @@ Earned against a real 248 GB archive; the stories are in git history.
     forgetting a Takeout download counted the photos that would be left with no
     copy — and built its lookup from the export's set id while replicas record
     the part's file name. Nothing matched, so it reported zero and said the
-    download could be forgotten safely, on an archive where 18,136 photos live
+    download could be forgotten safely, on an archive where 24,618 photos live
     only inside it. The test agreed, because it had been written from the same
     assumption. When a number exists to stop somebody, check it against the
     real shape and assert that the wrong shape finds nothing.
+
+53. One decision, one rule, wherever it is applied. The device picker counted
+    devices and the screen that judges the result counted drives, so choosing a
+    drive and this Mac satisfied "two copies" in silence and came back as an
+    orange warning. The app let somebody build the arrangement it goes on to
+    complain about. Wherever a choice is made and wherever its result is
+    judged, the same question has to be asked the same way — and the place to
+    say something is where the choice is made, not only afterwards.
+
+54. Check the slogan against the code. "This Mac is the machine your drives
+    exist to survive" sounded like a reason and was used as one, to discount a
+    copy on the host and to warn somebody off choosing it. It does not survive
+    reading: a copy on a registered host target is written to the same replica
+    root, verified the same way, and removed only when a group stops naming it
+    — `reclaimStaging` frees the staging area, never a target's replicas. If
+    the Mac dies, a photo on it and on a drive still has the drive. Automatic
+    placement still prefers drives, for the reason that is true: a boot disk
+    rarely has room. A sensible default is not the same claim as a lesser copy.
+
+55. A test written from the code's assumption confirms the assumption. Four
+    times in one day: the truncated content hash, the export set id, the
+    `zipmember:` prefix, and the host-is-not-a-place split. Each had a passing
+    test asserting exactly what the code already believed. A test earns its
+    keep by being written from the *shape of the real data* — which means
+    looking at the data — or by asserting that the wrong shape finds nothing.

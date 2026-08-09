@@ -66,18 +66,23 @@ struct PhotoSource: Identifiable {
 /// the same thing"; direction is the whole point here, and a ring cannot show
 /// it. A source that is not set up is drawn anyway, faint — a place the archive
 /// is not being fed from is exactly what someone scanning this needs to see.
-struct SourceFlowView: View {
+struct SourceFlowView<Detail: View>: View {
     let sources: [PhotoSource]
     /// Sources whose detail is showing, so a node can say it is the one open
     /// rather than leaving the reader to match a panel to a box by position.
     var opened: Set<String> = []
     var onSelect: (PhotoSource) -> Void
+    /// Drawn inside the row it belongs to, like the places and the groups.
+    @ViewBuilder var detail: (PhotoSource) -> Detail
 
     var body: some View {
         HStack(alignment: .center, spacing: 0) {
             VStack(spacing: 8) {
                 ForEach(sources) { source in
                     node(source)
+                    if opened.contains(source.id) {
+                        detail(source)
+                    }
                 }
             }
             .frame(maxWidth: .infinity)
