@@ -9,6 +9,9 @@ import SwiftUI
 /// want to know from a list of duplicates — how much of the drive they are
 /// costing — was not on the screen at all.
 struct DuplicatesView: View {
+    /// Owned by `ContentView`, so leaving this page closes the photo it had
+    /// open. See `ContentView.detailPath`.
+    @Binding var path: [UUID]
     @EnvironmentObject private var store: AppStore
 
     /// Bytes held more than once: every copy after the first, in every group.
@@ -34,7 +37,7 @@ struct DuplicatesView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group {
                 if store.duplicateGroups.isEmpty {
                     ContentUnavailableView(

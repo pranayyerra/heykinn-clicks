@@ -187,6 +187,20 @@ struct ContentView: View {
     /// In-session only: this is a convenience within a sitting, not a setting.
     @State private var lastPage: [Question: SidebarSection] = [:]
 
+    /// The photo a grid has pushed to, owned here rather than inside each grid.
+    ///
+    /// Three screens open an asset — the Library, Duplicates and Violations —
+    /// and each had its own `NavigationStack` with a path SwiftUI keeps. Inside
+    /// a split view's detail column that path outlives the column's content: a
+    /// photo pushed from the Library stayed on screen while the sidebar moved
+    /// to Overview, so the two halves of the window disagreed and the only way
+    /// back was the chevron the reader had already stopped looking at.
+    ///
+    /// Hoisted so there is one path and one place that clears it. A shared path
+    /// is also the truthful shape — there is one detail column, so there is one
+    /// thing pushed into it.
+    @State private var detailPath: [UUID] = []
+
     private var page: SidebarSection {
         SidebarSection(rawValue: storedPage) ?? .overview
     }
@@ -197,6 +211,9 @@ struct ContentView: View {
             set: { newPage in
                 storedPage = newPage.rawValue
                 lastPage[newPage.question] = newPage
+                // Leaving a page closes what it had open. Every route into a
+                // photo goes through here, including the menu bar's.
+                detailPath.removeAll()
             }
         )
     }
@@ -368,10 +385,10 @@ struct ContentView: View {
                 get: { page },
                 set: { if let destination = $0 { pageSelection.wrappedValue = destination } }
             ))
-        case .library: LibraryView()
-        case .duplicates: DuplicatesView()
+        case .library: LibraryView(path: $detailPath)
+        case .duplicates: DuplicatesView(path: $detailPath)
         case .targets: DrivesView()
-        case .violations: ViolationsView()
+        case .violations: ViolationsView(path: $detailPath)
         case .migrations: MigrationsView()
         case .takeout: SourcesView()
         case .activity: ActivityView()

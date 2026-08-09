@@ -1,6 +1,9 @@
 import SwiftUI
 
 struct LibraryView: View {
+    /// Owned by `ContentView`, so leaving this page closes the photo it had
+    /// open. See `ContentView.detailPath`.
+    @Binding var path: [UUID]
     @EnvironmentObject private var store: AppStore
     @State private var searchText = ""
     @State private var residencyFilter: ResidencyDomain?
@@ -87,7 +90,7 @@ struct LibraryView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             ScrollView {
                 LazyVStack(alignment: .leading, spacing: 16, pinnedViews: [.sectionHeaders]) {
                     albumHeader

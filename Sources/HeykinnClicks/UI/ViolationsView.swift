@@ -8,6 +8,9 @@ import SwiftUI
 /// to learn one thing, and the only affordance was "Show asset", twenty-five
 /// times. Grouping says the thing once, with the count, and opens on demand.
 struct ViolationsView: View {
+    /// Owned by `ContentView`, so leaving this page closes the photo it had
+    /// open. See `ContentView.detailPath`.
+    @Binding var path: [UUID]
     @EnvironmentObject private var store: AppStore
     @State private var expanded: Set<ViolationKind> = []
 
@@ -24,7 +27,7 @@ struct ViolationsView: View {
     }
 
     var body: some View {
-        NavigationStack {
+        NavigationStack(path: $path) {
             Group_ {
                 if store.violations.isEmpty {
                     ContentUnavailableView(
@@ -162,6 +165,9 @@ extension ViolationKind {
 struct ViolationsSummary: View {
     @EnvironmentObject private var store: AppStore
     @State private var isPresented = false
+    /// This one is a sheet, not the detail column, so it keeps its own path —
+    /// there is no sidebar behind it to disagree with.
+    @State private var path: [UUID] = []
 
     var body: some View {
         let byKind = Dictionary(grouping: store.violations, by: \.kind)
@@ -187,7 +193,7 @@ struct ViolationsSummary: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .sheet(isPresented: $isPresented) {
             NavigationStack {
-                ViolationsView()
+                ViolationsView(path: $path)
                     .frame(minWidth: 620, minHeight: 460)
                     .toolbar {
                         ToolbarItem(placement: .confirmationAction) {
