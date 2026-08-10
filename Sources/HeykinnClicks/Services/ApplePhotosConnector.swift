@@ -65,6 +65,19 @@ final class ApplePhotosVerifier: CloudDomainVerifier {
         return connectionState
     }
 
+    /// Opens the pane rather than describing where it is.
+    ///
+    /// "System Settings → Privacy & Security → Photos" is four steps and a
+    /// scroll, and it is being read by somebody who has just been told no by
+    /// software they are trying to trust. macOS will not let an app grant
+    /// itself anything, but taking someone to the switch is free.
+    static func openPrivacySettings() {
+        guard let url = URL(
+            string: "x-apple.systempreferences:com.apple.preference.security?Privacy_Photos"
+        ) else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     /// How many assets the connected library actually holds.
     ///
     /// Authorisation is not availability. A library that lives on a drive that

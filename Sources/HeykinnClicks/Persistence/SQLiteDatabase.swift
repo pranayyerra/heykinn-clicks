@@ -72,6 +72,29 @@ final class SQLiteDatabase {
         sqlite3_close_v2(handle)
     }
 
+    /// Folds the write-ahead log back into the database file itself.
+    ///
+    /// Must happen before the file is moved or copied. In WAL mode a committed
+    /// transaction can still be living in `-wal`, so a copy of the database
+    /// taken without it is missing the most recent work — and for the copy kept
+    /// as the way back from a restore, that is precisely the work somebody
+    /// would be trying to recover.
+    func checkpoint() {
+        try? exec("PRAGMA wal_checkpoint(TRUNCATE);")
+    }
+
+    /// Closes the connection and lets go of the file.
+    ///
+    /// Needed because restoring a snapshot replaces the database on disk, and
+    /// SQLite holds its file open: swapping it underneath a live handle leaves
+    /// the process reading a file that no longer has a name. Idempotent —
+    /// `sqlite3_close_v2` on a null handle is a no-op, so `deinit` after this
+    /// is harmless.
+    func close() {
+        sqlite3_close_v2(handle)
+        handle = nil
+    }
+
     private var lastError: String {
         handle.map { String(cString: sqlite3_errmsg($0)) } ?? "unknown"
     }

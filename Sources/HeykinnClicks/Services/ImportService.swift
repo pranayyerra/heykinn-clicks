@@ -65,6 +65,38 @@ enum ImportService {
         "Staging", "TakeoutWork", ".Trashes", ".Spotlight-V100",
     ]
 
+    /// Bytes this sweep would actually have to write into staging.
+    ///
+    /// Deliberately not the folder's size. A file the archive already holds is
+    /// recognised by its `stat` against the scan memo and never copied, and
+    /// re-sweeping a folder that has already been imported is an ordinary
+    /// thing to do — the memo exists precisely to make it cheap. Counting
+    /// those bytes would refuse the one import guaranteed to need no room at
+    /// all.
+    ///
+    /// The estimate errs high on purpose. A memo entry whose file has since
+    /// changed, or one whose hash the catalog no longer holds, is counted in
+    /// full: over-reserving costs somebody a message they could have ignored,
+    /// while under-reserving fills the disk, which is the failure this is here
+    /// to prevent.
+    static func stagingBytesNeeded(
+        for fileURLs: [URL],
+        scanMemo: [String: ScanMemoEntry],
+        knownHashes: Set<String>
+    ) -> Int64 {
+        var total: Int64 = 0
+        for fileURL in fileURLs {
+            guard let observation = ReplicaStatGate.observe(fileURL) else { continue }
+            if let remembered = scanMemo[fileURL.path],
+               remembered.matches(observation),
+               knownHashes.contains(remembered.contentHash) {
+                continue
+            }
+            total += observation.size
+        }
+        return total
+    }
+
     /// `skippingExports` leaves Google exports found inside the tree alone.
     /// A folder sweep sets it: an export is brought in by machinery that keeps
     /// it whole, and reading one loose would turn a handful of files into tens

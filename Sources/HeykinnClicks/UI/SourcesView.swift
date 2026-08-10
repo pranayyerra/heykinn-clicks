@@ -41,7 +41,8 @@ struct SourcesView: View {
     }
 
     private var applePhotosSource: PhotoSource {
-        let indexed = store.assets.filter { $0.providerLocalID != nil }.count
+        // Counted once per catalog change in the store, not per redraw here.
+        let indexed = store.applePhotosIndexedCount
         let library = store.applePhotosLibraryCount
         let state: PhotoSource.State
         switch store.applePhotosState {
@@ -290,9 +291,43 @@ struct SourcesView: View {
                     // is a choice nobody has to make.
                 }
             case .denied:
-                Label("macOS is blocking access. Allow it in System Settings → Privacy & Security → Photos, then reopen the app.", systemImage: "xmark.circle")
+                VStack(alignment: .leading, spacing: 8) {
+                    Label(
+                        store.applePhotosIndexedCount > 0
+                            ? "macOS no longer recognises this app's permission, so it refused without asking. This happens when the app is updated or re-signed — the switch below will not have it listed."
+                            : "macOS is blocking access to your Photos library.",
+                        systemImage: "xmark.circle"
+                    )
                     .font(.callout)
                     .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                    if store.applePhotosIndexedCount > 0 {
+                        // The command, on screen and selectable, rather than a
+                        // sentence telling somebody to go and find out what to
+                        // type. Nothing here can run it for them: an app that
+                        // could clear its own privacy refusals would be a
+                        // reason not to trust any of them.
+                        Text("Run this in Terminal, then reopen the app:")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                        Text("tccutil reset Photos \(Bundle.main.bundleIdentifier ?? "com.heykinn.HeykinnClicks")")
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                            .padding(6)
+                            .background(Color.secondary.opacity(0.10), in: RoundedRectangle(cornerRadius: 6))
+                    }
+
+                    HStack(spacing: 8) {
+                        Button("Open Photos settings") {
+                            ApplePhotosVerifier.openPrivacySettings()
+                        }
+                        Button("Try again") {
+                            Task { await store.connectApplePhotos() }
+                        }
+                    }
+                    .font(.callout)
+                }
             case .unavailable(let reason):
                 Label(reason, systemImage: "exclamationmark.triangle")
                     .font(.callout)
@@ -304,7 +339,7 @@ struct SourcesView: View {
     @ViewBuilder
     private var connectedApplePhotos: some View {
         let awaiting = store.applePhotosAwaitingImport.count
-        let indexed = store.assets.filter { $0.providerLocalID != nil }.count
+        let indexed = store.applePhotosIndexedCount
 
         VStack(alignment: .leading, spacing: 10) {
             Text(appleHeadline(indexed: indexed, awaiting: awaiting))

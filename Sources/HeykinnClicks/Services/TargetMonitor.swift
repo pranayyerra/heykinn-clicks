@@ -62,8 +62,11 @@ final class TargetMonitor: ObservableObject {
         reachablePaths = paths
     }
 
-    func rescan(targets: [ReplicationTarget]) {
-        apply(volumes: Self.enumerateVolumes(), targets: targets)
+    /// `bookmarked` is where each registered device's bookmark says it is, for
+    /// the devices that have one. Supplied by the caller rather than resolved
+    /// here so this type keeps knowing nothing about permissions.
+    func rescan(targets: [ReplicationTarget], bookmarked: [UUID: URL] = [:]) {
+        apply(volumes: Self.enumerateVolumes(), targets: targets, bookmarked: bookmarked)
     }
 
     /// The same scan with the slow half moved off the main thread.
@@ -77,14 +80,18 @@ final class TargetMonitor: ObservableObject {
     ///
     /// Only the enumeration moves. Matching volumes to targets and publishing
     /// the result stay on the main actor, because they touch published state.
-    func rescanOffMainThread(targets: [ReplicationTarget]) async {
+    func rescanOffMainThread(targets: [ReplicationTarget], bookmarked: [UUID: URL] = [:]) async {
         let volumes = await Task.detached(priority: .userInitiated) {
             Self.enumerateVolumes()
         }.value
-        apply(volumes: volumes, targets: targets)
+        apply(volumes: volumes, targets: targets, bookmarked: bookmarked)
     }
 
-    private func apply(volumes: [VolumeInfo], targets: [ReplicationTarget]) {
+    private func apply(
+        volumes: [VolumeInfo],
+        targets: [ReplicationTarget],
+        bookmarked: [UUID: URL] = [:]
+    ) {
         availableVolumes = volumes
 
         var reachable: [UUID: URL] = [:]
@@ -99,6 +106,25 @@ final class TargetMonitor: ObservableObject {
             if let url = Self.resolveFolder(target) {
                 reachable[target.id] = url
             }
+        }
+
+        // Devices the sweep did not find, but whose bookmark resolves.
+        //
+        // Sandboxed this is the only way a drive is ever found, because walking
+        // the mounted volumes and reading each root is precisely what is not
+        // allowed. Unsandboxed it is a second opinion, and a cheap one.
+        //
+        // The marker is still what settles identity. A bookmark is permission
+        // to look, and it can resolve onto a disk that has since been
+        // reformatted, replaced, or is simply a different volume mounted where
+        // the old one was — so the token has to agree before this archive
+        // treats the place as its own and starts writing replicas into it.
+        for (targetID, url) in bookmarked where reachable[targetID] == nil {
+            guard let target = targets.first(where: { $0.id == targetID }),
+                  let marker = Self.readMarker(at: url),
+                  marker.markerToken == target.markerToken
+            else { continue }
+            reachable[targetID] = url
         }
 
         // A busy volume can transiently fail metadata reads (heavy I/O on

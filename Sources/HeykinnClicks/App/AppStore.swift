@@ -43,6 +43,11 @@ final class AppStore: ObservableObject {
     /// decide whether to draw the badge at all, and both asked it once per row
     /// of a walk of the whole archive.
     @Published private(set) var residencyIsUniform: Bool = true
+    /// Photographs the archive learned about from a provider's library rather
+    /// than from a file it was given. Non-zero means Photos has been connected
+    /// at some point, which is what tells a first refusal apart from a
+    /// permission that used to work.
+    @Published private(set) var applePhotosIndexedCount: Int = 0
     /// A Merkle tree per target over what the catalog records it holding, so
     /// "do these two targets agree?" costs one comparison instead of a sweep.
     /// The few directories a target's recorded paths hang from.
@@ -57,6 +62,18 @@ final class AppStore: ObservableObject {
     @Published var isImporting = false
     @Published private(set) var takeoutActivity: TakeoutActivity?
     @Published var lastError: String?
+    /// Another copy of this app has this archive open.
+    ///
+    /// Both builds share one archive on purpose, so two of them can now be
+    /// pointed at the same catalog — which anybody publishing both will do.
+    /// Every screen is drawn from state held in memory and written back whole,
+    /// so a second instance does not corrupt the database; it silently
+    /// overwrites whatever the first one did. The app refuses rather than
+    /// running as the losing half of that.
+    @Published private(set) var archiveIsHeldByAnotherInstance = false
+    /// Held for the process's lifetime. The kernel gives it back on exit,
+    /// including on a crash, so there is no stale lock to clear.
+    private var archiveLock: ArchiveLock?
     /// Whether a staged copy is released once the archive's own drives hold
     /// the content safely. On, because staging is transit and the alternative
     /// is a permanent second copy of everything on the boot disk that nothing
@@ -127,6 +144,11 @@ final class AppStore: ObservableObject {
     /// `ignoredVolumeKeys`, which could only say "stop asking" and had no way
     /// back — see `Services/AccessGrants.swift`.
     let accessGrants: AccessGrants
+    /// Permission to reach each registered device, as against `accessGrants`,
+    /// which remembers what the user decided about volumes they were *asked*
+    /// about. Per-machine and kept out of the catalog — see
+    /// `Services/TargetBookmarks.swift`.
+    let targetBookmarks: TargetBookmarks
 
     /// Each thing the user added, with its own copy count and destinations.
     @Published private(set) var sources: [PhotoArchiveSource] = []
@@ -371,6 +393,7 @@ final class AppStore: ObservableObject {
         let grants = AccessGrants(defaults: environment.defaults)
         accessGrants = grants
         accessGrantList = grants.grants
+        targetBookmarks = TargetBookmarks(defaults: environment.defaults)
         staging = StagingStore(rootURL: appDirectory.appendingPathComponent("Staging", isDirectory: true))
         relay = ExportPartRelay(rootURL: appDirectory.appendingPathComponent("ExportPartRelay", isDirectory: true))
         targetMonitor = TargetMonitor()
@@ -449,11 +472,27 @@ final class AppStore: ObservableObject {
         // is exactly what it must not do.
         guard environment.runsBackgroundWork else { return }
 
+        // Before anything reads or writes the archive, and before any drive is
+        // touched. A test drives its own temporary directory and skips all of
+        // this via `runsBackgroundWork`, which is also what stops a suite
+        // locking itself out of its own fixtures.
+        archiveLock = ArchiveLock(directory: appDirectory)
+        if archiveLock == nil {
+            archiveIsHeldByAnotherInstance = true
+            return
+        }
+
         // Before the first sweep, so a disk that is already attached is
         // readable without the user re-granting anything. Failures here are
         // silent by design — the usual reason a bookmark will not resolve is
         // that its disk is simply not plugged in.
+        reportArchiveLocation()
         accessGrants.resumeAccess()
+        // And the registered devices, for the same reason and before the same
+        // sweep. Sandboxed this is what makes an already-attached drive
+        // readable at all; unsandboxed it costs a resolve per device and saves
+        // the sweep from being the only way one is found.
+        targetBookmarks.resumeAccess()
         adoptHostDeviceIfNeeded()
         // After host adoption, so a first launch has a device to read
         // destinations from, and before the first placement audit, which needs
@@ -2274,6 +2313,92 @@ final class AppStore: ObservableObject {
         catalogSnapshots.values.flatMap { $0 }.max { $0.createdAt < $1.createdAt }
     }
 
+    // MARK: - Catalog restore
+
+    /// A snapshot offered as a way back, with what it turns out to hold.
+    ///
+    /// The count matters more than the date. Two snapshots an hour apart are
+    /// the same decision; one holding 24,000 assets and one holding 900 are
+    /// not, and the second is what a catalog going wrong looks like from the
+    /// outside.
+    struct RestorableSnapshot: Identifiable {
+        var snapshot: CatalogSnapshot
+        var contents: CatalogBackupService.SnapshotContents
+        var driveName: String
+        var id: String { snapshot.id }
+    }
+
+    /// Every readable snapshot on every connected drive, newest first.
+    ///
+    /// Asked for on demand rather than published: this opens each database to
+    /// count its rows, which is not something to do on every catalog change.
+    /// The only moment the answer matters is when somebody is choosing.
+    /// Unreadable snapshots are dropped rather than listed and disabled —
+    /// offering a way back that is not one is worse than not offering it.
+    func restorableSnapshots() -> [RestorableSnapshot] {
+        var found: [RestorableSnapshot] = []
+        for (targetID, mountURL) in reachablePaths {
+            let name = targetsByID[targetID]?.name ?? "drive"
+            for snapshot in CatalogBackupService.listSnapshots(onMount: mountURL, targetID: targetID) {
+                guard let contents = CatalogBackupService.contents(ofSnapshotAt: snapshot.url) else { continue }
+                found.append(RestorableSnapshot(snapshot: snapshot, contents: contents, driveName: name))
+            }
+        }
+        return found.sorted { $0.snapshot.createdAt > $1.snapshot.createdAt }
+    }
+
+    /// Whether a restore can be started right now.
+    ///
+    /// Refused while work is in flight: a sync, an import or an extraction is
+    /// writing rows into the catalog that is about to be replaced, and the
+    /// half of them that landed after the snapshot would describe files the
+    /// restored catalog has never heard of.
+    var catalogRestoreBlocker: String? {
+        if isSyncing { return "a sync is running" }
+        if isImporting { return "an import is running" }
+        if takeoutActivity != nil { return "a Google export is being worked on" }
+        if isImportingFromApplePhotos { return "a Photos import is running" }
+        return nil
+    }
+
+    /// Replaces the live catalog with a snapshot, keeping the outgoing one.
+    ///
+    /// This is the read half of a backup that has only ever been written. The
+    /// snapshot is re-read and checked immediately before the swap rather than
+    /// trusting the listing — it lives on a removable drive, and the gap
+    /// between choosing it and restoring it is long enough for the drive to
+    /// have gone away.
+    ///
+    /// Nothing on any drive is touched. This changes what the app knows about
+    /// the photos, never the photos.
+    func restoreCatalog(from snapshot: CatalogSnapshot) {
+        if let blocker = catalogRestoreBlocker {
+            lastError = "Not restoring the catalog while \(blocker). Let it finish, then try again."
+            return
+        }
+        guard let contents = CatalogBackupService.contents(ofSnapshotAt: snapshot.url) else {
+            lastError = "\(snapshot.displayName) could not be read back just now. If its drive was unplugged, reconnect it; otherwise that snapshot is damaged and is not a way back."
+            return
+        }
+
+        let replacedAssetCount = assets.count
+        do {
+            let keptAside = try catalog.replaceContents(withDatabaseAt: snapshot.url)
+            loadAll()
+            refreshCatalogSnapshots()
+            // Written into the restored catalog, which is where somebody
+            // looking for "why does this say something different" will look.
+            audit(
+                .system,
+                "Catalog restored from \(snapshot.displayName) (\(Formatters.count(contents.assetCount, "asset")), \(contents.tablesWithRows) kinds of record). "
+                    + "The catalog it replaced held \(Formatters.count(replacedAssetCount, "asset")) and was kept at \(keptAside.lastPathComponent) rather than deleted. "
+                    + "Nothing on any drive was changed; each drive's copies are re-checked the next time it connects."
+            )
+        } catch {
+            lastError = "Could not restore from \(snapshot.displayName): \(error.localizedDescription). The catalog was left as it was."
+        }
+    }
+
     // MARK: - Startup integrity
 
     /// Repairs whatever an abrupt termination left behind. Everything here is
@@ -2436,9 +2561,11 @@ final class AppStore: ObservableObject {
         var verdictCounts: [ProtectionState: Int] = [:]
         var seenResidency: ResidencyDomain?
         var uniformResidency = true
+        var indexedFromProvider = 0
         for asset in assets {
             if let seenResidency, seenResidency != asset.residency { uniformResidency = false }
             if seenResidency == nil { seenResidency = asset.residency }
+            if asset.providerLocalID != nil { indexedFromProvider += 1 }
             guard !asset.isLivePhotoMotion else { continue }
             counted += 1
             guard let state = protectionStates[asset.id], state != .notApplicable else { continue }
@@ -2447,6 +2574,7 @@ final class AppStore: ObservableObject {
         countedPhotoTotal = counted
         protectionCountsByState = verdictCounts
         residencyIsUniform = uniformResidency
+        applePhotosIndexedCount = indexedFromProvider
 
         var breakdowns: [UUID: DriveContentBreakdown] = [:]
         for replica in replicaStates {
@@ -2567,9 +2695,44 @@ final class AppStore: ObservableObject {
         refreshPartTransferPlan()
     }
 
+    /// Says what happened to the archive's own location, when anything did.
+    ///
+    /// Moving somebody's catalog is not a thing to do quietly, and refusing to
+    /// move it is worse: the archive would keep working while a second one sat
+    /// beside it holding photographs this one has never heard of, and every
+    /// count on every screen would be describing half of what they own.
+    private func reportArchiveLocation() {
+        switch AppEnvironment.migration {
+        case .notNeeded:
+            break
+        case .moved(let from, let to):
+            audit(
+                .system,
+                "The archive moved to \(to.path) so that every version of this app reads the same one — "
+                    + "the App Store build cannot see \(from.path). Nothing was copied and nothing was lost; "
+                    + "the folder was renamed, and your photos and drives are untouched."
+            )
+        case .refusedBothExist(let legacy, let shared):
+            lastError = """
+            There are two archives on this Mac and this app is using \(shared.path). Another one is at \
+            \(legacy.path), left by a version that kept its own.
+
+            Nothing has been changed or merged: two catalogs describing overlapping sets of the same \
+            photographs cannot be reconciled by moving files, and choosing one for you would throw away \
+            whichever you cared about. Both are intact. If the other is the one you want, quit the app, \
+            move this one aside, and put that one in its place.
+            """
+        case .failed(let reason):
+            lastError = "The archive could not be moved into the shared location, so this version is using the old one: \(reason). Nothing was lost, but the App Store build will not see this archive until it moves."
+        }
+    }
+
     func rescanTargets() {
         let previouslyConnected = Set(targetMonitor.reachablePaths.keys)
-        targetMonitor.rescan(targets: targets)
+        targetMonitor.rescan(
+            targets: targets,
+            bookmarked: targetBookmarks.resolvedURLs(forTargets: targets.map(\.id))
+        )
         reactToRescan(previouslyConnected: previouslyConnected)
     }
 
@@ -2583,7 +2746,10 @@ final class AppStore: ObservableObject {
     /// the placement audit before the scan had happened.
     func rescanTargetsOffMainThread() async {
         let previouslyConnected = Set(targetMonitor.reachablePaths.keys)
-        await targetMonitor.rescanOffMainThread(targets: targets)
+        await targetMonitor.rescanOffMainThread(
+            targets: targets,
+            bookmarked: targetBookmarks.resolvedURLs(forTargets: targets.map(\.id))
+        )
         reactToRescan(previouslyConnected: previouslyConnected)
     }
 
@@ -2854,6 +3020,50 @@ final class AppStore: ObservableObject {
         return true
     }
 
+    /// Why this import must not start, or nil to go ahead.
+    ///
+    /// The reserve is the Mac's, the same one the export-part corridor keeps:
+    /// staging is a corridor on the boot disk too, and a boot disk filled to
+    /// the last byte takes the whole machine with it rather than just the
+    /// import. Says what it needs and what there is, because "not enough
+    /// space" leaves somebody guessing whether to delete two files or two
+    /// hundred gigabytes.
+    ///
+    /// Nil when the volume will not answer: refusing every import because a
+    /// capacity query failed would be worse than the risk it guards against,
+    /// and this is a guard rail rather than an accounting system.
+    /// `availableBytes` is asked of the staging volume when not supplied; a
+    /// test passes its own so the refusal can be exercised without a full disk.
+    func stagingSpaceRefusal(
+        for files: [URL],
+        existing: [Asset],
+        memo: [String: ScanMemoEntry],
+        availableBytes: Int64? = nil
+    ) -> String? {
+        let needed = ImportService.stagingBytesNeeded(
+            for: files,
+            scanMemo: memo,
+            knownHashes: Set(existing.map(\.contentHash))
+        )
+        guard needed > 0 else { return nil }
+        guard let available = availableBytes ?? TakeoutExtractor.availableCapacity(
+            onVolumeOf: staging.rootURL.appendingPathComponent("probe")
+        ) else { return nil }
+
+        let reserve = ExportPartTransferPlanner.holdingAreaReserveBytes
+        let usable = available - reserve
+        guard needed > usable else { return nil }
+
+        let bytes = Formatters.bytes
+        return """
+        Not importing: this needs \(bytes.string(fromByteCount: needed)) of room on this Mac and \
+        there is \(bytes.string(fromByteCount: max(usable, 0))) to spare — \
+        \(bytes.string(fromByteCount: available)) free, keeping \(bytes.string(fromByteCount: reserve)) \
+        for the Mac itself. Photos are copied here first and released once your drives hold them, so \
+        free up space or import the folder in parts. Nothing was copied and nothing was changed.
+        """
+    }
+
     private func runFolderImport(_ urls: [URL]) async {
         let existing = assets
         let rules = policyRules
@@ -2880,6 +3090,18 @@ final class AppStore: ObservableObject {
         // reason: sweeping a whole drive must not explode an export that
         // happens to be sitting on it.
         let files = ImportService.mediaFileURLs(under: urls, skippingExports: true)
+
+        // Before a single byte is copied. Registering a device already refuses
+        // when the archive will not fit; importing had no equivalent, so
+        // pointing this at a borrowed 400 GB drive filled the boot disk and
+        // only stopped when writes started failing — part-way through, with
+        // staging full and no room left to tidy up in.
+        if let refusal = stagingSpaceRefusal(for: files, existing: existing, memo: memo) {
+            lastError = refusal
+            isImporting = false
+            return
+        }
+
         let result = await ImportService.importFiles(
             files,
             sourceDescription: sourceDescription,
@@ -5445,6 +5667,11 @@ final class AppStore: ObservableObject {
         guard let target = targetsByID[targetID] else { return }
         do {
             try catalog.deleteTarget(id: targetID)
+            // Give the permission back with the registration. Holding a
+            // bookmark to a drive the archive no longer claims is access
+            // nobody asked for, and "its files were left untouched" should
+            // extend to not still being able to reach them.
+            targetBookmarks.forget(targetID: targetID)
             audit(.drive, "Forgot \(target.name). Its files were left untouched and the slot is free for a replacement.")
             // Forgetting this Mac is the supported way to run an archive the
             // boot disk cannot hold. Remember the decision, or first-launch
@@ -5515,6 +5742,13 @@ final class AppStore: ObservableObject {
                 replicaRootComponent: ReplicationTarget.defaultReplicaRoot
             )
             try catalog.upsertTarget(target)
+            // The user has just pointed at this place, which is the only moment
+            // a bookmark can be taken. Unsandboxed it is a fast path back to a
+            // drive; sandboxed it is the *only* way back, because reading the
+            // root of a volume nobody handed the app is what the sandbox
+            // forbids. Best-effort on purpose — registration does not fail for
+            // want of one, since the marker sweep finds the drive either way.
+            targetBookmarks.record(targetID: targetID, path: rootURL.path)
             audit(.drive, "Registered \(kind.displayName.lowercased()) target \(target.name).", targetID: targetID)
             loadAll()
             // A new device does *not* owe a copy of everything. It owes a share
@@ -7072,6 +7306,41 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// What to say when macOS refuses, which is two different situations
+    /// wearing one word.
+    ///
+    /// A first refusal is somebody choosing no, and the switch in System
+    /// Settings is the answer. A refusal *after* this archive has already read
+    /// that library is not a choice at all: a privacy decision is recorded
+    /// against the code identity that asked for it, so updating or re-signing
+    /// the app leaves a decision matching nothing, and macOS answers with a
+    /// silent no rather than asking again. Sending that person to the switch
+    /// is the worst possible advice — the app is usually not in the list, and
+    /// they are left toggling nothing while being told to try again.
+    ///
+    /// The two are told apart by whether the archive holds anything read out of
+    /// the library. It is evidence rather than a guess: those rows can only
+    /// exist if the permission was granted at some point.
+    var applePhotosPermissionAdvice: String {
+        guard applePhotosIndexedCount > 0 else {
+            return "Photos access was declined. You can turn it on under System Settings → Privacy & Security → Photos, then connect again — the app only ever reads that library."
+        }
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.heykinn.HeykinnClicks"
+        return """
+        macOS is no longer recognising this app's permission to read your Photos library, so it \
+        refused without asking. That happens when the app is updated or re-signed: the permission \
+        was recorded against the previous version of it, and the switch in System Settings will \
+        not fix it — this app is probably not even listed there now.
+
+        To clear it, run this in Terminal and then reopen the app:
+
+            tccutil reset Photos \(bundleID)
+
+        Your Photos library and this archive are both untouched; the \(Formatters.count(applePhotosIndexedCount, "photograph")) \
+        already read from the library are still recorded here.
+        """
+    }
+
     func connectApplePhotos() async {
         let state = await ApplePhotosVerifier.requestAccess()
         refreshApplePhotosState()
@@ -7080,7 +7349,7 @@ final class AppStore: ObservableObject {
             audit(.system, "Apple Photos connected. Presence is now verified in the background by hashing originals — checked, not assumed.")
             checkApplePhotosPresence()
         case .denied:
-            lastError = "Photos access was declined. Grant it under System Settings → Privacy & Security → Photos, then try again."
+            lastError = applePhotosPermissionAdvice
         case .unavailable(let reason):
             lastError = reason
         case .notDetermined:

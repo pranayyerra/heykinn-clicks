@@ -187,6 +187,44 @@ enum CatalogBackupService {
         guard missing.isEmpty else { throw BackupError.incomplete(tables: missing) }
     }
 
+    /// What a snapshot turns out to hold, read without writing to it.
+    ///
+    /// Separate from `listSnapshots`, which is a directory listing and is asked
+    /// on every backup to judge freshness. Opening each database to count rows
+    /// is worth it only when somebody is choosing between them.
+    struct SnapshotContents {
+        var assetCount: Int
+        var tablesWithRows: Int
+    }
+
+    /// Reads a snapshot's contents, or nil if it cannot be trusted.
+    ///
+    /// Nil covers both "will not open" and "fails its own integrity check" on
+    /// purpose: the caller's question is whether this is a thing to restore
+    /// from, and neither case is. A snapshot holding no assets is also refused
+    /// — restoring one would empty the archive's records while the photos sat
+    /// on the drives unaccounted for, which is the worst outcome this feature
+    /// could produce.
+    static func contents(ofSnapshotAt url: URL) -> SnapshotContents? {
+        guard let probe = try? SQLiteDatabase(path: url.path, readOnly: true) else { return nil }
+        let integrity = try? probe.query("PRAGMA integrity_check;") { $0.text(0) }
+        guard integrity?.first == "ok" else { return nil }
+        guard let assets = try? probe.query("SELECT count(*) FROM assets;", [], row: { $0.int(0) }),
+              let count = assets.first, count > 0
+        else { return nil }
+
+        let tables = (try? probe.query(
+            "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%';"
+        ) { $0.text(0) }) ?? []
+        var populated = 0
+        for table in tables {
+            let escaped = table.replacingOccurrences(of: "\"", with: "\"\"")
+            let rows = try? probe.query("SELECT count(*) FROM \"\(escaped)\";") { $0.int(0) }
+            if (rows?.first ?? 0) > 0 { populated += 1 }
+        }
+        return SnapshotContents(assetCount: Int(count), tablesWithRows: populated)
+    }
+
     static func listSnapshots(onMount mountURL: URL, targetID: UUID?) -> [CatalogSnapshot] {
         let directory = backupDirectory(onMount: mountURL)
         guard let entries = try? FileManager.default.contentsOfDirectory(

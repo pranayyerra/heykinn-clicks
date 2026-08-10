@@ -178,6 +178,7 @@ private struct AccessSettings: View {
 
 private struct SafetySettings: View {
     @EnvironmentObject private var store: AppStore
+    @State private var isRestoring = false
 
     var body: some View {
         Form {
@@ -215,8 +216,112 @@ private struct SafetySettings: View {
                         .disabled(store.reachablePaths.isEmpty)
                 }
                 .font(.callout)
+                // The other half. Snapshots were written and verified from the
+                // first release and there was no way to read one back inside
+                // the app: recovery meant quitting, finding a file on a drive
+                // and copying it over the catalog by hand. A backup nobody can
+                // restore is a promise, not a safeguard.
+                HStack {
+                    Text("If this Mac's catalog is lost or goes wrong, restore it from one of these.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Spacer(minLength: 8)
+                    Button("Restore…") { isRestoring = true }
+                        .disabled(store.reachablePaths.isEmpty)
+                }
             }
         }
         .formStyle(.grouped)
+        .sheet(isPresented: $isRestoring) { RestoreCatalogSheet() }
+    }
+}
+
+/// Choosing a snapshot to go back to.
+///
+/// Deliberately not a file picker. A picker would ask somebody to find a
+/// `.sqlite` file inside an app folder on a drive and would happily accept the
+/// wrong one; this lists what the app itself wrote, says what each holds, and
+/// declines to show any it cannot read back.
+private struct RestoreCatalogSheet: View {
+    @EnvironmentObject private var store: AppStore
+    @Environment(\.dismiss) private var dismiss
+    @State private var choice: AppStore.RestorableSnapshot?
+    @State private var confirming: AppStore.RestorableSnapshot?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Restore the catalog")
+                .font(.title2).bold()
+            Text("This replaces what the app knows about your photos — which drives hold what, how copies were checked, and the albums and people read out of your exports. It changes nothing on any drive, and the catalog it replaces is kept rather than deleted.")
+                .font(.callout)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            let snapshots = store.restorableSnapshots()
+            if let blocker = store.catalogRestoreBlocker {
+                Label("Not while \(blocker). Let it finish and open this again.", systemImage: "clock")
+                    .font(.callout)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if snapshots.isEmpty {
+                // Both nothings want different sentences: no drive attached is
+                // a different problem from a drive with nothing on it.
+                ContentUnavailableView(
+                    store.reachablePaths.isEmpty ? "No drive connected" : "No snapshot to go back to",
+                    systemImage: store.reachablePaths.isEmpty ? "externaldrive.badge.questionmark" : "clock.badge.exclamationmark",
+                    description: Text(
+                        store.reachablePaths.isEmpty
+                            ? "Connect a drive that holds this archive and its snapshots will be listed here."
+                            : "The connected drives carry no snapshot this app can read back. \u{201C}Back up now\u{201D} writes one."
+                    )
+                )
+                .frame(maxHeight: 180)
+            } else {
+                List(snapshots, selection: Binding(
+                    get: { choice?.id },
+                    set: { id in choice = snapshots.first { $0.id == id } }
+                )) { entry in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(Formatters.relative(entry.snapshot.createdAt))
+                            .font(.callout.weight(.medium))
+                        Text("\(Formatters.count(entry.contents.assetCount, "photo")) · \(entry.contents.tablesWithRows) kinds of record · on \(entry.driveName)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    .tag(entry.id)
+                    .contentShape(Rectangle())
+                    .onTapGesture { choice = entry }
+                }
+                .frame(minHeight: 160)
+            }
+
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                Button("Restore…") { confirming = choice }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(choice == nil || store.catalogRestoreBlocker != nil)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .confirmationDialog(
+            "Replace the catalog with this snapshot?",
+            isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Restore", role: .destructive) {
+                if let confirming { store.restoreCatalog(from: confirming.snapshot) }
+                confirming = nil
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) { confirming = nil }
+        } message: {
+            if let confirming {
+                Text("The archive currently records \(Formatters.count(store.countedPhotoTotal, "photo")); this snapshot records \(Formatters.count(confirming.contents.assetCount, "photo")) and was taken \(Formatters.relative(confirming.snapshot.createdAt)). Anything imported since then will not be in it, and the photos themselves are untouched either way.")
+            }
+        }
     }
 }

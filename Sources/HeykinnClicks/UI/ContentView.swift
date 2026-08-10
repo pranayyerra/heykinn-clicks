@@ -229,6 +229,25 @@ struct ContentView: View {
     }
 
     var body: some View {
+        if store.archiveIsHeldByAnotherInstance {
+            // Instead of the app, not beside it. Both builds share one archive
+            // on purpose, so the second one to open is looking at a catalog
+            // somebody else is already writing to — and everything here is
+            // drawn from state held in memory, so carrying on would mean
+            // overwriting their work without ever having seen it.
+            ContentUnavailableView {
+                Label("This archive is already open", systemImage: "lock.circle")
+            } description: {
+                Text("Another copy of Heykinn Clicks has it — usually the App Store version and this one at the same time. They share a single archive on purpose, so only one can be in it at once.\n\nQuit the other copy and reopen this one. Nothing is wrong with your archive and nothing has been changed.")
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(minWidth: 520, minHeight: 320)
+        } else {
+            archiveContent
+        }
+    }
+
+    private var archiveContent: some View {
         NavigationSplitView {
             List(selection: questionSelection) {
                 ForEach(Question.allCases) { question in

@@ -4,13 +4,28 @@ import Foundation
 /// residency, replica state, backlog, policies, migrations, audit history —
 /// lives here, so the Mac never needs a drive attached to know system state.
 final class CatalogStore {
-    let database: SQLiteDatabase
+    /// Not a `let` because restoring a snapshot closes this connection and
+    /// opens another over the replaced file. Read-only to everyone else.
+    private(set) var database: SQLiteDatabase
+    /// Kept so the connection can be reopened over the same path.
+    let databasePath: String
 
     private static let encoder = JSONEncoder()
     private static let decoder = JSONDecoder()
 
     init(databasePath: String) throws {
+        self.databasePath = databasePath
         database = try SQLiteDatabase(path: databasePath)
+        try applySchema()
+    }
+
+    /// Opens the file at `databasePath` and brings it up to the current schema.
+    ///
+    /// Shared by the initialiser and by `replaceContents`: a restored snapshot
+    /// can predate a column that has since been added, and it must be migrated
+    /// on the way in rather than left to fail at the first query that expects
+    /// it.
+    private func applySchema() throws {
         try createSchema()
         // Additive, and after the base schema so the tables it alters exist.
         // `CREATE TABLE IF NOT EXISTS` cannot add a column to a table that is
@@ -20,6 +35,59 @@ final class CatalogStore {
         try createMetadataSchema()
         try createTagSchema()
     }
+
+    /// Swaps the live catalog for the database at `url`, keeping the outgoing
+    /// one beside it.
+    ///
+    /// The connection is closed first and reopened after, and the `-wal` and
+    /// `-shm` journals are cleared with it: those describe the database being
+    /// replaced, and a journal left beside a different file is how a good
+    /// snapshot opens as a corrupt one.
+    ///
+    /// Returns where the outgoing catalog was kept. Nothing is deleted — if the
+    /// restored snapshot turns out to be the wrong one, that file is the way
+    /// back. A failure part-way puts the original back and reopens it, so the
+    /// app is never left running on no catalog at all.
+    @discardableResult
+    func replaceContents(withDatabaseAt url: URL) throws -> URL {
+        let live = URL(fileURLWithPath: databasePath)
+        let stamp = Self.replacedStampFormatter.string(from: Date())
+        let keptAside = live.deletingLastPathComponent()
+            .appendingPathComponent("catalog-replaced-\(stamp).sqlite")
+
+        // Before the file moves: anything still in the write-ahead log belongs
+        // in the copy being kept, and the journals are deleted a few lines
+        // below.
+        database.checkpoint()
+        database.close()
+        do {
+            if FileManager.default.fileExists(atPath: live.path) {
+                try FileManager.default.moveItem(at: live, to: keptAside)
+            }
+            for journal in ["-wal", "-shm"] {
+                try? FileManager.default.removeItem(atPath: live.path + journal)
+            }
+            try FileManager.default.copyItem(at: url, to: live)
+        } catch {
+            if !FileManager.default.fileExists(atPath: live.path),
+               FileManager.default.fileExists(atPath: keptAside.path) {
+                try? FileManager.default.moveItem(at: keptAside, to: live)
+            }
+            database = try SQLiteDatabase(path: databasePath)
+            try applySchema()
+            throw error
+        }
+        database = try SQLiteDatabase(path: databasePath)
+        try applySchema()
+        return keptAside
+    }
+
+    private static let replacedStampFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyyMMdd-HHmmss"
+        return formatter
+    }()
 
     private func createSchema() throws {
         try database.exec("""

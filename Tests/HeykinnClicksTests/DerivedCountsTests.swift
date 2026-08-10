@@ -229,3 +229,92 @@ final class NewestSelectionTests: XCTestCase {
         XCTAssertTrue(OverviewView.newest(14, in: []).isEmpty)
     }
 }
+
+/// Two refusals wearing one word.
+///
+/// A first "no" is somebody choosing, and the switch in System Settings is the
+/// answer. A "no" after this archive has already read the library is macOS not
+/// recognising the app any more — the permission was recorded against the code
+/// identity that asked for it, and re-signing leaves a decision matching
+/// nothing. Sending that person to the switch is the worst available advice:
+/// the app is usually not in the list at all.
+@MainActor
+final class ApplePhotosPermissionAdviceTests: XCTestCase {
+
+    private var suiteNames: [String] = []
+
+    override func tearDown() {
+        for name in suiteNames { UserDefaults.standard.removePersistentDomain(forName: name) }
+        suiteNames = []
+        super.tearDown()
+    }
+
+    private func makeDirectory() throws -> URL {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-advice-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        return url
+    }
+
+    private func makeStore(in directory: URL) -> AppStore {
+        let suiteName = "heykinn-tests-\(UUID().uuidString)"
+        suiteNames.append(suiteName)
+        return AppStore(environment: AppEnvironment(
+            appDirectory: directory,
+            defaults: UserDefaults(suiteName: suiteName)!,
+            runsBackgroundWork: false
+        ))
+    }
+
+    private func asset(providerLocalID: String?) -> Asset {
+        var one = Asset(
+            id: UUID(), kind: .photo, originalFilename: "a.jpg", importOrigin: .appleExport,
+            captureDate: nil, importDate: Date(), updatedDate: Date(), fileSize: 1,
+            pixelWidth: nil, pixelHeight: nil, contentHash: UUID().uuidString, residency: .local,
+            residencySource: .importDefault, presence: .localOnly, stagingRelativePath: nil,
+            importBatchID: nil, exifSummary: [:]
+        )
+        one.providerLocalID = providerLocalID
+        return one
+    }
+
+    func testAFirstRefusalPointsAtTheSwitch() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        try catalog.upsertAsset(asset(providerLocalID: nil))
+        let store = makeStore(in: directory)
+        store.loadAll()
+
+        XCTAssertEqual(store.applePhotosIndexedCount, 0)
+        let advice = store.applePhotosPermissionAdvice
+        XCTAssertTrue(advice.contains("System Settings"), advice)
+        XCTAssertFalse(advice.contains("tccutil"), "Nothing to reset yet: \(advice)")
+    }
+
+    /// The archive holding photographs read out of the library is proof the
+    /// permission was granted once, which is what makes this the other case.
+    func testARefusalAfterTheLibraryWasReadSaysWhatActuallyFixesIt() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        for index in 0..<3 { try catalog.upsertAsset(asset(providerLocalID: "local-\(index)")) }
+        let store = makeStore(in: directory)
+        store.loadAll()
+
+        XCTAssertEqual(store.applePhotosIndexedCount, 3)
+        let advice = store.applePhotosPermissionAdvice
+        XCTAssertTrue(advice.contains("tccutil reset Photos"), advice)
+        XCTAssertTrue(
+            advice.contains("re-signed") || advice.contains("updated"),
+            "Must say why it happened, or it reads as the app being broken: \(advice)"
+        )
+        XCTAssertTrue(
+            advice.contains("untouched"),
+            "Must say the library and the archive are unharmed: \(advice)"
+        )
+    }
+}

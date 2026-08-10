@@ -33,13 +33,43 @@ struct AppEnvironment {
     /// real volumes: no volume scan, no snapshots written to the user's drives.
     static let offlineKey = "HEYKINN_NO_BACKGROUND_WORK"
 
+    /// What `production()` decided, so the app can report it rather than
+    /// leaving somebody to work out which archive they are looking at.
+    private(set) static var resolvedLocation: ArchiveLocation.Resolution?
+    /// The result of moving a pre-group archive, if one was moved on this
+    /// launch. Read once by `AppStore` and written into the audit log.
+    private(set) static var migration: ArchiveLocation.Migration = .notNeeded
+
     static func production(
         processEnvironment: [String: String] = ProcessInfo.processInfo.environment
     ) -> AppEnvironment {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        let directory = processEnvironment[archiveDirectoryOverrideKey].map {
-            URL(fileURLWithPath: $0, isDirectory: true)
-        } ?? support.appendingPathComponent("HeykinnClicks", isDirectory: true)
+        let home = URL(fileURLWithPath: NSHomeDirectory(), isDirectory: true)
+        // Nil unless this build carries the app-group entitlement. An unsigned
+        // `swift run` gets nothing here, which is a case `resolve` handles
+        // rather than treating as "start a fresh archive".
+        let group = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: ArchiveLocation.appGroupIdentifier
+        )
+
+        let resolution = ArchiveLocation.resolve(
+            override: processEnvironment[archiveDirectoryOverrideKey],
+            groupContainer: group,
+            home: home
+        )
+        resolvedLocation = resolution
+
+        // One archive, not one per way of installing the app. Only ever from
+        // the pre-group location into the shared one, only when the shared one
+        // holds nothing, and never when an override is in force — a scratch
+        // archive must not swallow the real one.
+        if resolution.kind == .appGroup || resolution.kind == .appGroupByPath {
+            migration = ArchiveLocation.migrateIfNeeded(
+                legacy: ArchiveLocation.legacyPath(home: home),
+                shared: resolution.url
+            )
+        }
+
+        let directory = resolution.url
 
         // A redirected archive gets its own preferences too. Sharing the real
         // ones would have an inspection copy reading — and writing — the
