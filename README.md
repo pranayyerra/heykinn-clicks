@@ -8,6 +8,34 @@ The vision, the invariants that must never regress, and the path from here
 are in [docs/SPEC.md](docs/SPEC.md). For shipped behavior, this codebase is
 the source of truth; the full build-time spec lives in git history.
 
+## Installing it
+
+Download the `.dmg` from [Releases](../../releases), open it, and drag Heykinn
+Clicks to Applications. It is signed and notarised by Apple, so it opens without
+a warning; nothing else needs installing.
+
+**What it will ask for, and why.** Nothing on first launch — the app opens
+empty and asks for permission only when you point it at something.
+
+- **Your Photos library**, if you connect it. Read-only: the app looks through
+  the library to see which photographs it already holds and which it is missing.
+  It never changes or deletes anything there.
+- **A removable drive**, the first time you register one. macOS asks once per
+  drive.
+
+Everything it keeps is on your own Mac and your own drives. There is no account,
+no server, and nothing leaves the machine.
+
+**What it does to your files.** Reads them. Photos are copied *into* the
+archive; the folders, libraries and Google exports you point it at are left
+exactly as they are. The one thing it writes outside its own folder is a small
+marker file at the root of each drive you register, so it can recognise that
+drive again after a rename or a remount.
+
+To remove it: drag the app to the Trash. Your photos and drives are untouched;
+the app's own records live in `~/Library/Group Containers/` if you want those
+gone too.
+
 ## Core model
 
 **Exclusive residency.** Every asset has exactly one logical residency domain
@@ -49,7 +77,14 @@ tells you exactly what it will and will not delete.
 **A copy you already have counts.** If the source's files are already sitting
 on one of its destination devices — Takeout zips you downloaded straight onto
 Archive Drive — that *is* the copy on that device. It is hash-verified where
-it lies and nothing is transported. Only the difference is copied.
+it lies, and only the difference is copied.
+
+Counted in place is the default, not the only option. An export kept
+permanently is the document the archive is re-read from, and you can hand one
+to the app to be responsible for: that moves it into the app's own folder on
+**the drive it is already on**. Same volume, so every move is a rename —
+instant, and no bytes are transported anywhere. It is planned, shown, and
+agreed to before it happens, because it rewrites paths you chose.
 
 **This machine is a device too.** On first launch the app registers a folder
 on this Mac, so it is available as a destination before any drive is plugged
@@ -92,6 +127,10 @@ pending on Drive B — the model represents that directly.
 
 ## Build & run
 
+No dependencies outside the standard library and system frameworks, so a clone
+and `swift build` is the whole setup. Xcode is not required — the command line
+tools are enough to build, test and run it.
+
 ```bash
 swift build        # compile
 swift test         # core-engine tests
@@ -116,6 +155,46 @@ re-attach to see reconnect + auto-sync resume.
 First launch starts empty. Nothing is seeded: demo rows asserting cloud
 residency described a state the app has no connector to establish, and the rest
 was noise sitting alongside a real archive.
+
+### Working on it without touching your own archive
+
+`swift run` opens the real archive at
+`~/Library/Application Support/HeykinnClicks`. Point it somewhere else and it
+gets its own catalog, its own staging, and its own preferences:
+
+```bash
+HEYKINN_ARCHIVE_DIRECTORY=/tmp/scratch-archive swift run
+```
+
+Use it. Looking at a screen otherwise means looking at 24,000 real photos on
+real drives, and any check of a change is a change to an archive somebody
+depends on.
+
+### Signing, and what an unsigned build cannot do
+
+`swift run` produces a bare binary with no bundle identifier, so macOS has
+nothing to hang a privacy decision on: **Photos access will not stick**, and the
+app will not appear in System Settings → Privacy & Security → Photos. That is
+not a bug in the app, and chasing it in the code is wasted time.
+
+```bash
+./Packaging/bundle.sh                    # a real .app, signed with whatever you have
+```
+
+The script picks up any *Apple Development* certificate automatically, which is
+free with an Apple ID and is all that is needed — its team identifier is stable
+across rebuilds, so one Photos grant survives them. With no certificate at all it
+signs ad-hoc, which still runs but cannot hold a permission, because an ad-hoc
+signature changes hash on every build.
+
+A permission granted to an earlier build stops applying the moment you sign with
+a different certificate, and macOS then refuses **without prompting**. The app
+now recognises that and prints the fix; it is
+`tccutil reset Photos com.heykinn.HeykinnClicks`.
+
+Distribution builds — Developer ID, notarisation, the disk image, and the
+sandboxed App Store variant — are in [Packaging/README.md](Packaging/README.md).
+Neither is needed to work on the app.
 
 Two compile errors recur often enough to be worth naming, both from SwiftUI's
 result builders and both reported far from their cause:

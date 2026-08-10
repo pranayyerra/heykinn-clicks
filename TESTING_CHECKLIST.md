@@ -59,11 +59,15 @@ Listed because an earlier draft of this document tested all of them.
 | Welcome / onboarding screen | No such view exists |
 | Drag-and-drop import | No `onDrop` anywhere |
 | Cancelling or resuming an import | Only *sync* can be cancelled |
-| Restoring a catalog from a snapshot | Snapshots are written and listable; nothing restores them |
 | GPS from Takeout sidecars | `GeoData` is decoded and then discarded — no column stores it |
 | Drift queueing a re-copy | Drift marks the replica; nothing queues repair from it |
 | Bookmark-based drive persistence | Identity is the marker file, with volume UUID as fallback |
-| Help menu, keyboard shortcuts | `HeykinnClicksApp` declares no `Commands` |
+
+Two rows left this table rather than being deleted from history: **restoring a
+catalog from a snapshot** is built and is tested under section 6, and the **Help
+menu and keyboard shortcuts** exist — `HeykinnClicksApp` declares `Commands`
+through `HeykinnCommands`. Both were listed here as not built long after they
+were.
 
 ---
 
@@ -80,6 +84,12 @@ Listed because an earlier draft of this document tested all of them.
 
 ## 2. Permissions
 
+- [ ] **On a Mac that has run an earlier build, reset first.** A privacy grant
+      is recorded against the code identity that asked for it, so a re-signed
+      build is refused with no prompt at all and the app truthfully says access
+      was declined. `tccutil reset Photos com.heykinn.HeykinnClicks`. Not needed
+      on a machine seeing the app for the first time — which is the machine this
+      section is meant to be walked on.
 - [ ] Connecting Apple Photos prompts, with the wording from
       `NSPhotoLibraryUsageDescription`
 - [ ] The grant appears under System Settings → Privacy & Security → Photos
@@ -182,7 +192,31 @@ deletes anything. Walk it deliberately.
 - [ ] Snapshots land in `HeykinnClicks/CatalogBackups/` on each target
 - [ ] A snapshot is verified against the asset count before it is published; a
       bad one is deleted and logged
-- [ ] The five newest are kept per drive
+- [ ] The **three** newest are kept per drive (`CatalogBackupService.retainCount`)
+
+### Restoring one
+
+The half that had never been exercised outside tests. Settings → Safety →
+Restore.
+
+- [ ] Lists snapshots from every connected drive, newest first, each with its
+      date, photo count and which drive it is on
+- [ ] Import something, then restore a snapshot from before it: the archive goes
+      back, and the imported photos are no longer in the Library
+- [ ] The photos themselves are **completely untouched** on every drive — verify
+      in Finder
+- [ ] The replaced catalog is kept as `catalog-replaced-<stamp>.sqlite` in
+      `Application Support/HeykinnClicks/`, and opening it shows the archive as
+      it was *before* the restore, including anything imported minutes earlier
+- [ ] The restore is written into the audit log of the restored catalog
+- [ ] Refused mid-sync and mid-import, saying which
+- [ ] **Unplug the drive between opening the sheet and pressing Restore** — the
+      snapshot is re-read at the last moment, so this must refuse and say to
+      reconnect, not fail half way
+- [ ] A deliberately corrupted `.sqlite` in `CatalogBackups/` is not offered at
+      all
+- [ ] After restoring, reconnect each drive and confirm its copies are re-checked
+      rather than treated as missing
 
 ## 7. Durability
 

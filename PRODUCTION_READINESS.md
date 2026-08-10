@@ -3,13 +3,13 @@
 What is genuinely left before somebody other than the author runs this, ranked
 by what it costs to get wrong.
 
-Everything below was checked against the code on 2026-08-05, not inferred from
+Everything below was checked against the code on 2026-08-10, not inferred from
 the README. Where an earlier draft of this document was wrong, the correction is
 recorded at the bottom rather than quietly dropped — a checklist that invents
 work is worse than no checklist, because the invented work crowds out the real
 work.
 
-**State of play:** 392 tests across 47 classes, all passing. Author's archive:
+**State of play:** 657 tests across 85 classes, all passing. Author's archive:
 24,627 assets, 98.2 GB logical, across two external drives. No dependencies
 outside the standard library and system frameworks.
 
@@ -19,47 +19,102 @@ outside the standard library and system frameworks.
 
 Nobody else can run this until these are done.
 
-### App bundle — **done, needs finishing touches**
+### App bundle — **signed and notarised; one thing left, and it is not code**
 
 `Packaging/bundle.sh` assembles, signs and verifies `HeykinnClicks.app`. See
 `Packaging/README.md` for why the app is deliberately unsandboxed and what that
 costs (no Mac App Store; Developer ID and notarisation instead).
+
+Everything below is done except the last line, which cannot be done at this
+desk: it needs a Mac that has never had Xcode on it.
 
 - [x] Bundle with a real `CFBundleIdentifier` and `Info.plist`
 - [x] `NSPhotoLibraryUsageDescription` — without it the first PhotoKit call
       terminates the process instead of prompting
 - [x] `NSRemovableVolumesUsageDescription` for macOS 13+
 - [x] Hardened runtime, no exceptions needed
-- [ ] App icon — drop `Packaging/AppIcon.icns` in and the script picks it up
-- [ ] Developer ID signature, notarisation, stapling
+- [x] App icon — the Hey Kinn otter, white on the brand gradient, built from
+      `Packaging/BrandMark.png` by `Packaging/make-icon.swift`. A generator
+      rather than a checked-in binary, so the sizing is a number somebody can
+      change and re-run. The mark exists only as raster (228×275 inside the
+      800×800 lock-up), so 512 and 1024 upscale about 2.2× — fine for a flat
+      shape, but **a vector from the designer would be sharper** and is the one
+      improvement worth asking for.
+- [x] Developer ID signature, notarisation, stapling. Submission
+      `7780fe4c-9bab-4f84-91b9-3863ef284f18` came back `Accepted`, the ticket is
+      stapled, and a quarantined copy unzipped elsewhere reports
+      `accepted, source=Notarized Developer ID`. Sequence in
+      `Packaging/README.md`.
+
+      Two things had to be fixed to get there, both of which fail in ways worth
+      remembering. `bundle.sh` signed with `--timestamp=none`: fine locally,
+      and an automatic rejection from the notary service, which requires a
+      secure timestamp. It now asks for one unless the signature is ad-hoc,
+      where a network round trip in every local build would buy nothing. And
+      the archive that gets uploaded is the *un-stapled* one — the ticket is
+      attached afterwards — so the build to hand round has to be re-zipped after
+      stapling, or every recipient gets a copy that must reach Apple to open.
 - [ ] **Verify the Photos prompt actually appears standalone.** Access works
       today because Xcode is the responsible process and already holds the
       grant. The bundle exists to give the app its own identity; that it works
       is an assumption until somebody launches it from `/Applications` and sees
       the prompt.
 
-### Import can fill the boot disk
+      `build/HeykinnClicks-0.1.0.dmg` is the build to carry over — signed,
+      notarised and stapled in its own right, opening onto the app beside a link
+      to Applications. Drag it across, open it, and connect Apple Photos. What
+      is being tested is that the prompt appears **at all** — and then that the
+      grant survives a quit and relaunch, which is what proves TCC hung the
+      decision on this app's identity rather than on whatever launched it.
+      Gatekeeper is already known good: the image, and the app inside it, both
+      report `accepted, source=Notarized Developer ID` from a fresh mount.
 
-`runFolderImport` stages every file from an unmanaged source with **no
-free-space check at all**. Registering a host-device target refuses when the
-archive plus a 20 GB reserve will not fit ([AppStore.swift:2884]); importing
-400 GB from a borrowed drive has no equivalent guard and will simply fill the
-disk until writes start failing.
+      A Mac that has run an earlier build needs `tccutil reset Photos
+      com.heykinn.HeykinnClicks` first, and is not the machine this proves
+      anything on — see `Packaging/README.md`. The app now recognises that case
+      itself and prints the command rather than sending somebody to a Settings
+      pane it is not listed in.
 
-The parts are already there — `TakeoutExtractor.availableCapacity(onVolumeOf:)`
-and `ExportPartTransferPlanner.holdingAreaReserveBytes`. This is the same check,
-applied one level earlier, plus a way to say "this folder needs more room than
-you have" before the sweep starts rather than in the middle of it.
+### ~~Import can fill the boot disk.~~ Done
 
-### No route back from a bad catalog
+`runFolderImport` refuses before it copies anything when the sweep would eat
+into the Mac's reserve, and says how much it needs against how much there is —
+`AppStore.stagingSpaceRefusal`, over `ImportService.stagingBytesNeeded`.
 
-`CatalogBackupService` writes snapshots to the drives. Nothing reads them: there
-is no `restoreCatalog` anywhere in the app. Recovery today means quitting,
-finding a snapshot by hand, and copying it over `catalog.sqlite`.
+The estimate is not the folder's size. A file the archive already holds is
+recognised by its `stat` against the scan memo and never copied, so a re-sweep
+of an imported folder — the cheapest import there is, and an ordinary thing to
+do — is not refused for needing room it does not need. Everything else is
+counted in full, including a remembered file that has changed since: the guard
+errs high, because over-reserving costs a message somebody can ignore and
+under-reserving fills the disk. If the volume will not report its capacity the
+import proceeds; this is a guard rail, not an accounting system.
 
-- [ ] List snapshots found on connected targets, with date and asset count
-- [ ] Restore with the current catalog backed up first, and verify the restored
-      file opens and its counts are sane before switching to it
+### ~~No route back from a bad catalog.~~ Done
+
+`AppStore.restoreCatalog(from:)` is the read half, reachable from Settings →
+Safety → Restore. Snapshots on every connected drive are listed with their date,
+asset count and how many kinds of record they hold — the count being the figure
+that matters, since a snapshot holding 900 assets where the archive has 24,000
+is what a catalog going wrong looks like from outside.
+
+- [x] List snapshots found on connected targets, with date and asset count
+- [x] Restore with the current catalog kept first, and verify the restored file
+      opens and its counts are sane before switching to it
+
+Three things worth knowing about how it behaves:
+
+- **The outgoing catalog is kept, never deleted** — moved aside as
+  `catalog-replaced-<stamp>.sqlite`, so there is a way back from the way back.
+  The write-ahead log is checkpointed into it first; without that the kept copy
+  would be missing the most recent work, which is exactly what somebody would be
+  trying to recover.
+- **Unreadable snapshots are not offered.** A file that will not open, fails its
+  integrity check, or holds no assets is dropped from the list rather than shown
+  and disabled. Restoring an empty catalog would drop every record of photos
+  still sitting on the drives.
+- **Refused while work is in flight.** A sync, an import or an extraction is
+  writing rows into the catalog about to be replaced.
 
 ---
 
@@ -148,14 +203,19 @@ Recorded so they stop coming back as omissions.
 
 ## Ship gates
 
-**Private beta** — blockers cleared; the free-space guard in; the app launched
-from `/Applications` on a Mac that has never had Xcode on it, with the Photos
-prompt observed.
+**Private beta** — ~~blockers cleared; the free-space guard in~~ (both in); the
+app launched from `/Applications` on a Mac that has never had Xcode on it, with
+the Photos prompt observed. **That launch is the only thing left**, and it is
+not code: an icon, a Developer ID signature, and somebody watching the prompt
+appear on a clean machine.
 
-**Public beta** — catalog restore in the app; ~~diagnostics export; a Help
-menu~~ (both in); `TESTING_CHECKLIST.md` walked end to end on a real archive,
-including the menu bar and the first-run screen on an empty catalog
-(`HEYKINN_ARCHIVE_DIRECTORY=/tmp/empty swift run`).
+**Public beta** — ~~catalog restore in the app; diagnostics export; a Help
+menu~~ (all three in); `TESTING_CHECKLIST.md` walked end to end on a real
+archive, including the menu bar and the first-run screen on an empty catalog
+(`HEYKINN_ARCHIVE_DIRECTORY=/tmp/empty swift run`). Restore wants a pass of its
+own on that walk: it is verified against snapshots this app wrote in tests, and
+has never been run against a snapshot sitting on a real drive that was
+unplugged half way through.
 
 **1.0** — gaps 1–3 closed, or consciously accepted and documented for users.
 

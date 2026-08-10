@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+    The App Store build. The sandbox is not optional there, and it changes what
+    the app is allowed to do rather than only how it is signed:
+
+    - The drive sweep cannot run. Reading the marker file at the root of every
+      mounted volume is exactly what the sandbox exists to prevent, so a device
+      is reachable only through a bookmark the user's own choice produced.
+      See Services/TargetBookmarks.swift.
+    - Nothing is readable until it is chosen. Folder imports and drive
+      registration go through a file panel; there is no path the app can reach
+      by knowing its name.
+
+    The Developer ID build (HeykinnClicks.entitlements) keeps the sandbox off
+    and keeps the sweep, which is why an unknown drive can announce itself there
+    and cannot here.
+-->
+<plist version="1.0">
+<dict>
+    <key>com.apple.security.app-sandbox</key>
+    <true/>
+
+    <!-- Read and write what the user picks, and nothing else. -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+
+    <!-- Turn a choice into something that survives a relaunch. Without this a
+         drive would have to be picked again on every launch, which for an app
+         whose job is checking copies over months is the same as not working. -->
+    <key>com.apple.security.files.bookmarks.app-scope</key>
+    <true/>
+
+    <!-- Removable and external volumes: a registered drive is usually one. -->
+    <key>com.apple.security.device.removable-volumes</key>
+    <true/>
+
+    <!-- The Photos library, same as the Developer ID build. -->
+    <key>com.apple.security.personal-information.photos-library</key>
+    <true/>
+
+    <!-- One archive, not one per way of installing the app. A sandboxed build
+         gets a container of its own, so without this somebody who installed
+         both would own two catalogs describing overlapping halves of the same
+         photographs. The group container is the one place both can reach; the
+         team prefix is required by macOS. See App/ArchiveLocation.swift. -->
+    <key>com.apple.security.application-groups</key>
+    <array>
+        <string>344B87D3CV.com.heykinn.HeykinnClicks</string>
+    </array>
+</dict>
+</plist>

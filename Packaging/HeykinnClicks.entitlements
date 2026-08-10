@@ -4,5 +4,21 @@
 <dict>
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
+
+	<!-- Not sandboxed, so this buys no permission. It is here so this build
+	     reads the *same* archive as the App Store one: a group container is
+	     where both can meet, and an app that is merely allowed to go anywhere
+	     still has to be told to go to the same place. See
+	     App/ArchiveLocation.swift.
+
+	     A Developer ID build carrying this needs a provisioning profile with
+	     the group on it, embedded as Contents/embedded.provisionprofile — see
+	     Packaging/README.md. Without one the entitlement is inert and the app
+	     falls back to reading the group container by path, which works because
+	     nothing sandboxes it. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>344B87D3CV.com.heykinn.HeykinnClicks</string>
+	</array>
 </dict>
 </plist>

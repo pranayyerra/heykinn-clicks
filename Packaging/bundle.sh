@@ -21,11 +21,15 @@ cd "$(dirname "$0")/.."
 
 CONFIGURATION="debug"
 IDENTITY=""
+ENTITLEMENTS="Packaging/HeykinnClicks.entitlements"
 while [ $# -gt 0 ]; do
     case "$1" in
         --release) CONFIGURATION="release"; shift ;;
         --sign)    IDENTITY="${2:?--sign needs an identity}"; shift 2 ;;
         --adhoc)   IDENTITY="-"; shift ;;
+        # The sandboxed build. Not a signing variant — it is a different app in
+        # what it may touch, so it is worth being explicit about asking for it.
+        --appstore) ENTITLEMENTS="Packaging/HeykinnClicks-AppStore.entitlements"; shift ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
@@ -78,13 +82,21 @@ if [ -f Packaging/AppIcon.icns ]; then
 fi
 
 echo "Signing (identity: $IDENTITY)…"
+# A secure timestamp for anything but ad-hoc. Notarisation refuses a signature
+# without one — "The signature does not include a secure timestamp" — and it is
+# the kind of refusal that costs an upload and a wait to discover. Ad-hoc keeps
+# --timestamp=none: it cannot be notarised anyway, and asking Apple's timestamp
+# authority puts a network round trip in the middle of every local build.
+TIMESTAMP="--timestamp"
+[ "$IDENTITY" = "-" ] && TIMESTAMP="--timestamp=none"
+
 # Hardened runtime always: it costs nothing here and notarisation requires it,
 # so a debug bundle that differs from the shipped one in this respect would
 # hide exactly the problems worth finding early.
 codesign --force --sign "$IDENTITY" \
     --options runtime \
-    --entitlements Packaging/HeykinnClicks.entitlements \
-    --timestamp=none \
+    --entitlements "$ENTITLEMENTS" \
+    $TIMESTAMP \
     "$APP"
 
 codesign --verify --deep --strict --verbose=1 "$APP" 2>&1 | sed 's/^/  /'

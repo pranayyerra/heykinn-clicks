@@ -8,6 +8,193 @@
 ./Packaging/bundle.sh --release --sign "Developer ID Application: Name (TEAMID)"
 ```
 
+The icon is generated, not checked in as an opaque binary:
+
+```bash
+swift Packaging/make-icon.swift          # BrandMark.png -> AppIcon.icns
+```
+
+`make-dmg.sh` wraps whatever is in `build/` in a disk image to hand somebody:
+
+```bash
+./Packaging/make-dmg.sh --sign "Developer ID Application: Name (TEAMID)" --notarize heykinn
+```
+
+A zip unpacks wherever it was downloaded, so the app ends up being run out of
+Downloads, and every macOS release makes that a worse place to run something
+from. The image opens onto a window holding the app beside a link to
+Applications, which is the one gesture everybody already knows.
+
+The image is signed and notarised **in its own right**. A notarised app inside
+an un-notarised image still warns on first open, because Gatekeeper judges the
+thing that was downloaded, and the thing that was downloaded is the `.dmg`.
+
+## Two shipped builds, one codebase
+
+| | Developer ID (website) | App Store |
+|---|---|---|
+| Entitlements | `HeykinnClicks.entitlements` | `HeykinnClicks-AppStore.entitlements` |
+| Sandbox | off | **on, not optional** |
+| Build | `bundle.sh --release --sign "Developer ID Application: …"` | `bundle.sh --release --appstore --sign "Apple Distribution: …"` |
+| Finds an unknown drive on mount | yes | no — the user picks it |
+| Reaches a known drive again | marker sweep, bookmark as backup | bookmark only |
+
+The difference is not packaging. A sandboxed app may not read the root of a
+volume nobody handed it, and reading the marker file at every mounted volume's
+root is how this app knows which drives are which. So the App Store build cannot
+notice a drive appearing; a device is registered by choosing it, and reached
+again through a security-scoped bookmark taken at that moment
+(`Services/TargetBookmarks.swift`).
+
+Both builds take the bookmark, and both check the marker before trusting what it
+resolves to — a bookmark is permission to look, and it can resolve onto a disk
+that has since been reformatted or replaced. One mechanism would have been
+simpler; two are needed because they answer different questions, and conflating
+them is how an archive writes its replicas onto a stranger's volume.
+
+### One archive, both builds
+
+A sandboxed app gets a container of its own, so left alone the two builds would
+each keep an archive on the same Mac — two catalogs describing overlapping
+halves of the same photographs, with every screen quietly reporting the wrong
+total. Both therefore declare an **app group**, which is the one place a
+sandboxed and an unsandboxed app can both reach, and the archive lives there:
+
+```
+~/Library/Group Containers/344B87D3CV.com.heykinn.HeykinnClicks/HeykinnClicks
+```
+
+`App/ArchiveLocation.swift` decides, in this order: an explicit
+`HEYKINN_ARCHIVE_DIRECTORY`; the group container when the process is entitled to
+ask; the group container **by path** when it exists but this process cannot ask
+— which is what stops `swift run` starting a second archive after a signed build
+has moved the first one; and otherwise the pre-group location. An existing
+archive is moved into the shared container once, by rename. If both places hold
+one, the app says so and changes neither.
+
+### Testing both routes at once, without touching your own archive
+
+Sharing one archive is right for somebody who owns one. It is the wrong thing
+for whoever is publishing both, who will have the App Store build and the
+website build installed at the same time and pointed at the same catalog.
+
+Two copies of the app in one archive do not corrupt the database — SQLite
+handles concurrent access. They corrupt the *archive*, which is worse, because
+it stays perfectly readable: every screen is drawn from state loaded into memory
+at launch and written back as whole rows, so the second instance to write wins
+without ever having seen the first's changes, and the catalog carries on
+describing an archive that no longer matches the disks.
+
+So the app refuses. The first one in takes an advisory lock on the archive
+directory (`App/ArchiveLock.swift`) and the second shows "this archive is
+already open" instead of the app. The kernel releases the lock when a process
+dies, however it dies, so there is no stale lock to clear after a crash.
+
+To run both **at the same time**, give one its own archive:
+
+```bash
+HEYKINN_ARCHIVE_DIRECTORY=/tmp/store-test open -a "/Applications/Heykinn Clicks.app"
+```
+
+or, for a build from source:
+
+```bash
+HEYKINN_ARCHIVE_DIRECTORY=/tmp/store-test swift run
+```
+
+The override beats everything, including the group container, so a scratch
+archive can never swallow the real one. It is also the only way a sandboxed
+build can be pointed elsewhere — being handed a path outside its container is
+one thing the sandbox will not allow, so the App Store build is the one to leave
+on the real archive if you are testing both.
+
+**The Developer ID build needs a provisioning profile** for the group
+entitlement to be live: create a Developer ID profile carrying
+`344B87D3CV.com.heykinn.HeykinnClicks` at developer.apple.com and drop it in as
+`build/HeykinnClicks.app/Contents/embedded.provisionprofile` before signing.
+Without one the entitlement is inert — which is survivable, because nothing
+sandboxes that build and it falls back to reading the group container by path,
+but it is worth having rather than relying on the fallback.
+
+## Shipping it to somebody else
+
+Everything up to here produces an app that runs **on this Mac only**. Three
+things stand between that and a build anyone can open, and the first is a
+prerequisite for the other two.
+
+**1. A Developer ID Application certificate.** The keychain currently holds
+*Apple Development* (local runs) and *Apple Distribution* (App Store). Neither
+can notarise; Developer ID is a third kind. Create it at developer.apple.com →
+Certificates, IDs & Profiles → Certificates → **Developer ID Application**,
+which needs an Apple Developer Program membership and, on a team, the Account
+Holder role. Check what is installed with:
+
+```bash
+security find-identity -v -p codesigning
+```
+
+**2. Sign and notarise.** Store the credentials once — this prompts for an
+Apple ID and an app-specific password (**not** the account password; generate
+one at appleid.apple.com), and keeps them in the keychain so they are never
+typed into a script:
+
+```bash
+xcrun notarytool store-credentials heykinn --apple-id you@example.com --team-id TEAMID
+```
+
+Then, per release:
+
+```bash
+./Packaging/bundle.sh --release --sign "Developer ID Application: Name (TEAMID)"
+ditto -c -k --keepParent build/HeykinnClicks.app build/HeykinnClicks.zip
+xcrun notarytool submit build/HeykinnClicks.zip --keychain-profile heykinn --wait
+xcrun stapler staple build/HeykinnClicks.app
+
+# The zip that went up is the *un-stapled* one. Ship this one instead.
+ditto -c -k --keepParent build/HeykinnClicks.app build/HeykinnClicks-notarized.zip
+```
+
+That last line is not a formality. The ticket is attached to the app by
+`stapler`, after the upload, so the archive that was submitted does not contain
+it. Shipping that archive gives everyone a copy that has to reach Apple to be
+checked and fails on a machine that is offline or behind a filter — the one
+failure nobody can reproduce at their desk.
+
+### Changing signing identity revokes your permissions
+
+Not obvious, and it looks exactly like a bug in the app. macOS records a privacy
+grant against the *code identity* that asked for it, not just the bundle
+identifier. Re-signing with a different certificate — ad-hoc → Apple
+Development, or Apple Development → Developer ID — leaves a recorded decision
+that no longer matches the running app, and `PHPhotoLibrary.requestAuthorization`
+then returns **denied without ever showing a prompt**. The app reports "Photos
+access was declined", which is true and reads as though somebody clicked no.
+
+It happened here on the first Developer ID build: the library had connected
+happily seven times under the development signature, and the notarised build was
+refused in silence.
+
+```bash
+tccutil reset Photos com.heykinn.HeykinnClicks
+```
+
+Then relaunch and grant it again. This is a one-time cost per identity change,
+so it stops mattering once the Developer ID certificate is the one in use —
+that signature is stable across rebuilds, which is the whole reason to prefer a
+real certificate over ad-hoc.
+
+**3. Prove it.** The check that matters is not that the commands exited zero:
+
+```bash
+spctl -a -vvv -t exec build/HeykinnClicks.app
+```
+
+It reports `rejected` for a development signature — that is the expected answer
+today — and `accepted, source=Notarized Developer ID` once the above is done.
+If notarisation fails, `xcrun notarytool log <submission-id> --keychain-profile
+heykinn` says why, and the answer is usually a missing hardened runtime, which
+`bundle.sh` already sets.
+
 ## Why a bundle at all
 
 The package builds a bare Mach-O binary. macOS runs it and it mostly works, so
