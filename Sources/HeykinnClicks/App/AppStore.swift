@@ -7318,6 +7318,26 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Whether anything has been pointed at the archive yet.
+    ///
+    /// Not the same question as whether the archive holds photographs, and the
+    /// first-run screen conflated them: its first step was hardcoded as never
+    /// done, so somebody who had just connected their Photos library was told
+    /// to go and connect a source. That is the ordinary case on a library the
+    /// app has read and found nothing in — an empty library, or one whose
+    /// photographs are all indexed rather than held — and being asked to do the
+    /// thing you have just done reads as the app not having noticed.
+    ///
+    /// The cheap checks come first; the walk of the assets is only reached on
+    /// an archive with none, which is the only time this is asked.
+    var hasPointedAtPhotos: Bool {
+        if applePhotosState == .connected { return true }
+        if applePhotosIndexedCount > 0 { return true }
+        if !takeoutArchives.isEmpty { return true }
+        if !sources.isEmpty { return true }
+        return assets.contains { $0.importOrigin.isFolderLike }
+    }
+
     /// What to say when macOS refuses, which is two different situations
     /// wearing one word.
     ///

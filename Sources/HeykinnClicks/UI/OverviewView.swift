@@ -185,12 +185,15 @@ struct OverviewView: View {
             firstRunStep(
                 number: 1,
                 title: "Point it at your photos",
-                detail: "A folder, an old backup, your Photos library, or a download from "
-                    + "Google. Everything comes in by copy — the originals are left where "
-                    + "they are.",
+                detail: sourceStepDetail,
                 symbol: "tray.and.arrow.down",
-                isDone: false,
-                actionLabel: "Go to Add photos"
+                // Was hardcoded false, so this step could never be done and
+                // somebody who had just connected their Photos library was told
+                // to go and connect one. Pointing at a source and holding
+                // photographs are different facts, and an empty library
+                // satisfies the first without ever satisfying the second.
+                isDone: store.hasPointedAtPhotos,
+                actionLabel: store.hasPointedAtPhotos ? "Add another" : "Go to Add photos"
             ) {
                 selection = .takeout
             }
@@ -219,6 +222,27 @@ struct OverviewView: View {
             }
         }
         .frame(maxWidth: 720, alignment: .leading)
+    }
+
+    /// Reads as an instruction until it has been followed, then as a statement
+    /// of what happened — the same shape as the step below it.
+    ///
+    /// The done case has to explain an emptiness rather than report a success,
+    /// because that is the only situation in which it is ever seen: once a
+    /// source brings photographs in, the archive is not empty and this whole
+    /// screen is replaced by the real one.
+    private var sourceStepDetail: String {
+        guard store.hasPointedAtPhotos else {
+            return "A folder, an old backup, your Photos library, or a download from "
+                + "Google. Everything comes in by copy — the originals are left where "
+                + "they are."
+        }
+        if store.applePhotosState == .connected {
+            return store.applePhotosLibraryCount == 0
+                ? "Your Photos library is connected and has nothing in it yet. Anything you add to it from here will be found. You can point the app at a folder or a Google download as well."
+                : "Your Photos library is connected. Nothing has been copied in from it yet — that starts from Add photos."
+        }
+        return "Something is connected, and nothing has come in from it yet. Add photos shows what each source is doing."
     }
 
     private var targetStepDetail: String {
