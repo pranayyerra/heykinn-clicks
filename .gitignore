@@ -4,3 +4,6 @@
 .swiftpm/
 build/
 xcuserdata/
+
+# Provisioning profiles are per-machine credentials, not source.
+*.provisionprofile

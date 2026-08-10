@@ -81,6 +81,24 @@ if [ -f Packaging/AppIcon.icns ]; then
     /usr/libexec/PlistBuddy -c "Add :CFBundleIconFile string AppIcon" "$APP/Contents/Info.plist" >/dev/null 2>&1 || true
 fi
 
+# A provisioning profile, if one has been downloaded. It has to be inside the
+# bundle *before* signing, under this exact name, or it is ignored — a rule
+# worth automating rather than remembering, because the failure is an app that
+# builds, signs, launches, and then quietly does not have the entitlements it
+# claims. Download it from developer.apple.com and drop it in Packaging/;
+# nothing else changes.
+PROFILE_SOURCE=""
+if [ "$ENTITLEMENTS" = "Packaging/HeykinnClicks-AppStore.entitlements" ] \
+   && [ -f Packaging/HeykinnClicks-AppStore.provisionprofile ]; then
+    PROFILE_SOURCE="Packaging/HeykinnClicks-AppStore.provisionprofile"
+elif [ -f Packaging/HeykinnClicks.provisionprofile ]; then
+    PROFILE_SOURCE="Packaging/HeykinnClicks.provisionprofile"
+fi
+if [ -n "$PROFILE_SOURCE" ]; then
+    cp "$PROFILE_SOURCE" "$APP/Contents/embedded.provisionprofile"
+    echo "Embedded $(basename "$PROFILE_SOURCE")"
+fi
+
 echo "Signing (identity: $IDENTITY)…"
 # A secure timestamp for anything but ad-hoc. Notarisation refuses a signature
 # without one — "The signature does not include a secure timestamp" — and it is
@@ -100,6 +118,41 @@ codesign --force --sign "$IDENTITY" \
     "$APP"
 
 codesign --verify --deep --strict --verbose=1 "$APP" 2>&1 | sed 's/^/  /'
+
+# What the signed binary actually carries, rather than what the file on disk
+# asked for. An entitlement can be requested and not granted — an app group
+# without a matching profile is the usual way — and the result is an app that
+# builds, signs, launches, and behaves as though it never asked. Reported here
+# because the alternative is finding out from a user.
+echo
+echo "Entitlements in the signed binary:"
+EFFECTIVE_PLIST="$(mktemp -t heykinn-entitlements).plist"
+codesign -d --entitlements - --xml "$APP" 2>/dev/null \
+    | plutil -convert xml1 -o "$EFFECTIVE_PLIST" - 2>/dev/null || true
+
+# The *value*, not merely the key. The Developer ID build sets app-sandbox to
+# false and it is present either way, so reporting presence would tick the box
+# on a build that is not sandboxed at all — the one thing this report exists to
+# tell apart.
+SANDBOX="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.app-sandbox' "$EFFECTIVE_PLIST" 2>/dev/null || echo absent)"
+case "$SANDBOX" in
+    true)  echo "  ✓ sandboxed (App Store build)" ;;
+    false) echo "  · not sandboxed (Developer ID build)" ;;
+    *)     echo "  · app-sandbox absent" ;;
+esac
+
+GROUP="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$EFFECTIVE_PLIST" 2>/dev/null || echo "")"
+if [ -n "$GROUP" ]; then
+    echo "  ✓ app group $GROUP — shares one archive with the other build"
+else
+    echo "  · no app group — this build would keep an archive of its own"
+fi
+rm -f "$EFFECTIVE_PLIST"
+if [ -f "$APP/Contents/embedded.provisionprofile" ]; then
+    echo "  ✓ embedded.provisionprofile"
+else
+    echo "  · no provisioning profile embedded"
+fi
 
 echo
 echo "Built $APP"

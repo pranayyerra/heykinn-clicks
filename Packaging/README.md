@@ -111,13 +111,34 @@ HEYKINN_ARCHIVE_DIRECTORY=/tmp/scratch swift run
 It cannot redirect a sandboxed build, though — a path outside the container is
 one thing the sandbox will not allow — which is why the button exists.
 
-**The Developer ID build needs a provisioning profile** for the group
-entitlement to be live: create a Developer ID profile carrying
-`344B87D3CV.com.heykinn.HeykinnClicks` at developer.apple.com and drop it in as
-`build/HeykinnClicks.app/Contents/embedded.provisionprofile` before signing.
-Without one the entitlement is inert — which is survivable, because nothing
-sandboxes that build and it falls back to reading the group container by path,
-but it is worth having rather than relying on the fallback.
+**Provisioning profiles** are picked up automatically. Download one from
+developer.apple.com carrying `344B87D3CV.com.heykinn.HeykinnClicks` and drop it
+into `Packaging/`:
+
+| File | Used by |
+|---|---|
+| `HeykinnClicks.provisionprofile` | the Developer ID build |
+| `HeykinnClicks-AppStore.provisionprofile` | `--appstore` |
+
+`bundle.sh` copies it to `Contents/embedded.provisionprofile` before signing,
+which is the only moment it can be added — a profile put there afterwards is
+ignored, and the result is an app that builds, signs, launches, and quietly does
+not have the entitlements it asked for.
+
+The App Store build **needs** one; App Store Connect rejects an upload without
+it. The Developer ID build turns out not to: macOS hands a non-sandboxed process
+its group container regardless, which is how the archive migrated here before
+any profile existed. Worth having anyway rather than depending on that.
+
+Every build prints what its signature actually carries — the *values*, not just
+the keys, since `app-sandbox` is present and `false` in the Developer ID build:
+
+```
+Entitlements in the signed binary:
+  · not sandboxed (Developer ID build)
+  ✓ app group 344B87D3CV.com.heykinn.HeykinnClicks — shares one archive with the other build
+  · no provisioning profile embedded
+```
 
 ## Shipping it to somebody else
 
