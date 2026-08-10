@@ -173,6 +173,17 @@ already good ("Not registering X: holding a copy here needs 98 GB…"); others
 surface a raw `localizedDescription`. Worth an audit of
 throw sites for messages that say what to do, not just what failed.
 
+**6b. A drive already belonging to another archive is claimed silently.**
+Registering writes a marker file at the volume root and overwrites whatever is
+there, so the second archive to register a drive takes it and the first can no
+longer identify it by the primary mechanism. Two archives on one Mac stopped
+being exotic when the app started offering a test archive beside the real one.
+Found by doing it — see invariant 13 in `docs/SPEC.md`. Nothing is moved or
+lost, because the volume UUID is a fallback and it holds, but an archive
+quietly demoted to its backup identity for a drive that is plugged in is not
+something it should keep to itself. The fix belongs in registration, beside the
+read-only refusal: read the marker first, and ask when it names somebody else.
+
 **7. `._` files on exFAT.** Cosmetic. exFAT has no native extended attributes,
 so macOS writes an AppleDouble sidecar beside every replica. Harmless — the
 app's sweeps skip dotfiles — but it doubles the file count a user sees in

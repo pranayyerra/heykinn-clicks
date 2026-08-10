@@ -335,6 +335,29 @@ Apple frameworks only — zero third-party dependencies.
    fix runs before the wrong answer is shown rather than a launch after it.
    Never by hand against one catalog.
 
+13. **A marker naming another archive is never overwritten silently.**
+    Registering a drive writes a marker file at its root, and registration will
+    currently overwrite one that is already there. Two archives on one Mac is
+    no longer an exotic case — the app itself offers a test archive beside the
+    real one — and the second to register a drive takes it: the first archive's
+    marker is replaced, and it can no longer identify by the primary mechanism
+    what is, as far as it knows, still its drive.
+
+    *Not yet true. Recorded here because it was found by doing it.* Setting up
+    a throwaway archive for screenshots, with a real drive mounted, registered
+    that drive and overwrote the real archive's marker. No content was moved
+    and nothing was lost — the volume UUID is a fallback and it held — but the
+    archive was relying on its backup identity for a drive plugged into the
+    machine, and nothing said so.
+
+    What it should do: read the marker before writing one, and when it names a
+    different archive, say so and ask. "This drive already belongs to another
+    Heykinn Clicks archive" is a sentence somebody can act on; a silently
+    replaced identity is one they find out about later, from a drive that reads
+    as unmanaged. The check belongs in registration, beside the read-only
+    refusal, and applies to every archive equally — the real one must not be
+    able to quietly claim a test archive's drive either.
+
 ---
 
 ## The path
