@@ -90,6 +90,19 @@ were.
       was declined. `tccutil reset Photos com.heykinn.HeykinnClicks`. Not needed
       on a machine seeing the app for the first time — which is the machine this
       section is meant to be walked on.
+- [ ] **Test the bundled app, never `swift run`.** This section is the one place
+      that distinction decides the answer. `swift run` produces a bare binary
+      with no hardened runtime, and Xcode holds the Photos grant on its behalf,
+      so permissions appear to work at a desk where they are in fact untested.
+      The bundled, signed app was refused the Photos library for months while
+      development worked perfectly — one missing Hardened Runtime entitlement,
+      and the refusal is silent. Check `bundle.sh`'s entitlement report says
+      `✓ Photos library access` before starting.
+- [ ] **Open it from `/Applications`, and eject the installer first.** An app
+      launched from a mounted disk image is translocated to a randomised
+      read-only path, and macOS refuses a translocated app every permission
+      there is. The app now says so instead of blaming a setting, but a test run
+      from the image tests nothing.
 - [ ] Connecting Apple Photos prompts, with the wording from
       `NSPhotoLibraryUsageDescription`
 - [ ] The grant appears under System Settings → Privacy & Security → Photos

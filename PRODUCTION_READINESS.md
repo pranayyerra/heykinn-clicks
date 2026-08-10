@@ -9,7 +9,7 @@ recorded at the bottom rather than quietly dropped — a checklist that invents
 work is worse than no checklist, because the invented work crowds out the real
 work.
 
-**State of play:** 657 tests across 85 classes, all passing. Author's archive:
+**State of play:** 701 tests across 95 classes, all passing. Author's archive:
 24,627 assets, 98.2 GB logical, across two external drives. No dependencies
 outside the standard library and system frameworks.
 
@@ -17,16 +17,17 @@ outside the standard library and system frameworks.
 
 ## Blockers
 
-Nobody else can run this until these are done.
+Nobody else can run this until these are done. **All three are now done**, and
+the last of them was only ever an assumption until somebody watched it fail.
 
-### App bundle — **signed and notarised; one thing left, and it is not code**
+### ~~App bundle.~~ Done, and verified somewhere it had never run
 
 `Packaging/bundle.sh` assembles, signs and verifies `HeykinnClicks.app`. See
 `Packaging/README.md` for why the app is deliberately unsandboxed and what that
-costs (no Mac App Store; Developer ID and notarisation instead).
+costs (Developer ID and notarisation for the website build, a second sandboxed
+build for the App Store).
 
-Everything below is done except the last line, which cannot be done at this
-desk: it needs a Mac that has never had Xcode on it.
+The last line was the one that mattered, and it is the one that failed.
 
 - [x] Bundle with a real `CFBundleIdentifier` and `Info.plist`
 - [x] `NSPhotoLibraryUsageDescription` — without it the first PhotoKit call
@@ -54,26 +55,36 @@ desk: it needs a Mac that has never had Xcode on it.
       the archive that gets uploaded is the *un-stapled* one — the ticket is
       attached afterwards — so the build to hand round has to be re-zipped after
       stapling, or every recipient gets a copy that must reach Apple to open.
-- [ ] **Verify the Photos prompt actually appears standalone.** Access works
-      today because Xcode is the responsible process and already holds the
-      grant. The bundle exists to give the app its own identity; that it works
-      is an assumption until somebody launches it from `/Applications` and sees
-      the prompt.
+- [x] **Verify the Photos prompt actually appears standalone.** Done, on a
+      fresh macOS user account with no history of this app: the prompt appears
+      and access is granted. It was an assumption for the app's whole life and
+      it turned out to be a wrong one — see below.
 
-      `build/HeykinnClicks-0.1.0.dmg` is the build to carry over — signed,
-      notarised and stapled in its own right, opening onto the app beside a link
-      to Applications. Drag it across, open it, and connect Apple Photos. What
-      is being tested is that the prompt appears **at all** — and then that the
-      grant survives a quit and relaunch, which is what proves TCC hung the
-      decision on this app's identity rather than on whatever launched it.
-      Gatekeeper is already known good: the image, and the app inside it, both
-      report `accepted, source=Notarized Developer ID` from a fresh mount.
+      It failed the first three times, and none of the reasons were the obvious
+      ones. The app was refused the Photos library **silently**: no prompt, and
+      no entry under Privacy & Security → Photos, which from inside the app is
+      indistinguishable from somebody having declined. The cause was a single
+      missing entitlement,
+      `com.apple.security.personal-information.photos-library`, absent from the
+      Developer ID file and present in the App Store one.
 
-      A Mac that has run an earlier build needs `tccutil reset Photos
-      com.heykinn.HeykinnClicks` first, and is not the machine this proves
-      anything on — see `Packaging/README.md`. The app now recognises that case
-      itself and prints the command rather than sending somebody to a Settings
-      pane it is not listed in.
+      That key reads as a sandbox entitlement and is not only one: the
+      `personal-information.*` keys are **Hardened Runtime** resource-access
+      entitlements too, and this app runs hardened because notarisation
+      requires it. Nothing about an unsandboxed app suggests it needs
+      permission to be permitted.
+
+      It hid behind the development loop for months. `swift run` produces a bare
+      binary with no hardened runtime and Xcode holds the grant, so connecting
+      Photos always worked at the author's desk — seven times over two days, in
+      the audit log. Only the bundled, signed, notarised build was refused,
+      which is the only build anybody else runs. This document warned about that
+      exact gap from the day it was written; it still took a clean account to
+      walk into it.
+
+      Guards, since the mistake was in a file nothing read: `bundle.sh` prints
+      what each signature actually carries and says so loudly when Photos is
+      missing, and `EntitlementTests` reads both entitlement files as source.
 
 ### ~~Import can fill the boot disk.~~ Done
 
@@ -203,11 +214,10 @@ Recorded so they stop coming back as omissions.
 
 ## Ship gates
 
-**Private beta** — ~~blockers cleared; the free-space guard in~~ (both in); the
-app launched from `/Applications` on a Mac that has never had Xcode on it, with
-the Photos prompt observed. **That launch is the only thing left**, and it is
-not code: an icon, a Developer ID signature, and somebody watching the prompt
-appear on a clean machine.
+**Private beta** — ~~blockers cleared; the free-space guard in; the app launched
+from `/Applications` with the Photos prompt observed on a machine that had never
+run it~~. **All in.** The prompt was watched appearing on a fresh account, which
+is what turned a months-old assumption into a fixed bug.
 
 **Public beta** — ~~catalog restore in the app; diagnostics export; a Help
 menu~~ (all three in); `TESTING_CHECKLIST.md` walked end to end on a real
