@@ -5476,6 +5476,18 @@ final class AppStore: ObservableObject {
 
     /// Registers a mounted external volume as a target.
     func registerVolumeTarget(volume: VolumeInfo, name: String) {
+        // Before anything is attempted, because the alternative is what this
+        // replaces: registration got as far as writing the marker file and
+        // failed with the filesystem's own words — "You can't save the file
+        // '.heykinn-clicks-drive.json' because the volume is read only" —
+        // which describes a symptom of a decision nobody realised they had
+        // made. The app's own installer is a mounted image, sitting in the
+        // volume list at exactly the moment somebody first goes looking for a
+        // drive to register.
+        if volume.isReadOnly {
+            lastError = "\(volume.name) is read-only, so nothing can be copied onto it. If this is the Heykinn Clicks installer, eject it — a device has to be something the archive can write to, like an external drive."
+            return
+        }
         if let storage = TargetStorage.of(volume.url),
            let clash = existingTarget(sharing: storage) {
             lastError = "\(clash.name) is already on this storage. Two copies on one device do not survive that device failing, so they count as one."
@@ -7322,6 +7334,14 @@ final class AppStore: ObservableObject {
     /// the library. It is evidence rather than a guess: those rows can only
     /// exist if the permission was granted at some point.
     var applePhotosPermissionAdvice: String {
+        // First, because it is the one cause where every other explanation is
+        // wrong and the fix has nothing to do with permissions. An app running
+        // out of a disk image is refused everything by macOS, silently, and
+        // saying "grant it in System Settings" sends somebody to a pane where
+        // nothing they do can help.
+        if let problem = AppInstallLocation.problem() {
+            return problem.explanation
+        }
         guard applePhotosIndexedCount > 0 else {
             return "Photos access was declined. You can turn it on under System Settings → Privacy & Security → Photos, then connect again — the app only ever reads that library."
         }

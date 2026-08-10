@@ -173,7 +173,7 @@ final class TargetMonitor: ObservableObject {
     nonisolated static func enumerateVolumes() -> [VolumeInfo] {
         let keys: [URLResourceKey] = [
             .volumeNameKey, .volumeUUIDStringKey, .volumeIsRemovableKey,
-            .volumeIsInternalKey, .volumeIsBrowsableKey,
+            .volumeIsInternalKey, .volumeIsBrowsableKey, .volumeIsReadOnlyKey,
         ]
         let urls = FileManager.default.mountedVolumeURLs(
             includingResourceValuesForKeys: keys,
@@ -195,6 +195,7 @@ final class TargetMonitor: ObservableObject {
                 name: values?.volumeName ?? url.lastPathComponent,
                 volumeUUID: values?.volumeUUIDString,
                 isRemovable: isRemovable || !isInternal,
+                isReadOnly: values?.volumeIsReadOnly ?? false,
                 marker: readMarker(at: url)
             )
         }

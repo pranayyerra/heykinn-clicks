@@ -257,6 +257,18 @@ struct ContentView: View {
                 }
             }
             .frame(minWidth: 520, minHeight: 360)
+        } else if let problem = AppInstallLocation.problem() {
+            // Ahead of everything, because in this state nothing else the app
+            // says about permissions is true. macOS refuses a translocated app
+            // every grant there is, and the screens underneath would report
+            // that as the user having declined.
+            ContentUnavailableView {
+                Label(problem.headline, systemImage: "arrow.down.app")
+            } description: {
+                Text(problem.explanation)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(minWidth: 520, minHeight: 340)
         } else if TestArchiveMode.isOn {
             // Loud, permanent, and above everything. This app's whole subject is
             // telling somebody the truth about where their photographs are, and

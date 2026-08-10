@@ -143,6 +143,11 @@ struct VolumeInfo: Identifiable, Hashable {
     var name: String
     var volumeUUID: String?
     var isRemovable: Bool
+    /// A mounted disk image, a locked volume, an optical disc. Nothing can be
+    /// copied onto one, so it cannot be a device the archive keeps copies on —
+    /// and the app's own installer is one of these, mounted, at the moment
+    /// somebody is first looking for drives to register.
+    var isReadOnly: Bool = false
     var marker: TargetMarker?
 
     var id: URL { url }
