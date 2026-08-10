@@ -18,6 +18,19 @@
 -->
 <plist version="1.0">
 <dict>
+    <!-- Who this app is, said in the signature.
+         Xcode injects these two from the provisioning profile when it signs.
+         This project signs by hand with an explicit entitlements file, so
+         nothing injects anything, and the upload is rejected: "the signature
+         for the bundle is missing an application identifier but has an
+         application identifier in the provisioning profile" (error 90886).
+         The identifier must match the profile's exactly — team prefix and
+         bundle id. -->
+    <key>com.apple.application-identifier</key>
+    <string>344B87D3CV.com.heykinn.HeykinnClicks</string>
+    <key>com.apple.developer.team-identifier</key>
+    <string>344B87D3CV</string>
+
     <key>com.apple.security.app-sandbox</key>
     <true/>
 

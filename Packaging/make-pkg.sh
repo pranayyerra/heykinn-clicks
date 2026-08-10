@@ -47,6 +47,39 @@ if [ "$SANDBOXED" != "true" ]; then
     exit 1
 fi
 
+# The identifier has to be *in the signature*, not only in the profile. Xcode
+# injects it; signing by hand with an explicit entitlements file does not, and
+# the upload is rejected after the fact — "the signature for the bundle is
+# missing an application identifier but has an application identifier in the
+# provisioning profile" (error 90886). Compared here against the profile,
+# because a mismatch is rejected the same way as an absence.
+SIG_PLIST="$(mktemp -t heykinn-sig).plist"
+codesign -d --entitlements - --xml "$APP" 2>/dev/null \
+    | plutil -convert xml1 -o "$SIG_PLIST" - 2>/dev/null || true
+SIGNED_ID="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.application-identifier' "$SIG_PLIST" 2>/dev/null || echo "")"
+rm -f "$SIG_PLIST"
+
+if [ -z "$SIGNED_ID" ]; then
+    echo "The signature carries no application identifier, and the upload will be rejected (90886)." >&2
+    echo "Add to Packaging/HeykinnClicks-AppStore.entitlements:" >&2
+    echo "  com.apple.application-identifier = <TEAMID>.<bundle id>" >&2
+    echo "  com.apple.developer.team-identifier = <TEAMID>" >&2
+    exit 1
+fi
+
+if [ -f "$APP/Contents/embedded.provisionprofile" ]; then
+    PROF_PLIST="$(mktemp -t heykinn-prof).plist"
+    security cms -D -i "$APP/Contents/embedded.provisionprofile" > "$PROF_PLIST" 2>/dev/null || true
+    PROFILE_ID="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:com.apple.application-identifier' "$PROF_PLIST" 2>/dev/null || echo "")"
+    rm -f "$PROF_PLIST"
+    if [ -n "$PROFILE_ID" ] && [ "$SIGNED_ID" != "$PROFILE_ID" ]; then
+        echo "The signature and the profile name different apps, and the upload will be rejected." >&2
+        echo "  signature: $SIGNED_ID" >&2
+        echo "  profile:   $PROFILE_ID" >&2
+        exit 1
+    fi
+fi
+
 if [ ! -f "$APP/Contents/embedded.provisionprofile" ]; then
     echo "No provisioning profile is embedded, and App Store Connect will reject the upload." >&2
     echo "Download one carrying the app group and drop it in as:" >&2
