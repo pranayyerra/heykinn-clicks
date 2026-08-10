@@ -80,6 +80,24 @@ embedded.
 Upload with **Transporter** (free, from the Mac App Store) — drag the `.pkg` in.
 It handles the credentials, so nothing here has to.
 
+## What the first upload actually cost
+
+Three rejections, all the same shape: **signing by hand means nothing checks the
+entitlements until Apple does.** Xcode papers over all of this, and none of it
+is visible locally — `codesign` signs whatever it is handed, and the app builds,
+launches and runs perfectly with every one of these faults in it.
+
+| Rejected with | Cause |
+|---|---|
+| 90886 — missing application identifier | Xcode injects `com.apple.application-identifier` and `com.apple.developer.team-identifier` from the profile. Manual signing does not, so the app claimed to be nobody while carrying a profile naming it precisely. |
+| 90285 — unsupported entitlement | `com.apple.security.device.removable-volumes` does not exist. The `device.*` family is camera, microphone, USB. An invented key is ignored locally and refused on upload. |
+| *(caught before upload)* | `com.apple.security.personal-information.photos-library` missing from the **Developer ID** build. A Hardened Runtime entitlement as much as a sandbox one, and without it macOS refuses the Photos library silently — no prompt, no entry in System Settings. |
+
+`make-pkg.sh` now refuses on the first two before building, and `bundle.sh`
+prints what each signature actually carries. Expect more of these: Apple
+validates a great deal server-side and documents little of it, so the guard list
+grows from what has actually been met rather than from any published set.
+
 ## 6. What the listing needs
 
 - **Privacy policy URL** — mandatory. `docs/PRIVACY.md` is written; it needs to
