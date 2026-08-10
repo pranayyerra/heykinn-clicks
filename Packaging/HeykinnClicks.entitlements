@@ -5,6 +5,20 @@
 	<key>com.apple.security.app-sandbox</key>
 	<false/>
 
+	<!-- Required even though there is no sandbox here.
+	     `com.apple.security.personal-information.*` are Hardened Runtime
+	     resource-access entitlements as well as sandbox ones, and this app runs
+	     with the hardened runtime because notarisation requires it. Without
+	     this key macOS refuses the Photos library **silently**: no prompt, and
+	     the app never appears under Privacy & Security → Photos, which from
+	     inside is indistinguishable from somebody having declined.
+
+	     It hid for a long time because `swift run` produces a bare binary with
+	     no hardened runtime, so development always worked. Only the bundled,
+	     signed, notarised app — the one users get — was refused. -->
+	<key>com.apple.security.personal-information.photos-library</key>
+	<true/>
+
 	<!-- Not sandboxed, so this buys no permission. It is here so this build
 	     reads the *same* archive as the App Store one: a group container is
 	     where both can meet, and an app that is merely allowed to go anywhere

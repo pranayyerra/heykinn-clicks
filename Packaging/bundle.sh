@@ -141,6 +141,17 @@ case "$SANDBOX" in
     *)     echo "  · app-sandbox absent" ;;
 esac
 
+# The one that cost a day. It is a Hardened Runtime entitlement as much as a
+# sandbox one, and without it macOS refuses the Photos library silently — no
+# prompt, and the app never appears under Privacy & Security → Photos. It never
+# showed up in development because `swift run` has no hardened runtime.
+PHOTOS="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.personal-information.photos-library' "$EFFECTIVE_PLIST" 2>/dev/null || echo absent)"
+if [ "$PHOTOS" = "true" ]; then
+    echo "  ✓ Photos library access"
+else
+    echo "  ✗ Photos library access MISSING — connecting Photos will be refused with no prompt"
+fi
+
 GROUP="$(/usr/libexec/PlistBuddy -c 'Print :com.apple.security.application-groups:0' "$EFFECTIVE_PLIST" 2>/dev/null || echo "")"
 if [ -n "$GROUP" ]; then
     echo "  ✓ app group $GROUP — shares one archive with the other build"
