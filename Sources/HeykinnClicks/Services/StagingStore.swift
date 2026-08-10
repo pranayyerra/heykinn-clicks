@@ -11,11 +11,6 @@ struct StagingStore {
         try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
     }
 
-    static func defaultStore() -> StagingStore {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return StagingStore(rootURL: support.appendingPathComponent("HeykinnClicks/Staging", isDirectory: true))
-    }
-
     /// Copies a source file into staging under a stable, asset-derived name.
     /// Returns the staging-relative path. Content-addressed-ish layout keeps
     /// directories small: Staging/ab/<assetID>.<ext>

@@ -126,13 +126,12 @@ final class CatalogStore {
 
         CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(content_hash);
 
-        CREATE TABLE IF NOT EXISTS asset_variants (
-            id TEXT PRIMARY KEY,
-            asset_id TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            relative_path TEXT NOT NULL,
-            file_size INTEGER NOT NULL
-        );
+        -- `asset_variants` was here and is gone. Nothing ever inserted a row:
+        -- it was empty on every catalog, including one with 24,000 assets in
+        -- it. Not dropped, only no longer created — an empty table on an
+        -- existing catalog costs nothing, and a DROP is a destructive migration
+        -- run for tidiness, which is the wrong trade against somebody's
+        -- archive.
 
         -- Targets: a registered place that holds a copy, which may be an
         -- external volume or a folder on any disk the user pointed at.
@@ -429,39 +428,7 @@ final class CatalogStore {
 
     func deleteAsset(id: UUID) throws {
         try database.run("DELETE FROM assets WHERE id = ?;", [.text(id.uuidString)])
-        try database.run("DELETE FROM asset_variants WHERE asset_id = ?;", [.text(id.uuidString)])
         try database.run("DELETE FROM replica_states WHERE asset_id = ?;", [.text(id.uuidString)])
     }
 
-    // MARK: - Asset variants
-
-    func upsertVariant(_ variant: AssetVariant) throws {
-        try database.run("""
-        INSERT INTO asset_variants (id, asset_id, kind, relative_path, file_size)
-        VALUES (?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            asset_id = excluded.asset_id,
-            kind = excluded.kind,
-            relative_path = excluded.relative_path,
-            file_size = excluded.file_size;
-        """, [
-            .text(variant.id.uuidString),
-            .text(variant.assetID.uuidString),
-            .text(variant.kind.rawValue),
-            .text(variant.relativePath),
-            .int(variant.fileSize),
-        ])
-    }
-
-    func fetchVariants() throws -> [AssetVariant] {
-        try database.query("SELECT id, asset_id, kind, relative_path, file_size FROM asset_variants;") { row in
-            AssetVariant(
-                id: row.uuid(0),
-                assetID: row.uuid(1),
-                kind: AssetVariantKind(rawValue: row.text(2)) ?? .original,
-                relativePath: row.text(3),
-                fileSize: row.int(4)
-            )
-        }
-    }
 }

@@ -86,16 +86,6 @@ struct StorageGroup: Identifiable, Hashable {
     /// behind.
     var isSatisfiable: Bool { destinationTargetIDs.count >= desiredCopies }
 
-    /// Whether adding another device would change what this group does.
-    ///
-    /// True only for a worked-out group that wants more copies than it has
-    /// devices — the one case where a newly registered drive has something to
-    /// do. A picked group is left alone by design, and a group already holding
-    /// as many copies as it asked for has nothing to gain.
-    func wouldUse(additionalDeviceCount count: Int) -> Bool {
-        destinationMode == .automatic && destinationTargetIDs.count < desiredCopies && count > 0
-    }
-
     /// The settings a new group starts with: the last ones used.
     ///
     /// Remembered rather than asked fresh each time, because the common case is

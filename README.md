@@ -216,7 +216,7 @@ Sources/HeykinnClicks/
 │   └── AppStore.swift           @MainActor orchestrator; single source of truth
 ├── Domain/                      Typed models, deliberately kept separate:
 │   ├── Residency.swift          ResidencyDomain, DomainPresence (presence ≠ residency)
-│   ├── Asset.swift              Asset, AssetVariant, AssetKind, ImportOrigin
+│   ├── Asset.swift              Asset, AssetKind, ImportOrigin
 │   ├── Protection.swift         ProtectionState (computed, never stored blindly)
 │   ├── Target.swift             ReplicationTarget, TargetKind, TargetMarker,
 │   │                            TargetStorage (one device = one copy), VolumeInfo

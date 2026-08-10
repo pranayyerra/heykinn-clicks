@@ -242,18 +242,6 @@ extension CatalogStore {
         }
     }
 
-    func fetchTags(forAsset assetID: UUID) throws -> [AssetTag] {
-        try database.query("""
-        SELECT asset_id, kind, value FROM asset_tags WHERE asset_id = ? ORDER BY kind, value;
-        """, [.text(assetID.uuidString)]) { row in
-            AssetTag(
-                assetID: row.uuid(0),
-                kind: AssetTag.Kind(rawValue: row.text(1)) ?? .album,
-                value: row.text(2)
-            )
-        }
-    }
-
     /// Every value of one kind, with how many photos carry it — the album list
     /// and the people list.
     func fetchTagSummary(kind: AssetTag.Kind) throws -> [(value: String, count: Int)] {

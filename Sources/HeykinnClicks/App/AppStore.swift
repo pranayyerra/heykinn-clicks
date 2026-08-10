@@ -4741,10 +4741,6 @@ final class AppStore: ObservableObject {
         dropContainerArchives()
     }
 
-    func importTakeoutArchive(_ archiveID: UUID) {
-        importTakeoutArchives([archiveID])
-    }
-
     /// Imports one or more discovered archives — typically the parts of one
     /// split-download export set — serially, as a single import batch with
     /// cross-part duplicate detection. Imported assets record local presence
@@ -5076,57 +5072,6 @@ final class AppStore: ObservableObject {
         return fullyReplicatedBatchIDs.contains(batchID)
     }
 
-    /// Deletes an imported, fully-replicated extracted folder from its drive
-    /// to reclaim space. The zip original is kept; if a zip twin exists for
-    /// the same part, the import state transfers to it so the export set
-    /// still reads as imported. Destructive — the UI confirms first.
-    func deleteExtractedTakeoutFolder(_ archiveID: UUID) {
-        guard let archive = takeoutArchives.first(where: { $0.id == archiveID }),
-              archive.kind == .folder, archive.isImported else { return }
-        guard FileManager.default.fileExists(atPath: archive.path) else {
-            lastError = "Folder is not accessible — is the drive connected?"
-            return
-        }
-        guard isBatchFullyReplicated(archive.importBatchID) else {
-            lastError = "Not deleting \(archive.displayName): its imported assets are not yet fully replicated to both targets."
-            return
-        }
-        // A folder whose files serve as a drive's archive-backed replicas is
-        // load-bearing storage, not a redundant copy — deleting it would
-        // destroy that drive's only copy of those assets.
-        if let (targetID, mount) = reachablePaths.first(where: { archive.path.hasPrefix($0.value.path + "/") }) {
-            let folderRelative = ReplicationService.volumeBackedPrefix
-                + String(archive.path.dropFirst(mount.path.count + 1))
-            let backingCount = replicaStates.filter {
-                $0.targetID == targetID && $0.state == .present && ($0.relativePath?.hasPrefix(folderRelative) ?? false)
-            }.count
-            if backingCount > 0 {
-                lastError = "Not deleting \(archive.displayName): its files are the \(targetsByID[targetID]?.name ?? "drive") replica for \(Formatters.count(backingCount, "asset")). It is storage, not a redundant copy."
-                return
-            }
-        }
-        do {
-            try FileManager.default.removeItem(at: archive.url)
-            if archive.exportSetID != nil,
-               var twin = takeoutArchives.first(where: {
-                   $0.exportSetID == archive.exportSetID && $0.partNumber == archive.partNumber && $0.kind == .zip
-               }),
-               !twin.isImported {
-                twin.importedAt = archive.importedAt
-                twin.importBatchID = archive.importBatchID
-                twin.importedAssetCount = archive.importedAssetCount
-                twin.skippedDuplicateCount = archive.skippedDuplicateCount
-                twin.note = "Imported via its extracted folder (folder deleted after replication)."
-                try catalog.upsertTakeoutArchive(twin)
-            }
-            try catalog.deleteTakeoutArchive(id: archive.id)
-            audit(.system, "Deleted extracted folder \(archive.displayName) after verified replication; zip original retained.", targetID: archive.targetID)
-            loadAll()
-        } catch {
-            lastError = "Folder deletion failed: \(error.localizedDescription)"
-        }
-    }
-
     /// The zero-button path, run whenever a managed drive connects:
     /// 1. Scan it for Takeout exports.
     /// 2. Reconcile content the catalog already knows, where this drive lacks
@@ -5456,11 +5401,6 @@ final class AppStore: ObservableObject {
             lastError = "Could not clear unverified cloud presence: \(error.localizedDescription)"
             return 0
         }
-    }
-
-    /// Assets carrying a cloud claim the app never verified.
-    func unverifiedCloudPresenceCount(domain: ResidencyDomain) -> Int {
-        assets.filter { CloudClaimWithdrawal.isUnverifiedClaim($0, domain: domain) }.count
     }
 
     func forgetTakeoutArchive(_ archiveID: UUID) {
@@ -7085,27 +7025,6 @@ final class AppStore: ObservableObject {
                 return
             }
         }
-    }
-
-    /// Checks this drive's content for damage.
-    ///
-    /// Content held as export parts is confirmed by comparing whole-file
-    /// checksums between targets — a handful of reads that settles everything
-    /// inside those parts at once. Only what is not covered that way falls
-    /// back to reading files one at a time.
-    func verifyDrive(_ targetID: UUID) {
-        guard reachablePaths[targetID] != nil else {
-            lastError = "Drive is not connected."
-            return
-        }
-        if archiveChecksumCheckWouldHelp(targetID) {
-            // Fast comparison first: seconds rather than minutes, and enough
-            // to catch the failures that actually befall archive copies. A
-            // full byte-for-byte comparison stays available in the menu.
-            spotCheckExportParts()
-            return
-        }
-        queueVerificationSweep(targetID, budget: .sweep)
     }
 
     /// Whether this drive holds export parts whose copies could be compared by

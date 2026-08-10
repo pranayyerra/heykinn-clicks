@@ -176,19 +176,14 @@ extension Asset {
     }
 }
 
-enum AssetVariantKind: String, Codable, CaseIterable, Hashable {
-    case original
-    case livePhotoVideo
-    case sidecar
-    case thumbnail
-}
-
-/// A physical file variant belonging to an asset (e.g. the paired video of a
-/// Live Photo, or an XMP sidecar). V1 creates only `.original`.
-struct AssetVariant: Identifiable, Hashable {
-    let id: UUID
-    var assetID: UUID
-    var kind: AssetVariantKind
-    var relativePath: String
-    var fileSize: Int64
-}
+// `AssetVariant` and `AssetVariantKind` were here, with a table and two store
+// methods behind them, describing the files an asset is made of — a Live
+// Photo's video half, an XMP sidecar. Nothing ever wrote one: the table was
+// empty on every catalog, and the two methods that could have filled it were
+// never called from anywhere.
+//
+// The jobs it was going to do got done differently and better. A Live Photo's
+// motion half is its own `Asset` carrying `livePhotoStillID`, which is what
+// lets the grid count it as one photograph and the replica layer copy it as two
+// files. A sidecar's contents are captured into `metadata_records` rather than
+// tracked as a file. Neither wants a variant row.

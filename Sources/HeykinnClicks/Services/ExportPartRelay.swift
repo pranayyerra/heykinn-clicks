@@ -31,11 +31,6 @@ struct ExportPartRelay {
         try? FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
     }
 
-    static func defaultRelay() -> ExportPartRelay {
-        let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
-        return ExportPartRelay(rootURL: support.appendingPathComponent("HeykinnClicks/ExportPartRelay", isDirectory: true))
-    }
-
     static func destinationDirectory(onMount mountURL: URL) -> URL {
         mountURL.appendingPathComponent(onDriveDirectoryName, isDirectory: true)
     }

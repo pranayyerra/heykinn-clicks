@@ -14,7 +14,4 @@ enum DuplicateDetector {
             .sorted { $0.count > $1.count }
     }
 
-    static func existingAsset(withHash hash: String, in assets: [Asset]) -> Asset? {
-        assets.first { $0.contentHash == hash }
-    }
 }

@@ -74,10 +74,6 @@ final class ThumbnailCache {
         memory.setObject(image, forKey: assetID.uuidString as NSString, cost: max(cost, 1))
     }
 
-    func clearMemory() {
-        memory.removeAllObjects()
-    }
-
     // MARK: - Disk tier
 
     /// Sharded by ID prefix so no single directory holds tens of thousands of
