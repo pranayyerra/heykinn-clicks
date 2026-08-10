@@ -54,7 +54,8 @@ struct AppEnvironment {
         let resolution = ArchiveLocation.resolve(
             override: processEnvironment[archiveDirectoryOverrideKey],
             groupContainer: group,
-            home: home
+            home: home,
+            wantsTestArchive: UserDefaults.standard.bool(forKey: ArchiveLocation.testModeKey)
         )
         resolvedLocation = resolution
 

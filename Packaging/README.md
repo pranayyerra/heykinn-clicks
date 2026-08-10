@@ -90,23 +90,26 @@ directory (`App/ArchiveLock.swift`) and the second shows "this archive is
 already open" instead of the app. The kernel releases the lock when a process
 dies, however it dies, so there is no stale lock to clear after a crash.
 
-To run both **at the same time**, give one its own archive:
+To run both **at the same time**, that screen offers *Open a test archive
+instead*. It starts that copy on an empty archive of its own and restarts into
+it; an orange bar across the top says which one you are looking at, with a
+button back. The choice is a preference and is per copy, so the App Store build
+can sit in test mode while the website build stays on the real archive.
+
+The test archive lives beside the real one and never inside it — nested, it
+would be swept, counted and backed up as though it were content. Sandboxed, it
+goes inside that build's own container, which is the only place it may write.
+
+There is still an environment variable, and it beats everything including test
+mode, so a suite pointed at its own directory is never diverted by a preference
+left on from somewhere else:
 
 ```bash
-HEYKINN_ARCHIVE_DIRECTORY=/tmp/store-test open -a "/Applications/Heykinn Clicks.app"
+HEYKINN_ARCHIVE_DIRECTORY=/tmp/scratch swift run
 ```
 
-or, for a build from source:
-
-```bash
-HEYKINN_ARCHIVE_DIRECTORY=/tmp/store-test swift run
-```
-
-The override beats everything, including the group container, so a scratch
-archive can never swallow the real one. It is also the only way a sandboxed
-build can be pointed elsewhere — being handed a path outside its container is
-one thing the sandbox will not allow, so the App Store build is the one to leave
-on the real archive if you are testing both.
+It cannot redirect a sandboxed build, though — a path outside the container is
+one thing the sandbox will not allow — which is why the button exists.
 
 **The Developer ID build needs a provisioning profile** for the group
 entitlement to be live: create a Developer ID profile carrying

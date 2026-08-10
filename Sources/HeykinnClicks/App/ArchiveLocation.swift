@@ -23,10 +23,22 @@ enum ArchiveLocation {
 
     /// What was chosen, so the app can say so rather than leaving somebody to
     /// work out which of two archives they are looking at.
+    /// Preference asking this copy of the app to open a throwaway archive.
+    ///
+    /// Per build, because a sandboxed app keeps its own preferences — so the
+    /// App Store copy can be put in test mode while the website copy stays on
+    /// the real archive, which is the arrangement somebody publishing both
+    /// actually wants.
+    static let testModeKey = "useTestArchive"
+
     enum Kind: Equatable {
         /// The environment override, for tests and for looking at a scratch
         /// archive without touching a real one.
         case overridden
+        /// A throwaway archive, chosen inside the app. Beside the real one and
+        /// never inside it: a test archive nested in the real one would be
+        /// swept, counted and backed up as though it were content.
+        case test
         /// The shared group container: both builds, one archive.
         case appGroup
         /// The group container's own path, reached directly. An unsandboxed
@@ -62,10 +74,21 @@ enum ArchiveLocation {
         override: String?,
         groupContainer: URL?,
         home: URL,
+        wantsTestArchive: Bool = false,
         exists: (URL) -> Bool = { FileManager.default.fileExists(atPath: $0.path) }
     ) -> Resolution {
         if let override, !override.isEmpty {
             return Resolution(url: URL(fileURLWithPath: override, isDirectory: true), kind: .overridden)
+        }
+        // Before the real archive is even worked out, so nothing about test
+        // mode can touch it. Sandboxed, the container is the only place this
+        // copy may write, which is also where it belongs.
+        if wantsTestArchive {
+            let base = groupContainer ?? groupContainerPath(home: home)
+            return Resolution(
+                url: base.appendingPathComponent(folderName + "-Test", isDirectory: true),
+                kind: .test
+            )
         }
         if let groupContainer {
             return Resolution(

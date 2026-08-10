@@ -158,3 +158,71 @@ final class ArchiveMigrationTests: XCTestCase {
         XCTAssertEqual(result, .notNeeded)
     }
 }
+
+/// The throwaway archive, chosen inside the app rather than typed into a
+/// terminal. Two copies of this app share one archive on purpose, so anybody
+/// running both — which is what publishing to two places means — needs one of
+/// them somewhere else.
+final class TestArchiveResolutionTests: XCTestCase {
+
+    private let home = URL(fileURLWithPath: "/Users/someone", isDirectory: true)
+
+    private func resolve(
+        override: String? = nil,
+        groupContainer: URL? = nil,
+        wantsTest: Bool,
+        existing: Set<String> = []
+    ) -> ArchiveLocation.Resolution {
+        ArchiveLocation.resolve(
+            override: override,
+            groupContainer: groupContainer,
+            home: home,
+            wantsTestArchive: wantsTest,
+            exists: { existing.contains($0.standardizedFileURL.path) }
+        )
+    }
+
+    func testAskingForATestArchiveGetsOne() {
+        let resolution = resolve(wantsTest: true)
+        XCTAssertEqual(resolution.kind, .test)
+        XCTAssertTrue(resolution.url.lastPathComponent.hasSuffix("-Test"))
+    }
+
+    /// The real archive must be unreachable from test mode — not merely a
+    /// different folder, but not an ancestor either.
+    func testTheTestArchiveIsBesideTheRealOneAndNeverInsideIt() {
+        let real = resolve(wantsTest: false).url.standardizedFileURL.path
+        let test = resolve(wantsTest: true).url.standardizedFileURL.path
+
+        XCTAssertNotEqual(real, test)
+        XCTAssertFalse(test.hasPrefix(real + "/"), "A test archive inside the real one would be swept and counted as content")
+        XCTAssertFalse(real.hasPrefix(test + "/"))
+    }
+
+    /// Test mode is decided before the real archive is worked out at all, so
+    /// nothing about it can touch the group container's contents.
+    func testTestModeBeatsTheGroupContainer() {
+        let group = URL(fileURLWithPath: "/Users/someone/Library/Group Containers/TEAM.app", isDirectory: true)
+        XCTAssertEqual(resolve(groupContainer: group, wantsTest: true).kind, .test)
+        XCTAssertEqual(resolve(groupContainer: group, wantsTest: false).kind, .appGroup)
+    }
+
+    /// An explicit override still wins, so a test suite pointed at its own
+    /// directory is never diverted by a preference left on from somewhere else.
+    func testAnOverrideStillBeatsTestMode() {
+        let resolution = resolve(override: "/tmp/explicit", wantsTest: true)
+        XCTAssertEqual(resolution.kind, .overridden)
+        XCTAssertEqual(resolution.url.path, "/tmp/explicit")
+    }
+
+    /// Sandboxed, the container is the only place this copy may write — so the
+    /// test archive has to land inside it rather than beside it on disk.
+    func testASandboxedCopyKeepsItsTestArchiveInsideItsContainer() {
+        let group = URL(fileURLWithPath: "/Users/someone/Library/Group Containers/TEAM.app", isDirectory: true)
+        let resolution = resolve(groupContainer: group, wantsTest: true)
+        XCTAssertTrue(
+            resolution.url.path.hasPrefix(group.path + "/"),
+            "Anywhere else is a path a sandboxed build cannot write to"
+        )
+    }
+}

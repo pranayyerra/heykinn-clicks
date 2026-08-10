@@ -238,10 +238,48 @@ struct ContentView: View {
             ContentUnavailableView {
                 Label("This archive is already open", systemImage: "lock.circle")
             } description: {
-                Text("Another copy of Heykinn Clicks has it — usually the App Store version and this one at the same time. They share a single archive on purpose, so only one can be in it at once.\n\nQuit the other copy and reopen this one. Nothing is wrong with your archive and nothing has been changed.")
-                    .fixedSize(horizontal: false, vertical: true)
+                VStack(spacing: 14) {
+                    Text("Another copy of Heykinn Clicks has it — usually the App Store version and this one at the same time. They share a single archive on purpose, so only one can be in it at once.\n\nQuit the other copy and reopen this one. Nothing is wrong with your archive and nothing has been changed.")
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    // The other way out, for the person who wants both copies
+                    // running: a second archive with nothing in it, so there is
+                    // nothing to collide over. Offered here because this screen
+                    // is where somebody meets the problem.
+                    if TestArchiveMode.canRelaunch {
+                        Button("Open a test archive instead") { TestArchiveMode.set(true) }
+                            .buttonStyle(.borderedProminent)
+                        Text("Starts this copy on an empty archive of its own, leaving your photos and the other copy alone. You can switch back at any time.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
             }
-            .frame(minWidth: 520, minHeight: 320)
+            .frame(minWidth: 520, minHeight: 360)
+        } else if TestArchiveMode.isOn {
+            // Loud, permanent, and above everything. This app's whole subject is
+            // telling somebody the truth about where their photographs are, and
+            // a test archive looks exactly like a real one that has lost
+            // everything. Nobody may be one glance away from believing that.
+            VStack(spacing: 0) {
+                HStack(spacing: 10) {
+                    Image(systemName: "testtube.2")
+                    VStack(alignment: .leading, spacing: 1) {
+                        Text("Test archive").font(.callout.weight(.semibold))
+                        Text("Not your photos. Nothing here affects your real archive.")
+                            .font(.caption)
+                    }
+                    Spacer(minLength: 12)
+                    Button("Switch back to my archive") { TestArchiveMode.set(false) }
+                }
+                .padding(.horizontal, 14)
+                .padding(.vertical, 8)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(Color.orange.opacity(0.22))
+                Divider()
+                archiveContent
+            }
         } else {
             archiveContent
         }
