@@ -80,6 +80,18 @@ if [ -f "$APP/Contents/embedded.provisionprofile" ]; then
     fi
 fi
 
+# Keys the App Store refuses. `codesign` signs whatever it is handed, so an
+# entitlement that does not exist is accepted locally, does nothing, and is
+# rejected on upload with "entitlements that are not supported on macOS"
+# (90285). Grown by hand as each one is met — there is no list to check against.
+for bad in com.apple.security.device.removable-volumes; do
+    if codesign -d --entitlements - --xml "$APP" 2>/dev/null | grep -q "$bad"; then
+        echo "The signature carries '$bad', which the App Store rejects (90285)." >&2
+        echo "Remove it from Packaging/HeykinnClicks-AppStore.entitlements." >&2
+        exit 1
+    fi
+done
+
 if [ ! -f "$APP/Contents/embedded.provisionprofile" ]; then
     echo "No provisioning profile is embedded, and App Store Connect will reject the upload." >&2
     echo "Download one carrying the app group and drop it in as:" >&2

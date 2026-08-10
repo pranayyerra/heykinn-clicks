@@ -44,9 +44,19 @@
     <key>com.apple.security.files.bookmarks.app-scope</key>
     <true/>
 
-    <!-- Removable and external volumes: a registered drive is usually one. -->
-    <key>com.apple.security.device.removable-volumes</key>
-    <true/>
+    <!-- There is deliberately no removable-volumes entitlement here.
+         `com.apple.security.device.removable-volumes` was, and does not exist:
+         the `device.*` family is camera, microphone, USB and the like. An
+         invented key is ignored in local signing and rejected on upload —
+         "entitlements that are not supported on macOS" (error 90285) — so it
+         bought nothing and cost an upload.
+
+         A sandboxed app reaches a removable drive by the user choosing it,
+         which `files.user-selected.read-write` above allows and
+         `files.bookmarks.app-scope` makes last. The system prompt that gates
+         removable volumes comes from `NSRemovableVolumesUsageDescription` in
+         Info.plist, which is not an entitlement at all. -->
+
 
     <!-- The Photos library, same as the Developer ID build. -->
     <key>com.apple.security.personal-information.photos-library</key>
