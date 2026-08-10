@@ -1,0 +1,106 @@
+# Submitting to the Mac App Store
+
+Everything here needs an Apple account, which is why it is written down rather
+than scripted. The parts that can be scripted already are:
+`Packaging/bundle.sh --appstore` and `Packaging/make-pkg.sh`.
+
+Work through it in this order; each step needs the one before it.
+
+---
+
+## 1. The installer certificate
+
+Two different certificates are involved, and having the first without the second
+is the ordinary situation — the first is what Xcode makes for you, the second
+has to be asked for.
+
+| Certificate | Signs |
+|---|---|
+| Apple Distribution | the `.app` |
+| **3rd Party Mac Developer Installer** (a.k.a. Mac Installer Distribution) | the `.pkg` |
+
+**Xcode → Settings → Accounts → your Apple ID → Manage Certificates → `+` →
+Mac Installer Distribution**
+
+Check it arrived:
+
+```bash
+security find-identity -v | grep "3rd Party Mac Developer Installer"
+```
+
+## 2. The App ID and the app group
+
+At [developer.apple.com](https://developer.apple.com/account/resources/identifiers/list):
+
+1. **Identifiers → `+` → App IDs → App**
+   - Description: Heykinn Clicks
+   - Bundle ID: **Explicit**, `com.heykinn.HeykinnClicks`
+   - Capabilities: tick **App Groups**
+2. **Identifiers → App Groups → `+`** and register the group, then come back to
+   the App ID and assign the group to it.
+
+> **Verify this before assuming it:** the app currently declares the group as
+> `344B87D3CV.com.heykinn.HeykinnClicks`, which is the team-prefixed form macOS
+> requires. Apple's portal has historically wanted app groups registered with a
+> `group.` prefix. If the portal will not accept the identifier as it stands,
+> register `group.com.heykinn.HeykinnClicks` and change the constant in
+> `App/ArchiveLocation.swift` plus both `.entitlements` files to match —
+> `EntitlementTests` will fail until all three agree, which is the point of it.
+> The archive migration handles the move; existing users keep their archive.
+
+## 3. The provisioning profile
+
+**Profiles → `+` → Mac App Store Connect** (under Distribution) → choose the App
+ID → choose the Apple Distribution certificate → download.
+
+Drop it in as `Packaging/HeykinnClicks-AppStore.provisionprofile`. `bundle.sh`
+embeds it automatically, before signing, which is the only moment it can be
+added.
+
+## 4. The App Store Connect record
+
+At [appstoreconnect.apple.com](https://appstoreconnect.apple.com) →
+**Apps → `+` → New App**:
+
+- Platform: **macOS**
+- Bundle ID: `com.heykinn.HeykinnClicks`
+- SKU: anything stable and private, e.g. `heykinn-clicks-1`
+
+## 5. Build and upload
+
+```bash
+./Packaging/bundle.sh --release --appstore --sign "Apple Distribution: PRANAY HASAN YERRA (344B87D3CV)"
+./Packaging/make-pkg.sh
+```
+
+`make-pkg.sh` refuses rather than producing something that would be rejected
+after an upload and a wait: it checks the app is sandboxed and that a profile is
+embedded.
+
+Upload with **Transporter** (free, from the Mac App Store) — drag the `.pkg` in.
+It handles the credentials, so nothing here has to.
+
+## 6. What the listing needs
+
+- **Privacy policy URL** — mandatory. `docs/PRIVACY.md` is written; it needs to
+  be at a URL. GitHub Pages, or the raw file, both work.
+- **Privacy questionnaire** — the honest answer to every question is *Data Not
+  Collected*. There is no account, no server, no analytics.
+- **Screenshots** — 1280×800 or larger. Overview and Keep safe are the two
+  screens that show what this is.
+- **Description, keywords, category** — Photo & Video, or Utilities.
+- **Support URL** — the repository's issues page will do.
+
+---
+
+## Before submitting, not after
+
+Two things worth doing first, because a rejection costs a review cycle:
+
+- **Register a drive in the sandboxed build and confirm it survives a
+  relaunch.** The sandbox reaches drives only through bookmarks, and that path
+  has been unit-tested but never run against a real drive.
+- **Remember the reviewer has no drive plugged in.** An app about external
+  drives, opened on a machine with none, has to still make sense — the first-run
+  screen is what they will see, and it should read as an app waiting for a drive
+  rather than an app that is broken.
