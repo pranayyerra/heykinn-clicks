@@ -148,7 +148,7 @@ final class ExportSourceTests: XCTestCase {
 
     // MARK: - An export is kept where its source says
 
-    /// The bug behind "Not yet on Studio MacBook Pro" that no change to the
+    /// The bug behind "Not yet on the MacBook Pro" that no change to the
     /// export's settings could clear: parts were graded against every
     /// registered device, so a Mac that holds none of the zips — and was never
     /// asked to — owed a copy of all of them for ever.

@@ -409,7 +409,7 @@ struct StorageMatrix: View {
                     // Tail, not middle. Middle truncation is right when the
                     // distinguishing part of a name is at the end, which is
                     // true of paths and false of device names: it turned
-                    // "Studio MacBook Pro" into "Prana…ook Pro", which is
+                    // "Studio MacBook Pro" into "Studi…ook Pro", which is
                     // harder to read than the front of the name alone.
                     Text(place.name)
                         .font(.caption.weight(.medium))

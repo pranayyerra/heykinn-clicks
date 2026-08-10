@@ -5,8 +5,10 @@ import XCTest
 /// nowhere until there was somewhere to show it.
 final class AlbumDetailTests: XCTestCase {
 
-    /// The shape a real album `metadata.json` arrives in — verbatim from the
-    /// user's archive, places and all.
+    /// The shape a real album `metadata.json` arrives in. Taken from a real
+    /// payload and then stripped: the structure, the key names and the empty
+    /// `description` are what matter here, so the titles, places and
+    /// coordinates are stand-ins.
     private let real = """
     {"title": "Wednesday night in Northgate",
      "description": "", "access": "protected",
@@ -140,19 +142,22 @@ extension AlbumDetailTests {
 
     /// An album titled "Wednesday night in Northgate" carries the UTC instant
     /// `1436992187` — Wednesday 15 July 2015, 8:29 PM UTC, which Google itself
-    /// printed as "Jul 15". Rendered in India that instant is 2 AM on Thursday
-    /// the 16th, so the header called a Wednesday album Thursday, and would
-    /// have said something different again on a machine in another timezone.
+    /// printed as "Jul 15". Rendered anywhere east of UTC+3:31 that instant is
+    /// already the 16th — 2 AM at UTC+5:30 — so the header called a Wednesday
+    /// album Thursday, and would have said something different again on a
+    /// machine in another timezone.
     ///
     /// A provider's day is shown as the provider's day.
     func testProviderDaysAreShownInTheProvidersOwnTimezone() {
         let instant = Date(timeIntervalSince1970: 1436992187)
-        let india = TimeZone(identifier: "Asia/Kolkata")!
+        // Any zone far enough east to roll the date over; the identifier is
+        // incidental, the offset is the point.
+        let eastOfUTC = TimeZone(secondsFromGMT: 5 * 3600 + 1800)!
 
         let local = DateFormatter()
         local.dateStyle = .long
         local.timeStyle = .none
-        local.timeZone = india
+        local.timeZone = eastOfUTC
         XCTAssertTrue(
             local.string(from: instant).contains("16"),
             "the premise: rendered locally this instant lands on the 16th"
