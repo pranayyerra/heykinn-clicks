@@ -45,6 +45,24 @@ if [ -n "$IDENTITY" ] && ! codesign --verify --strict "$APP" 2>/dev/null; then
     exit 1
 fi
 
+# The app gets its own ticket, before it goes into the image.
+#
+# Stapling only the .dmg leaves the app inside carrying nothing, so once
+# somebody drags it to Applications and the image is gone, Gatekeeper has to
+# reach Apple to check it. That works at a desk with a network and fails on a
+# plane, behind a filter, or on a locked-down machine — the failure nobody can
+# reproduce. Two submissions, and both artefacts answer for themselves.
+if [ -n "$PROFILE" ]; then
+    echo "Notarising the app…"
+    APP_ZIP="build/HeykinnClicks-app.zip"
+    rm -f "$APP_ZIP"
+    ditto -c -k --keepParent "$APP" "$APP_ZIP"
+    xcrun notarytool submit "$APP_ZIP" --keychain-profile "$PROFILE" --wait
+    xcrun stapler staple "$APP"
+    xcrun stapler validate "$APP"
+    rm -f "$APP_ZIP"
+fi
+
 echo "Staging…"
 rm -rf "$STAGE" "$DMG"
 mkdir -p "$STAGE"
