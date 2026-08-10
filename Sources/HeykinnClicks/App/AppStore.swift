@@ -7318,6 +7318,49 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Registered devices this build cannot reach until it is shown where they
+    /// are, once.
+    ///
+    /// A bookmark is taken when a device is registered, and every device
+    /// registered before bookmarks existed has none. Unsandboxed that costs
+    /// nothing — the marker sweep finds them regardless. Sandboxed it is total:
+    /// walking the mounted volumes and reading each root is exactly what is not
+    /// allowed, so a drive with no bookmark is not merely slow to find, it is
+    /// invisible, and every one of somebody's drives would read as away while
+    /// sitting plugged into the machine.
+    ///
+    /// Empty unless sandboxed, because that is the only build where it is true.
+    var targetsNeedingLocating: [ReplicationTarget] {
+        guard TargetBookmarks.isSandboxed else { return [] }
+        return targets.filter { !targetBookmarks.hasBookmark(for: $0.id) }
+    }
+
+    /// Records where a device is, after checking it is that device.
+    ///
+    /// The marker decides, not the folder the user picked. Somebody looking for
+    /// "My Passport" in a file panel can pick the wrong volume, and a bookmark
+    /// recorded against the wrong disk would have this archive writing its
+    /// copies onto a stranger's drive and counting them.
+    @discardableResult
+    func locateTarget(_ targetID: UUID, at url: URL) -> Bool {
+        guard let target = targetsByID[targetID] else { return false }
+        guard let marker = TargetMonitor.readMarker(at: url) else {
+            lastError = "\(url.lastPathComponent) does not look like \(target.name) — this archive has never kept copies there. Choose the drive itself, not a folder on it."
+            return false
+        }
+        guard marker.markerToken == target.markerToken else {
+            lastError = "That is a drive this archive knows, but it is not \(target.name). Choose the right one, or nothing here will end up where you expect."
+            return false
+        }
+        guard targetBookmarks.record(targetID: targetID, path: url.path) else {
+            lastError = "Could not keep hold of \(target.name). macOS did not grant lasting access to it, so it would be forgotten again at the next launch."
+            return false
+        }
+        audit(.drive, "\(target.name) located again, and this app can reach it from now on without being asked.", targetID: targetID)
+        rescanTargets()
+        return true
+    }
+
     /// Whether anything has been pointed at the archive yet.
     ///
     /// Not the same question as whether the archive holds photographs, and the

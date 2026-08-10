@@ -5,6 +5,9 @@ struct DrivesView: View {
     @State private var registrationCandidate: VolumeInfo?
     @State private var registrationName = ""
     @State private var isHostFolderPickerPresented = false
+    /// The device the user is being asked to point at, for a build that cannot
+    /// go looking for it itself.
+    @State private var targetToLocate: UUID?
     @State private var targetToForget: ReplicationTarget?
 
     /// The answer, given the weight of an answer.
@@ -134,6 +137,8 @@ struct DrivesView: View {
                     TakeoutActivityBanner(activity: activity)
                 }
 
+                devicesToLocate
+
                 verdict
 
                 StorageMatrix(
@@ -247,6 +252,47 @@ struct DrivesView: View {
         ) { result in
             if case .success(let url) = result {
                 store.registerHostDeviceTarget(at: url, name: url.lastPathComponent)
+            }
+        }
+        .fileImporter(
+            isPresented: Binding(
+                get: { targetToLocate != nil },
+                set: { if !$0 { targetToLocate = nil } }
+            ),
+            allowedContentTypes: [.folder]
+        ) { result in
+            if case .success(let url) = result, let targetToLocate {
+                store.locateTarget(targetToLocate, at: url)
+            }
+            targetToLocate = nil
+        }
+    }
+
+    /// Devices registered before this app could keep hold of them, which a
+    /// sandboxed build cannot find on its own.
+    ///
+    /// Shown above everything, because until it is dealt with every drive reads
+    /// as away while sitting plugged into the machine — and "away" is the app
+    /// saying it cannot see something rather than that it is gone.
+    @ViewBuilder
+    private var devicesToLocate: some View {
+        let needing = store.targetsNeedingLocating
+        if !needing.isEmpty {
+            CardBox(title: "Show the app where these are", systemImage: "questionmark.folder") {
+                VStack(alignment: .leading, spacing: 10) {
+                    Text("These devices were registered before this version, which needs to be handed each one once before it can reach them. Nothing on them has changed, and nothing is copied — point at the drive and it is remembered from then on.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    ForEach(needing) { target in
+                        HStack {
+                            Label(target.name, systemImage: "externaldrive.badge.questionmark")
+                                .font(.callout)
+                            Spacer(minLength: 12)
+                            Button("Locate…") { targetToLocate = target.id }
+                        }
+                    }
+                }
             }
         }
     }

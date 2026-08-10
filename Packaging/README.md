@@ -72,6 +72,24 @@ has moved the first one; and otherwise the pre-group location. An existing
 archive is moved into the shared container once, by rename. If both places hold
 one, the app says so and changes neither.
 
+### Upgrading into the sandbox loses the drives, once
+
+A bookmark is taken when a device is registered, so every device registered
+before bookmarks existed has none. That costs the Developer ID build nothing —
+the marker sweep finds drives regardless. For the App Store build it is total:
+reading the root of every mounted volume is exactly what the sandbox forbids, so
+a drive with no bookmark is invisible rather than slow, and somebody upgrading
+would find every one of their drives reading as *away* while plugged in.
+
+So Keep safe leads with **Show the app where these are** and asks for each one
+once. The marker still decides — a folder that is not that device is refused,
+and so is a different device the archive happens to know, because a bookmark
+recorded against the wrong disk would have the archive writing copies onto a
+stranger's drive and counting them.
+
+Worth remembering when the App Store build is first handed to an existing user:
+their drives are not lost, they are unintroduced.
+
 ### Testing both routes at once, without touching your own archive
 
 Sharing one archive is right for somebody who owns one. It is the wrong thing
