@@ -20,7 +20,10 @@ final class TargetMonitorThreadingTests: XCTestCase {
     /// in half; a copy-paste of the second half would drift silently, because
     /// nothing about a reachability map looks wrong until a drive is missing
     /// from it.
-    func testBothScansAgreeOnWhatIsReachable() async {
+    func testBothScansAgreeOnWhatIsReachable() async throws {
+        guard ProcessInfo.processInfo.environment["HEYKINN_VOLUME_TESTS"] == "1" else {
+            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a machine whose mounted volumes are safe to inspect")
+        }
         let targets = [makeTarget(name: "Nowhere", path: "/Volumes/Definitely Not Mounted")]
 
         let blocking = TargetMonitor()
@@ -41,7 +44,10 @@ final class TargetMonitorThreadingTests: XCTestCase {
     /// A target that is not mounted is not reachable, on either path — the
     /// case that matters, since an unplugged drive is the normal state on one
     /// cable (invariant 12).
-    func testAnUnmountedTargetIsReachableFromNeither() async {
+    func testAnUnmountedTargetIsReachableFromNeither() async throws {
+        guard ProcessInfo.processInfo.environment["HEYKINN_VOLUME_TESTS"] == "1" else {
+            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a machine whose mounted volumes are safe to inspect")
+        }
         let targets = [makeTarget(name: "Away", path: "/Volumes/Definitely Not Mounted")]
 
         let offThread = TargetMonitor()

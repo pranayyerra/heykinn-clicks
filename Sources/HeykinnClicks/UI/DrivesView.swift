@@ -5,6 +5,13 @@ struct DrivesView: View {
     @State private var registrationCandidate: VolumeInfo?
     @State private var registrationName = ""
     @State private var isHostFolderPickerPresented = false
+    @State private var isExternalDrivePickerPresented = false
+    /// Nil means the general Add Drive button; non-nil means an enumerated
+    /// drive row asked the user to grant that particular device.
+    @State private var expectedVolumeSelection: VolumeInfo?
+    /// Keeps the file-panel grant alive while the naming sheet is open. The
+    /// registration converts it into a persistent target bookmark.
+    @State private var selectedVolumeAccess: SecurityScopedAccess?
     /// The device the user is being asked to point at, for a build that cannot
     /// go looking for it itself.
     @State private var targetToLocate: UUID?
@@ -213,6 +220,15 @@ struct DrivesView: View {
         .toolbar {
             ToolbarItem {
                 Button {
+                    expectedVolumeSelection = nil
+                    isExternalDrivePickerPresented = true
+                } label: {
+                    Label("Add Drive", systemImage: "externaldrive.badge.plus")
+                }
+                .help("Choose an external drive for the archive")
+            }
+            ToolbarItem {
+                Button {
                     Task { @MainActor in
                         await store.rescanTargetsOffMainThread()
                         // On demand means on demand: check the paths still
@@ -244,14 +260,20 @@ struct DrivesView: View {
             }
             Button("Cancel", role: .cancel) { targetToForget = nil }
         } message: {
-            Text("Nothing on it is deleted. The app stops counting it as a copy, which frees the slot for a replacement.")
+            Text("Nothing on it is deleted. The app stops counting it as a copy; another device can be added whenever you choose.")
         }
         .fileImporter(
             isPresented: $isHostFolderPickerPresented,
             allowedContentTypes: [.folder]
         ) { result in
             if case .success(let url) = result {
-                store.registerHostDeviceTarget(at: url, name: url.lastPathComponent)
+                guard let access = SecurityScopedAccess(url: url) else {
+                    store.lastError = "macOS did not grant access to \(url.lastPathComponent). Choose the folder again and try once more."
+                    return
+                }
+                withExtendedLifetime(access) {
+                    store.registerHostDeviceTarget(at: url, name: url.lastPathComponent)
+                }
             }
         }
         .fileImporter(
@@ -262,9 +284,42 @@ struct DrivesView: View {
             allowedContentTypes: [.folder]
         ) { result in
             if case .success(let url) = result, let targetToLocate {
-                store.locateTarget(targetToLocate, at: url)
+                guard let access = SecurityScopedAccess(url: url) else {
+                    store.lastError = "macOS did not grant access to \(url.lastPathComponent). Choose the drive again and try once more."
+                    self.targetToLocate = nil
+                    return
+                }
+                _ = withExtendedLifetime(access) {
+                    store.locateTarget(targetToLocate, at: url)
+                }
             }
             targetToLocate = nil
+        }
+        .background {
+            Color.clear.fileImporter(
+                isPresented: $isExternalDrivePickerPresented,
+                allowedContentTypes: [.folder],
+                allowsMultipleSelection: false
+            ) { result in
+                defer { expectedVolumeSelection = nil }
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    guard let access = SecurityScopedAccess(url: url) else {
+                        store.lastError = "macOS did not grant access to \(url.lastPathComponent). Choose the external drive itself and try again."
+                        return
+                    }
+                    guard let volume = store.userSelectedVolume(
+                        at: url,
+                        matching: expectedVolumeSelection
+                    ) else { return }
+                    selectedVolumeAccess = access
+                    registrationName = volume.name
+                    registrationCandidate = volume
+                case .failure(let error):
+                    store.lastError = "Could not open the selected drive: \(error.localizedDescription)"
+                }
+            }
         }
     }
 
@@ -413,8 +468,13 @@ struct DrivesView: View {
             return
         }
         if let volume = unmanagedVolumes.first(where: { $0.name == place.name }) {
-            registrationName = volume.name
-            registrationCandidate = volume
+            if TargetBookmarks.isSandboxed {
+                expectedVolumeSelection = volume
+                isExternalDrivePickerPresented = true
+            } else {
+                registrationName = volume.name
+                registrationCandidate = volume
+            }
         }
     }
 
@@ -478,10 +538,15 @@ struct DrivesView: View {
                 .textFieldStyle(.roundedBorder)
             HStack {
                 Spacer()
-                Button("Cancel") { registrationCandidate = nil }
-                Button("Register") {
-                    store.registerVolumeTarget(volume: volume, name: registrationName)
+                Button("Cancel") {
                     registrationCandidate = nil
+                    selectedVolumeAccess = nil
+                }
+                Button("Register") {
+                    if store.registerVolumeTarget(volume: volume, name: registrationName) {
+                        registrationCandidate = nil
+                        selectedVolumeAccess = nil
+                    }
                 }
                 .buttonStyle(.borderedProminent)
             }

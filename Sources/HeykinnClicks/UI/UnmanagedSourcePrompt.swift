@@ -1,7 +1,6 @@
 import SwiftUI
 
-/// Shown when somebody imports from a drive the app does not manage, while a
-/// target slot is still free.
+/// Shown when somebody imports from a drive the app does not manage.
 ///
 /// Not a warning — both answers are reasonable, and the drive may genuinely be
 /// something they are about to give back. It exists because the two answers
@@ -14,6 +13,7 @@ struct UnmanagedSourcePrompt: View {
     let offer: UnmanagedSourceOffer
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @State private var isDrivePickerPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
@@ -32,8 +32,12 @@ struct UnmanagedSourcePrompt: View {
 
             VStack(alignment: .leading, spacing: 10) {
                 Button {
-                    store.registerAndImport(offer)
-                    dismiss()
+                    if TargetBookmarks.isSandboxed {
+                        isDrivePickerPresented = true
+                    } else {
+                        store.registerAndImport(offer)
+                        if store.lastError == nil { dismiss() }
+                    }
                 } label: {
                     Label("Keep this drive, and add its photos", systemImage: "externaldrive.fill.badge.checkmark")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -75,5 +79,22 @@ struct UnmanagedSourcePrompt: View {
         }
         .padding(24)
         .frame(width: 460)
+        .fileImporter(
+            isPresented: $isDrivePickerPresented,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else { return }
+            guard let access = SecurityScopedAccess(url: url) else {
+                store.lastError = "macOS did not grant access to \(url.lastPathComponent). Choose \(offer.name) itself and try again."
+                return
+            }
+            guard let chosen = store.userSelectedVolume(at: url, matching: offer.volume) else { return }
+            let selectedOffer = UnmanagedSourceOffer(volume: chosen, urls: offer.urls)
+            withExtendedLifetime(access) {
+                store.registerAndImport(selectedOffer)
+            }
+            if store.lastError == nil { dismiss() }
+        }
     }
 }

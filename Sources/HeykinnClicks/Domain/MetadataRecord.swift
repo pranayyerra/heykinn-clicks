@@ -55,7 +55,7 @@ struct MetadataRecord: Identifiable, Hashable {
     /// The JSON exactly as it was on disk.
     ///
     /// Text, not a blob, and uncompressed. These payloads ride in every catalog
-    /// snapshot — five per drive — and ~24,600 sidecars is about 15 MB, which
+    /// snapshot — three per drive — and ~24,600 sidecars is about 15 MB, which
     /// is small enough that squeezing it would buy little and cost the one
     /// property worth more than the bytes: the archive is meant to outlive the
     /// app, and `sqlite3 catalog.sqlite 'select payload …'` should show a

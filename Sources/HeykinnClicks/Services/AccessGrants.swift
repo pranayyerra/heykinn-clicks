@@ -146,6 +146,11 @@ final class AccessGrants: ObservableObject {
         grants.removeAll { $0.volumeKey == key }
         grants.append(grant)
         persist()
+        // If this decision was made from a file-panel URL, its temporary
+        // scope is open right now. Resolve the bookmark while that grant is
+        // unquestionably live and hold the resolved scope for any async scan
+        // that starts as the prompt closes.
+        resumeAccess()
     }
 
     /// Forgets one disk's decision. Deletes nothing on the disk and does not
@@ -197,11 +202,12 @@ final class AccessGrants: ObservableObject {
             var stale = false
             guard let url = try? URL(
                 resolvingBookmarkData: data,
-                options: [.withSecurityScope],
+                options: TargetBookmarks.isSandboxed ? [.withSecurityScope] : [],
                 relativeTo: nil,
                 bookmarkDataIsStale: &stale
             ) else { continue }
-            guard url.startAccessingSecurityScopedResource() else { continue }
+            if TargetBookmarks.isSandboxed,
+               !url.startAccessingSecurityScopedResource() { continue }
             accessing[grant.volumeKey] = url
         }
     }
@@ -213,7 +219,11 @@ final class AccessGrants: ObservableObject {
         let url = URL(fileURLWithPath: path, isDirectory: true)
         guard FileManager.default.fileExists(atPath: path) else { return nil }
         return try? url.bookmarkData(
-            options: [.withSecurityScope],
+            // A security-scoped bookmark cannot be created by the
+            // unsandboxed development build. Plain bookmarks keep the same
+            // decision persistence testable there; the App Store build uses
+            // the scope-bearing form.
+            options: TargetBookmarks.isSandboxed ? [.withSecurityScope] : [],
             includingResourceValuesForKeys: nil,
             relativeTo: nil
         )

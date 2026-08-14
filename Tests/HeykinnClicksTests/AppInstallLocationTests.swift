@@ -110,6 +110,24 @@ final class ReadOnlyTargetTests: XCTestCase {
         XCTAssertTrue(store.targets.isEmpty, "Nothing was registered")
     }
 
+    /// A failed action is not a remembered answer. Otherwise the next mount
+    /// would stay silent even though the drive never became a target.
+    func testAFailedManagedDecisionIsNotRemembered() throws {
+        let store = try makeStore()
+        let volume = VolumeInfo(
+            url: URL(fileURLWithPath: "/Volumes/Read Only Review Drive", isDirectory: true),
+            name: "Read Only Review Drive",
+            volumeUUID: "READ-ONLY-REVIEW",
+            isRemovable: true,
+            isReadOnly: true,
+            marker: nil
+        )
+
+        XCTAssertFalse(store.decide(.manage, for: volume, remember: true))
+        XCTAssertNil(store.accessGrants.decision(forKey: "READ-ONLY-REVIEW"))
+        XCTAssertTrue(store.targets.isEmpty)
+    }
+
     func testAWritableVolumeIsNotRefusedForThisReason() throws {
         let store = try makeStore()
         let directory = FileManager.default.temporaryDirectory
@@ -130,5 +148,21 @@ final class ReadOnlyTargetTests: XCTestCase {
             "A writable place must not be refused for being read-only: \(store.lastError ?? "")"
         )
         XCTAssertEqual(store.targets.count, 1, "A writable place registers")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        XCTAssertTrue(
+            store.targetBookmarks.hasBookmark(for: targetID),
+            "Registration must persist the permission needed to find the target after relaunch"
+        )
+    }
+
+    func testOnlyTheDriveRootSatisfiesARegistrationGrant() {
+        let root = URL(fileURLWithPath: "/Volumes/Field Drive", isDirectory: true)
+        let folder = root.appendingPathComponent("Pictures", isDirectory: true)
+
+        XCTAssertTrue(AppStore.isSameVolumeRoot(root, root))
+        XCTAssertFalse(
+            AppStore.isSameVolumeRoot(folder, root),
+            "Picking a folder on the drive does not grant the drive root or the replica folder beside it"
+        )
     }
 }

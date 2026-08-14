@@ -6,7 +6,18 @@
 ./Packaging/bundle.sh                    # debug, ad-hoc signed, runs on this Mac
 ./Packaging/bundle.sh --release
 ./Packaging/bundle.sh --release --sign "Developer ID Application: Name (TEAMID)"
+./Packaging/bundle.sh --release --appstore --sign "Apple Distribution: Name (TEAMID)" --build-number 153
 ```
+
+Privacy-safe App Review media is generated locally—no real Photos library and
+no downloaded or third-party images are involved:
+
+```bash
+swift Packaging/make-review-fixtures.swift /tmp/Heykinn-Review-Fixtures
+```
+
+The result contains an ordinary 12-image folder and a four-image extracted
+Google Takeout-shaped tree with synthetic sidecars.
 
 The icon is generated, not checked in as an opaque binary:
 
@@ -45,6 +56,13 @@ root is how this app knows which drives are which. So the App Store build cannot
 notice a drive appearing; a device is registered by choosing it, and reached
 again through a security-scoped bookmark taken at that moment
 (`Services/TargetBookmarks.swift`).
+
+The same timing issue exists for a selected Google Takeout root in a less
+obvious form: discovery and import are separate actions. The App Store build
+therefore converts the file-panel grant into a per-machine source bookmark
+before discovery starts and resumes it at launch
+(`Services/SourceBookmarks.swift`). A catalog path alone is not sandbox
+permission.
 
 Both builds take the bookmark, and both check the marker before trusting what it
 resolves to — a bookmark is permission to look, and it can resolve onto a disk
@@ -251,41 +269,33 @@ it is easy to assume nothing is missing. Two things are:
   identifier. With none, every launch logs `connection to service named
   com.apple.linkd.autoShortcut` failures. Harmless, and it hides real errors.
 
-## Why the app is not sandboxed
+## Why the website build is not sandboxed
 
-`HeykinnClicks.entitlements` sets `com.apple.security.app-sandbox` to `false`,
-and that is a decision rather than an omission. The app manages an archive
-spread across whatever volumes the user registers, reads folders they point it
-at anywhere on disk, and identifies drives by a marker file it writes at the
-volume root. A sandboxed app reaches none of that without a security-scoped
-bookmark per location — and the app's identity model (marker token first,
-volume UUID as fallback) is stronger than bookmarks for what bookmarks would be
-solving here, because it survives a rename, a remount, and a different mount
-path.
+`HeykinnClicks.entitlements` keeps the Developer ID website build outside the
+sandbox. That build can discover a newly mounted volume and read its marker
+before the user has picked it. It still records security-scoped bookmarks as a
+secondary route and uses the marker token/volume identity before trusting what
+a bookmark resolves to.
 
-The consequence to accept: **no Mac App Store.** Distribution is Developer ID
-plus notarisation.
+The Mac App Store build is deliberately different:
+`HeykinnClicks-AppStore.entitlements` enables the sandbox, user-selected
+read/write access, app-scoped bookmarks, Photos access, and the shared app
+group. It cannot sweep unknown mounted volumes, so the user chooses a drive
+once and the bookmark is the only route back to it. This is why the two builds
+are separate entitlement variants rather than two packages around identical
+permissions.
 
-With the sandbox off, `com.apple.security.files.*` and
-`com.apple.security.personal-information.*` do nothing — they are sandbox
-exceptions and there is no sandbox to except from. Photos access comes from
-`NSPhotoLibraryUsageDescription` and the user's answer to the prompt, not from
-an entitlement. They are left out rather than kept looking load-bearing.
+Both builds use the hardened runtime. Both need the Photos entitlement in the
+effective signature; without it, macOS can refuse PhotoKit silently even when
+the purpose string is present. `bundle.sh` reports that effective entitlement,
+and `make-pkg.sh` additionally refuses an unsandboxed App Store package, a
+missing application identifier/profile, and known unsupported entitlements.
 
-Hardened runtime is a codesign flag (`--options runtime`), not an entitlement,
-and none of its exceptions are needed: no JIT, no unsigned executable memory,
-no library validation to disable. `allow-dyld-environment-variables` in
-particular is absent on purpose — the archive redirect this app reads
-(`HEYKINN_ARCHIVE_DIRECTORY`) is an ordinary variable read through
-`ProcessInfo`, nothing to do with DYLD, and the exception would weaken the
-runtime for nothing.
+## Current distribution status
 
-The entitlements file carries no XML comments because `codesign`'s parser
-(AMFI) rejects them outright — hence this file.
-
-## Still to do before anyone else runs it
-
-- An icon. Drop `AppIcon.icns` in this directory and `bundle.sh` picks it up.
-- A real Developer ID signature, then notarisation and stapling.
-- Confirm the Photos prompt appears and is granted when launched standalone,
-  which is the thing the bundle exists to make possible.
+- The icon is present at `Packaging/AppIcon.icns`.
+- The website build has been Developer ID signed, notarised, and stapled.
+- The sandboxed App Store package builds successfully. Upload of the current
+  candidate follows the exact-build physical pass; App Review information and
+  the recording plan are in
+  `docs/APP_REVIEW_2_1_RESPONSE.md`.

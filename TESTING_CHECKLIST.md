@@ -1,7 +1,7 @@
 # Testing checklist
 
 Manual passes before a release. Everything here was checked against the code on
-2026-08-05 — paths, filenames and thresholds are the real ones, so a step that
+2026-08-14 — paths, filenames and thresholds are the real ones, so a step that
 fails is a bug rather than a typo in this document.
 
 **Rule for adding to this file:** if you cannot point at the code that does it,
@@ -33,20 +33,25 @@ HEYKINN_ARCHIVE_DIRECTORY=/tmp/scratch-archive HEYKINN_NO_BACKGROUND_WORK=1 \
       ordinary constraint and the case the Mac-side bridge exists for
 - [ ] One exFAT drive: no native extended attributes, so macOS writes a `._`
       sidecar per file, and timestamps land on two-second granularity
-- [ ] Clean `~/Library/Application Support/HeykinnClicks/` and the preferences
-      for `com.heykinn.HeykinnClicks`
+- [ ] Use a clean macOS user or a test archive. A signed release normally keeps
+      the archive under
+      `~/Library/Group Containers/344B87D3CV.com.heykinn.HeykinnClicks/HeykinnClicks`;
+      `~/Library/Application Support/HeykinnClicks` is the legacy fallback.
 
 ## Automated first
 
 ```bash
-swift test                                    # 392 tests, 47 classes, ~12s
+swift test                                    # 718 pass, 11 environment-dependent skip (~21s here)
 HEYKINN_DMG_TESTS=1 swift test --filter DriveIdentity
+HEYKINN_VOLUME_TESTS=1 swift test --filter 'DriveResilience|TargetMonitorThreading'
 ```
 
-The DMG tests are **skipped** without that flag — a green run without it does
-not mean they passed. Manual testing is for what a test cannot see: whether a
-screen is comprehensible, whether a prompt appears, whether an operation feels
-finished when it says it is.
+The DMG and mounted-volume tests are **skipped** without their flags — a green
+run without them does not mean they passed. Mounted-volume tests deliberately
+require an opt-in because enumerating every root can touch or block on a real
+USB drive attached to the developer's Mac. Manual testing is for what a test
+cannot see: whether a screen is comprehensible, whether a prompt appears,
+whether an operation feels finished when it says it is.
 
 ---
 
@@ -59,9 +64,7 @@ Listed because an earlier draft of this document tested all of them.
 | Welcome / onboarding screen | No such view exists |
 | Drag-and-drop import | No `onDrop` anywhere |
 | Cancelling or resuming an import | Only *sync* can be cancelled |
-| GPS from Takeout sidecars | `GeoData` is decoded and then discarded — no column stores it |
 | Drift queueing a re-copy | Drift marks the replica; nothing queues repair from it |
-| Bookmark-based drive persistence | Identity is the marker file, with volume UUID as fallback |
 
 Two rows left this table rather than being deleted from history: **restoring a
 catalog from a snapshot** is built and is tested under section 6, and the **Help
@@ -110,6 +113,13 @@ were.
 - [ ] Denying it is reported as "macOS is blocking access" with a route to fix
       it, and does not crash
 - [ ] First registration of an external drive prompts for removable-volume access
+- [ ] In the sandboxed App Store build, a drive chosen once is reachable after
+      quitting and relaunching; no mounted-volume sweep is assumed
+- [ ] New external-drive registration obtains access through a real user choice
+      in the sandbox (not merely a URL learned from volume enumeration), then
+      writes its marker and a sample replica successfully
+- [ ] **Keep safe → Add Drive** is present even when the sandbox cannot list
+      any unregistered mounted volume
 
 ## 3. Sources
 
@@ -219,7 +229,7 @@ Restore.
 - [ ] The photos themselves are **completely untouched** on every drive — verify
       in Finder
 - [ ] The replaced catalog is kept as `catalog-replaced-<stamp>.sqlite` in
-      `Application Support/HeykinnClicks/`, and opening it shows the archive as
+      the resolved archive directory, and opening it shows the archive as
       it was *before* the restore, including anything imported minutes earlier
 - [ ] The restore is written into the audit log of the restored catalog
 - [ ] Refused mid-sync and mid-import, saying which
@@ -262,6 +272,11 @@ Restore.
 
 ## Sign-off
 
+- [ ] Exact submitted/TestFlight build tested on each device/OS listed in App
+      Review Information
+- [ ] Guideline 2.1 screen recording starts with launch, shows the complete
+      typical flow and every permission prompt, and plays to completion after
+      upload
 - [ ] Every section above passed on a clean machine
 - [ ] `swift test` green, including the DMG tests with the flag set
 - [ ] Walked once against the real archive, read-only where possible

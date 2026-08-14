@@ -194,10 +194,10 @@ final class BookmarkedTargetDiscoveryTests: XCTestCase {
         )
 
         let monitor = TargetMonitor()
-        monitor.rescan(targets: [one])
+        monitor.rescanKnownLocations(targets: [one])
         XCTAssertNil(monitor.reachablePaths[one.id], "the premise: the sweep does not find it")
 
-        monitor.rescan(targets: [one], bookmarked: [one.id: root])
+        monitor.rescanKnownLocations(targets: [one], bookmarked: [one.id: root])
         XCTAssertEqual(
             monitor.reachablePaths[one.id]?.standardizedFileURL.path,
             root.standardizedFileURL.path
@@ -217,7 +217,7 @@ final class BookmarkedTargetDiscoveryTests: XCTestCase {
         )
 
         let monitor = TargetMonitor()
-        monitor.rescan(targets: [one], bookmarked: [one.id: root])
+        monitor.rescanKnownLocations(targets: [one], bookmarked: [one.id: root])
 
         XCTAssertNil(monitor.reachablePaths[one.id], "A token that does not match is not this device")
     }
@@ -229,7 +229,7 @@ final class BookmarkedTargetDiscoveryTests: XCTestCase {
         let one = target(token: UUID().uuidString)
 
         let monitor = TargetMonitor()
-        monitor.rescan(targets: [one], bookmarked: [one.id: root])
+        monitor.rescanKnownLocations(targets: [one], bookmarked: [one.id: root])
 
         XCTAssertNil(monitor.reachablePaths[one.id])
     }

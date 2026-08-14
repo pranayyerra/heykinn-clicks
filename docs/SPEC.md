@@ -20,10 +20,11 @@ One person's lifetime photo and video archive, owned outright.
   chosen — so no single device failing, decaying, or
   going missing takes the archive with it — and damage is found before the
   content is needed.
-- Once account connectors exist, the app **verifies cloud presence itself**,
-  executes migrations between domains end to end, and **automatically releases
-  cloud copies whose local redundancy is proven** — ending recurring cloud
-  lock-in without ever risking an only copy.
+- Wherever a provider connector can answer honestly, the app **verifies cloud
+  presence itself**, executes migrations between domains end to end, and can
+  eventually release cloud copies whose local redundancy is proven. Apple
+  Photos verification is the first shipped connector; provider-confirmed
+  deletion/reclamation and a Google account connector are not shipped.
 - The archive outlives the app: plain files in an understandable layout, a
   portable SQLite catalog mapping them.
 
@@ -66,11 +67,11 @@ Shipped and tested; the pointers are where to look.
 - **Targets** — host-device or external-volume, marker-file identity (never
   path), uncapped in number, forgettable without deleting anything, one
   device = one copy: `Domain/Target.swift`. **The host device is registered by
-  default**, into a folder the app asks for once, so a fresh install holds a
-  real copy before any drive is plugged in — for a source asking for two
-  copies that is this Mac plus one drive. It is all-or-nothing (invariant 4); forgetting it is the
-  supported answer for an archive the boot disk cannot hold, and registration
-  refuses outright when the copy will not fit with the reserve intact
+  default** into `LocalCopy` beside the catalog when the boot disk has more than
+  the reserve free, so a fresh install has a real destination before any drive
+  is plugged in. Under k-of-n placement it can hold only the groups/shares that
+  fit; it is not required to fit the whole archive. Forgetting it is the
+  supported answer for an archive that should not use the boot disk
   (`AppStore.adoptHostDeviceIfNeeded`, `AppStore.registerHostDeviceTarget`).
 - **Access grants** — a drive answered for once is not asked about again. The
   volume's decision (manage it, sweep it for exports, leave it alone) is
@@ -78,6 +79,11 @@ Shipped and tested; the pointers are where to look.
   beside it so the grant survives relaunches rather than being re-requested at
   every mount. Every remembered grant is listed and revocable in ⌘, → Access:
   `Services/AccessGrants.swift`, `UI/SettingsView.swift`.
+- **Selected source access** — a Takeout search and its later import are
+  separate actions, so a path in the catalog is not enough under the App Store
+  sandbox. User-selected Takeout roots get per-machine app-scoped bookmarks,
+  resumed at launch and kept outside catalog snapshots:
+  `Services/SourceBookmarks.swift`.
 
   The system half of this is not the app's to fix in code. macOS keys its
   privacy grants — removable volumes, the Photos library — to the app's
@@ -87,7 +93,9 @@ Shipped and tested; the pointers are where to look.
   `cdhash H"…"`: a new app to macOS on every rebuild. The grant is dropped, and
   worse, the app never appears in the Privacy list at all — so "grant it in
   System Settings" sends somebody to a pane their app is not in. A Developer ID
-  signature is still what ships. Tracked in PRODUCTION_READINESS.md.
+  signature is used for the website build; the App Store build is signed for
+  distribution with the sandbox, user-selected access, app-scoped bookmarks,
+  and the shared app group. Tracked in PRODUCTION_READINESS.md.
 - **Replication** — per-file for loose assets, per-export-part for archives;
   archive-backed replicas; the host-staging corridor for targets never
   reachable together; a drive arriving with the same export already on it
@@ -186,24 +194,22 @@ Shipped and tested; the pointers are where to look.
   feature. No `PHPhotosError` case names the state, and nothing on the library
   container reports it. Inferring it anyway would write false residency — the
   exact failure the evidence model exists to prevent.
-- **UI** — navigation is the three questions somebody actually has: *what I
-  have*, *where it came from*, *is it safe*. The mechanisms — violations,
-  migrations, policies, duplicates, the activity log — are pages inside the
-  question they answer, not top-level names the reader has to already
-  understand. Overview with the one-answer protection card; the Drives screen
-  with the archive map (the archive at the centre, a node per place, empty
-  slots drawn); Sources with the inbound flow (each source, how much of it has
-  made it across, the archive at the end); ⌘, Settings. Acting by default,
+- **UI** — navigation has four places: **Overview**, **Photos**, **Add photos**,
+  and **Keep safe**. The mechanisms — violations, migrations, policies,
+  duplicates, and the activity log — are pages or sections inside the place
+  whose question they answer, not top-level names the reader has to already
+  understand. Overview gives the short answer; Keep safe owns the copy matrix;
+  Add photos owns the inbound flow; ⌘, owns automation, safety, rules, and
+  access settings. Acting by default,
   escapes in menus, photos leading over files, and every screen written for
   somebody who has not read this document.
 
-  **Every source states its redundancy the same way**, because they are the
-  same question asked of different content. A Google export reports it per
-  part; a folder reports it per import batch — which devices hold that
-  folder's photos, how many are still owed and to whom, and what is waiting on
-  this Mac for a drive that is not here. Both read off `replicaStates` and
-  `replicationTasks`, so neither can disagree with the Overview verdict:
-  `UI/ExportCard.swift`, `UI/FolderSourceList.swift`.
+  **Every source carries redundancy settings in the same model**, because they
+  are the same question asked of different content. Add photos reports where
+  content came from and how much arrived; Keep safe alone reports which devices
+  hold it, what is owed, and what is in transit, off `replicaStates` and
+  `replicationTasks`. One rendered owner prevents two screens disagreeing with
+  the Overview verdict: `UI/SourcesView.swift`, `UI/StorageMatrix.swift`.
 
   **Paths are shown whether or not the disk is attached.** The reveal action
   is what depends on reachability, not the fact of the path — "where is it?"
@@ -227,12 +233,14 @@ Apple frameworks only — zero third-party dependencies.
    one-time question about their *setup* (does this library sync?) is
    topology, not presence, and may not be stretched into one. An unavailable
    or empty source yields a refusal, never a negative.
-4. **Redundancy is configured per storage group, and the user configures it.**
-   Each group carries its own copy count and its own **named destination
-   devices** — "this export: 2 copies, on Archive Drive and the NAS". The app
-   places copies on exactly those devices and nowhere else. It does not choose
-   destinations, by free space or by anything else: where a person's photos
-   live is a decision they are entitled to make, and an archive that quietly
+4. **Redundancy is configured per storage group.** Each group carries its own
+   copy count and a destination mode: let the app work out the required devices
+   deterministically, or name specific devices — "this export: 2 copies, on
+   Archive Drive and the NAS". Chosen mode places copies only on those devices;
+   automatic mode follows the stable registration-order policy rather than
+   chasing changing free-space figures. A source never silently switches from
+   chosen back to automatic: where a person's photos live is a decision they
+   are entitled to make, and an archive that quietly
    redistributes itself is one nobody can reason about.
 
    The number of registered devices is not capped, and devices are *expected*

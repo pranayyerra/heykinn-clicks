@@ -3,15 +3,18 @@
 What is genuinely left before somebody other than the author runs this, ranked
 by what it costs to get wrong.
 
-Everything below was checked against the code on 2026-08-10, not inferred from
+Everything below was checked against the code on 2026-08-14, not inferred from
 the README. Where an earlier draft of this document was wrong, the correction is
 recorded at the bottom rather than quietly dropped — a checklist that invents
 work is worse than no checklist, because the invented work crowds out the real
 work.
 
-**State of play:** 701 tests across 95 classes, all passing. Author's archive:
-24,627 assets, 98.2 GB logical, across two external drives. No dependencies
-outside the standard library and system frameworks.
+**State of play:** 711 tests pass (8 environment-dependent tests skipped in the
+ordinary run). Author's archive: 24,627 assets, 98.2 GB logical, across two
+external drives. No linked dependencies outside the standard library and
+system frameworks. The App Store package has uploaded; the current review is
+waiting for the seven-part reviewer information package and physical-device
+recording in `docs/APP_REVIEW_2_1_RESPONSE.md`, not for a code change.
 
 ---
 
@@ -133,11 +136,10 @@ Three things worth knowing about how it behaves:
 
 Not blockers, but each has a consequence somebody will hit.
 
-**1. Ingest through a target when both slots are full.** Importing from an
-unmanaged drive offers to register it *if a slot is free*; with two targets
-already registered it silently stages instead. The better answer — copy into a
-registered target as a real folder and adopt in place — is not built. Same
-number of writes, but the bytes land somewhere that counts toward the policy.
+**1. ~~Ingest through an unmanaged drive only while a slot is free.~~ Done.**
+There is no registration cap. A folder chosen on an unmanaged drive always
+offers to register that drive first, which credits the files where they already
+sit instead of staging a duplicate on the Mac.
 
 **2. The Takeout importer does not adopt.** `TakeoutImporter` still dedupes
 against a `Set<String>` and records nothing about where a duplicate was found
@@ -145,10 +147,9 @@ against a `Set<String>` and records nothing about where a duplicate was found
 content it already holds; this path did not, and relies on `TakeoutReconciler`
 instead. Two mechanisms where one would do.
 
-**3. Two-target ceiling is UI-only.** `DriveConnectPrompt` gates registration on
-`targets.count < 2`, but `registerVolumeTarget` enforces no such cap and the
-redundancy policy is clamped to however many targets exist. Either make the
-ceiling real or let people register a third device.
+**3. ~~Two-target ceiling is UI-only.~~ Done.** Registration is unbounded in
+both `DriveConnectPrompt` and `registerVolumeTarget`. Copy count is a per-source
+policy and no longer doubles as a cap on how many devices can be known.
 
 **4. ~~No Help menu.~~ Done.** `AppCommands.swift` declares the app's menus:
 File gets Add Photos (⌘I), Search for Google Downloads (⇧⌘I), Back Up the
@@ -212,12 +213,11 @@ An earlier draft listed these as work. They exist.
 
 Recorded so they stop coming back as omissions.
 
-- **Sandboxing / Mac App Store.** The app manages volumes the user registers and
-  identifies them by a marker file at the volume root. See `Packaging/README.md`.
-- **Security-scoped bookmarks.** Would be a second identity mechanism competing
-  with the marker token and volume UUID, which already survive a rename, a
-  remount and a different mount path. Bookmarks are what you reach for when you
-  do not have that.
+- **One permission model for both distribution routes.** The Developer ID build
+  remains unsandboxed so it can discover unknown mounted volumes. The Mac App
+  Store build is sandboxed and reaches user-selected folders/drives through
+  app-scoped security-scoped bookmarks. Both still verify a drive's marker
+  before trusting it. See `Packaging/README.md`.
 - **Perceptual duplicates, faces, semantic search, map view.** Out of scope for
   a tool whose job is "two copies, verified".
 
@@ -238,7 +238,8 @@ own on that walk: it is verified against snapshots this app wrote in tests, and
 has never been run against a snapshot sitting on a real drive that was
 unplugged half way through.
 
-**1.0** — gaps 1–3 closed, or consciously accepted and documented for users.
+**1.0** — gaps 2 and 6b closed, or consciously accepted and documented for
+users; the former unmanaged-ingest and device-count gaps are closed.
 
 ---
 
@@ -261,11 +262,14 @@ Kept so the same mistakes do not return.
   drive is a perfectly ordinary setup. `TargetKind`'s own comment says it — "a
   target *is* a device".
 - **"248 GB / 24,626 photos."** 98.2 GB logical, 24,627 assets.
-- **"Core engine tests + one DMG integration test."** 392 tests, 47 classes.
+- **"Core engine tests + one DMG integration test."** 711 tests pass in the
+  ordinary run, with 8 environment-dependent tests skipped unless their
+  prerequisites are enabled.
 - **"Choose staging location on Mac (default ~/Pictures/HeykinnClicks)."**
-  Staging is `Application Support/HeykinnClicks/Staging` and is not
-  user-choosable. It is transit, not a library — content is released from it
-  once the policy is satisfied.
+  Staging is the `Staging` folder inside the resolved archive directory
+  (normally the shared app-group container) and is not user-choosable. It is
+  transit, not a library — content is released from it once the policy is
+  satisfied.
 - **Sandbox entitlements alongside `app-sandbox = false`.** Inert. They are
   sandbox exceptions and there is no sandbox to except from.
 - **`allow-dyld-environment-variables`.** Not needed;

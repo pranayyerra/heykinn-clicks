@@ -1,0 +1,25 @@
+Thank you for the opportunity to provide the requested review information.
+
+1. SCREEN RECORDING
+Attached: HeykinnClicks-1.0-153-App-Review-Walkthrough.mov. It was recorded on a physical MacBook Pro (Mac15,6, Apple M3 Pro) running macOS 26.6.2 (25G82), using Heykinn Clicks 1.0 (153) installed through TestFlight. It begins with launch into the isolated synthetic Test archive and shows the normal product flow: the verified Overview, the imported photo library, the three supported Add photos sources and completed folder/Google Takeout status, two readable copies on this Mac and Heykinn Review Drive, and the filtered on-device replication activity log. The data shown is generated review data, not the user's Photos library.
+
+There are no accounts, login or deletion flows, purchases, subscriptions, paid content, user-generated publishing/reporting/blocking, advertising, or App Tracking Transparency flow.
+
+2. TEST DEVICES
+Tested on 14 August 2026 with the exact TestFlight build 153:
+- MacBook Pro (Mac15,6), Apple M3 Pro, macOS 26.6.2 (25G82): ordinary-folder import (12 assets, 0 failures), Google Takeout import (4 assets, 0 failures), removable-volume registration, 16 copied/read-back verified assets, quit/relaunch, and persistent folder/volume access. Storage testing used a fresh writable APFS disk image that macOS mounted as External and Removable; it contained no personal data and was not a physical USB unplug/replug test.
+
+3. FUNCTIONS AND AUDIENCE
+Heykinn Clicks is a local-first photo archive and copy-verification utility for Mac users who keep personal photos and videos on Macs and external drives. It imports from Apple Photos, user-selected folders, and previously downloaded Google Takeout files; deduplicates identical files; places copies on user-selected devices; verifies them by reading them back; reports missing or changed copies; and keeps a local audit history. It helps users know whether their archive has enough independent, readable copies. It does not publish, share, or upload media.
+
+4. SETUP AND ACCESS
+No login or credentials are required. Launch the app and open Add photos. For Apple Photos, choose Connect Photos, grant the system prompt, answer the iCloud question for the test library, and choose Look through the library. For ordinary files, choose Choose a folder, select an image/video folder, accept the proposed copy location, and choose Add and start reading. For Google Takeout, choose Find a download and select the supplied synthetic Takeout folder. Use Photos to view items, Keep safe to configure copy locations, and Activity to view operations. To test external storage, attach a writable drive and choose its root under Keep safe > Add Drive. The attached Heykinn-Review-Fixtures.zip contains only generated non-personal images and metadata.
+
+5. EXTERNAL SERVICES, TOOLS, AND PLATFORMS
+The app uses Apple's PhotoKit only after permission is granted. PhotoKit may retrieve an original from the user's iCloud Photos library when it is not stored locally. Google Takeout support reads only files the user already downloaded; the app neither signs in to Google nor calls Google APIs. Cataloging, hashing, deduplication, copying, verification, thumbnails, and diagnostics run locally. There is no app backend, authentication provider, payment processor, advertising/analytics/crash-reporting SDK, or AI service.
+
+6. REGIONAL DIFFERENCES
+Features and content behavior are identical in all regions. The interface is currently English-only. There are no region-locked features, accounts, prices, catalogs, or country-specific content.
+
+7. REGULATION OR PROTECTED MATERIAL
+The app is not for a regulated industry and includes no protected third-party media. It processes only photos, videos, and export metadata the user owns or is authorized to access through the local macOS account. No authorization documents or credentials apply.

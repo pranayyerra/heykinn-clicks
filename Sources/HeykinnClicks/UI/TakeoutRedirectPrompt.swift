@@ -29,8 +29,9 @@ struct TakeoutRedirectPrompt: View {
 
             Button {
                 let url = redirect.url
+                let access = redirect.access
                 store.takeoutRedirect = nil
-                store.scanForTakeout(rootURL: url, targetID: nil)
+                store.scanForTakeout(rootURL: url, targetID: nil, retaining: access)
                 dismiss()
             } label: {
                 Label("Bring it in as a download", systemImage: "magnifyingglass")

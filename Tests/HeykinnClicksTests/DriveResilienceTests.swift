@@ -37,7 +37,7 @@ final class DriveResilienceTests: XCTestCase {
         // Now rescan while the volume is invisible to enumeration (no marker
         // file, and its UUID is not discoverable) — the mount point still
         // exists on disk, so the drive must remain connected.
-        monitor.rescan(targets: [drive])
+        monitor.rescanKnownLocations(targets: [drive])
         XCTAssertEqual(
             monitor.reachablePaths[drive.id], mount,
             "A transient enumeration miss must not look like a disconnect"
@@ -52,7 +52,7 @@ final class DriveResilienceTests: XCTestCase {
 
         // A real unmount removes the mount point.
         try FileManager.default.removeItem(at: mount)
-        monitor.rescan(targets: [drive])
+        monitor.rescanKnownLocations(targets: [drive])
         XCTAssertNil(
             monitor.reachablePaths[drive.id],
             "A genuine unmount must still be detected"
@@ -60,6 +60,9 @@ final class DriveResilienceTests: XCTestCase {
     }
 
     func testVolumeStillEnumeratedWhenMarkerUnreadable() throws {
+        guard ProcessInfo.processInfo.environment["HEYKINN_VOLUME_TESTS"] == "1" else {
+            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a machine whose mounted volumes are safe to inspect")
+        }
         // A volume with no marker file must still produce a VolumeInfo (so
         // UUID fallback matching can run) rather than vanishing entirely.
         let volumes = TargetMonitor.enumerateVolumes()

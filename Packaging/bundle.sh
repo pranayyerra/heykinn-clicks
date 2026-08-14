@@ -13,6 +13,7 @@
 #   ./Packaging/bundle.sh              debug build, ad-hoc signed
 #   ./Packaging/bundle.sh --release    release build
 #   ./Packaging/bundle.sh --release --sign "Developer ID Application: Name (TEAMID)"
+#   ./Packaging/bundle.sh --release --build-number 153
 #
 # Notarisation is a separate step and is not done here; see PRODUCTION_READINESS.md.
 set -euo pipefail
@@ -22,17 +23,27 @@ cd "$(dirname "$0")/.."
 CONFIGURATION="debug"
 IDENTITY=""
 ENTITLEMENTS="Packaging/HeykinnClicks.entitlements"
+BUILD_NUMBER=""
 while [ $# -gt 0 ]; do
     case "$1" in
         --release) CONFIGURATION="release"; shift ;;
         --sign)    IDENTITY="${2:?--sign needs an identity}"; shift 2 ;;
         --adhoc)   IDENTITY="-"; shift ;;
+        --build-number) BUILD_NUMBER="${2:?--build-number needs an integer}"; shift 2 ;;
         # The sandboxed build. Not a signing variant — it is a different app in
         # what it may touch, so it is worth being explicit about asking for it.
         --appstore) ENTITLEMENTS="Packaging/HeykinnClicks-AppStore.entitlements"; shift ;;
         *) echo "unknown option: $1" >&2; exit 2 ;;
     esac
 done
+
+case "$BUILD_NUMBER" in
+    "") ;;
+    0|*[!0-9]*)
+        echo "--build-number must be a positive integer" >&2
+        exit 2
+        ;;
+esac
 
 # Prefer a real identity, because macOS privacy permissions are keyed to one.
 #
@@ -64,15 +75,20 @@ echo "Building ($CONFIGURATION)…"
 swift build -c "$CONFIGURATION"
 [ -f "$BINARY" ] || { echo "no binary at $BINARY" >&2; exit 1; }
 
-echo "Assembling $APP…"
+echo "Assembling ${APP}…"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BINARY" "$APP/Contents/MacOS/HeykinnClicks"
 cp Packaging/Info.plist "$APP/Contents/Info.plist"
 printf 'APPL????' > "$APP/Contents/PkgInfo"
 
-# Version from the current commit, so a build can always be traced back to one.
-BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+# Default to the commit count so ordinary builds remain traceable. A release
+# candidate made from reviewed but not-yet-committed changes can supply the
+# next App Store Connect build number explicitly; reusing an already-uploaded
+# number makes Transporter reject an otherwise valid package.
+if [ -z "$BUILD_NUMBER" ]; then
+    BUILD_NUMBER="$(git rev-list --count HEAD 2>/dev/null || echo 1)"
+fi
 /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUMBER" "$APP/Contents/Info.plist" >/dev/null
 
 # An icon is optional; without one macOS uses a generic placeholder.

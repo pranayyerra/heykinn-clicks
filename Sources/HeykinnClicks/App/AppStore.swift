@@ -74,6 +74,12 @@ final class AppStore: ObservableObject {
     /// Held for the process's lifetime. The kernel gives it back on exit,
     /// including on a crash, so there is no stale lock to clear.
     private var archiveLock: ArchiveLock?
+    /// The same boundary that prevents launch-time background work also
+    /// applies to explicit rescans initiated by orchestration under test.
+    /// Without retaining it, registering a temporary test target enumerated
+    /// the developer's physical USB drives and could block on their privacy
+    /// gate despite the environment promising not to touch them.
+    private let runsBackgroundWork: Bool
     /// Whether a staged copy is released once the archive's own drives hold
     /// the content safely. On, because staging is transit and the alternative
     /// is a permanent second copy of everything on the boot disk that nothing
@@ -149,6 +155,9 @@ final class AppStore: ObservableObject {
     /// about. Per-machine and kept out of the catalog — see
     /// `Services/TargetBookmarks.swift`.
     let targetBookmarks: TargetBookmarks
+    /// Permission to return to user-selected source roots between Takeout
+    /// discovery and the later import, including after a relaunch.
+    let sourceBookmarks: SourceBookmarks
 
     /// Each thing the user added, with its own copy count and destinations.
     @Published private(set) var sources: [PhotoArchiveSource] = []
@@ -388,12 +397,14 @@ final class AppStore: ObservableObject {
         let appDirectory = environment.appDirectory
         try? FileManager.default.createDirectory(at: appDirectory, withIntermediateDirectories: true)
 
+        runsBackgroundWork = environment.runsBackgroundWork
         defaults = environment.defaults
         self.appDirectory = appDirectory
         let grants = AccessGrants(defaults: environment.defaults)
         accessGrants = grants
         accessGrantList = grants.grants
         targetBookmarks = TargetBookmarks(defaults: environment.defaults)
+        sourceBookmarks = SourceBookmarks(defaults: environment.defaults)
         staging = StagingStore(rootURL: appDirectory.appendingPathComponent("Staging", isDirectory: true))
         relay = ExportPartRelay(rootURL: appDirectory.appendingPathComponent("ExportPartRelay", isDirectory: true))
         targetMonitor = TargetMonitor()
@@ -455,6 +466,12 @@ final class AppStore: ObservableObject {
             lastError = "Could not review what has been read back: \(error.localizedDescription)"
         }
         resolveAutomaticDestinations()
+
+        // Unlike target reachability, this is not background work. A Takeout
+        // part the user already discovered can be imported from a button in
+        // the foreground, so its source grant has to be ready even in an
+        // otherwise-offline inspection environment.
+        sourceBookmarks.resumeAccess()
 
         targetMonitor.rescanRequested = { [weak self] in
             // A mount or unmount notification: nothing is waiting on the
@@ -2729,10 +2746,12 @@ final class AppStore: ObservableObject {
 
     func rescanTargets() {
         let previouslyConnected = Set(targetMonitor.reachablePaths.keys)
-        targetMonitor.rescan(
-            targets: targets,
-            bookmarked: targetBookmarks.resolvedURLs(forTargets: targets.map(\.id))
-        )
+        let bookmarked = targetBookmarks.resolvedURLs(forTargets: targets.map(\.id))
+        if runsBackgroundWork {
+            targetMonitor.rescan(targets: targets, bookmarked: bookmarked)
+        } else {
+            targetMonitor.rescanKnownLocations(targets: targets, bookmarked: bookmarked)
+        }
         reactToRescan(previouslyConnected: previouslyConnected)
     }
 
@@ -2746,10 +2765,12 @@ final class AppStore: ObservableObject {
     /// the placement audit before the scan had happened.
     func rescanTargetsOffMainThread() async {
         let previouslyConnected = Set(targetMonitor.reachablePaths.keys)
-        await targetMonitor.rescanOffMainThread(
-            targets: targets,
-            bookmarked: targetBookmarks.resolvedURLs(forTargets: targets.map(\.id))
-        )
+        let bookmarked = targetBookmarks.resolvedURLs(forTargets: targets.map(\.id))
+        if runsBackgroundWork {
+            await targetMonitor.rescanOffMainThread(targets: targets, bookmarked: bookmarked)
+        } else {
+            targetMonitor.rescanKnownLocations(targets: targets, bookmarked: bookmarked)
+        }
         reactToRescan(previouslyConnected: previouslyConnected)
     }
 
@@ -2854,19 +2875,23 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Carries out a remembered decision. Registration is still gated on a
-    /// free slot: the policy caps how many targets exist, and a grant made
-    /// when a slot was free must not force one open later.
-    private func apply(_ decision: VolumeDecision, to volume: VolumeInfo) {
+    /// Carries out a remembered decision. Device registration is unbounded;
+    /// copy counts belong to each source and are not a cap on known devices.
+    @discardableResult
+    private func apply(
+        _ decision: VolumeDecision,
+        to volume: VolumeInfo,
+        retaining access: SecurityScopedAccess? = nil
+    ) -> Bool {
         switch decision {
         case .manage:
             // No slot check: devices are unbounded, and the policy's number is
             // copies per photo rather than places in total.
-            registerVolumeTarget(volume: volume, name: volume.name)
+            return registerVolumeTarget(volume: volume, name: volume.name)
         case .scan:
-            scanForTakeout(rootURL: volume.url, targetID: nil)
+            return scanForTakeout(rootURL: volume.url, targetID: nil, retaining: access)
         case .ignore:
-            break
+            return true
         }
     }
 
@@ -2875,7 +2900,17 @@ final class AppStore: ObservableObject {
     /// `remember` off means the choice happens and is not written down — the
     /// disk is asked about again next time. That is what an unchecked
     /// "remember this" honestly means, as against a grant with a quiet expiry.
-    func decide(_ decision: VolumeDecision, for volume: VolumeInfo, remember: Bool) {
+    @discardableResult
+    func decide(
+        _ decision: VolumeDecision,
+        for volume: VolumeInfo,
+        remember: Bool,
+        retaining access: SecurityScopedAccess? = nil
+    ) -> Bool {
+        // Act first. A failed registration is not an answer worth remembering:
+        // doing so would make the drive stop asking while still not being a
+        // target, with no visible route back to the failed action.
+        guard apply(decision, to: volume, retaining: access) else { return false }
         accessGrants.record(
             decision: decision,
             forVolumeUUID: volume.volumeUUID,
@@ -2890,8 +2925,8 @@ final class AppStore: ObservableObject {
                 "\(volume.name) will be \(decision.displayName.lowercased()) from now on, without asking. Change it under Settings → Access."
             )
         }
-        apply(decision, to: volume)
         connectPrompt = nil
+        return true
     }
 
     /// Forgets one disk's decision. Deletes nothing and unregisters nothing —
@@ -2943,6 +2978,11 @@ final class AppStore: ObservableObject {
     /// `offeringRegistration` is cleared by the prompt itself, so answering it
     /// does not walk back into it.
     func importFolders(_ urls: [URL], offeringRegistration: Bool = true) {
+        // Start while the security-scoped URLs returned by the picker are
+        // still in hand, then keep every lease alive through the detached
+        // enumeration and hashing work. A scope ending when the confirmation
+        // sheet closed could make a large import fail after appearing to start.
+        let access = urls.compactMap(SecurityScopedAccess.init(url:))
         guard beginFolderImport(urls, offeringRegistration: offeringRegistration) else {
             // Deferred — the registration offer intercepted it, or an import is
             // already running. The claim must not survive: left set, the next
@@ -2956,6 +2996,7 @@ final class AppStore: ObservableObject {
             // must not inherit the claim, or a Takeout pipeline running after
             // a folder import would file its photos under the folder.
             importingIntoSourceID = nil
+            _ = access
         }
     }
 
@@ -2998,7 +3039,10 @@ final class AppStore: ObservableObject {
         // tens of thousands of copies it did not need. The difference is too
         // large to let somebody walk into by picking the wrong menu item.
         if let export = urls.first(where: { TakeoutScanner.looksLikeTakeoutRoot($0) }) {
-            takeoutRedirect = TakeoutRedirect(url: export)
+            takeoutRedirect = TakeoutRedirect(
+                url: export,
+                access: SecurityScopedAccess(url: export)
+            )
             return false
         }
 
@@ -4660,8 +4704,38 @@ final class AppStore: ObservableObject {
     /// Scans a root (drive mount or chosen folder) for Takeout exports and
     /// records new finds in the catalog. The archives themselves are left
     /// untouched wherever they live.
-    func scanForTakeout(rootURL: URL, targetID: UUID?) {
-        Task { await performTakeoutScan(rootURL: rootURL, targetID: targetID) }
+    @discardableResult
+    func scanForTakeout(
+        rootURL: URL,
+        targetID: UUID?,
+        retaining suppliedAccess: SecurityScopedAccess? = nil
+    ) -> Bool {
+        // Acquire synchronously, while a file-panel URL still carries its
+        // Powerbox extension. The task captures the lease for the complete
+        // scan; stopping access as the picker callback returned made larger
+        // Google exports fail part-way through in the App Store sandbox.
+        let access = suppliedAccess ?? SecurityScopedAccess(url: rootURL)
+        if TargetBookmarks.isSandboxed, access == nil {
+            lastError = "macOS did not grant access to \(rootURL.lastPathComponent). Choose it again in the file panel."
+            return false
+        }
+        // A search only discovers candidates. Import is a later user action,
+        // often after this task — or this process — has ended, so the
+        // temporary picker lease must be converted into persistent source
+        // access before scanning begins. Managed targets already have their
+        // own target bookmarks; recording their root here too is harmless and
+        // keeps volume scans made through the generic picker equally robust.
+        if targetID == nil,
+           !sourceBookmarks.record(path: rootURL.path),
+           TargetBookmarks.isSandboxed {
+            lastError = "macOS could not remember access to \(rootURL.lastPathComponent). Choose the folder again before importing it."
+            return false
+        }
+        Task {
+            _ = access
+            await performTakeoutScan(rootURL: rootURL, targetID: targetID)
+        }
+        return true
     }
 
     func performTakeoutScan(rootURL: URL, targetID: UUID?) async {
@@ -5414,8 +5488,70 @@ final class AppStore: ObservableObject {
 
     // MARK: - Targets
 
+    /// Whether a file-panel selection is the volume root it is meant to grant.
+    /// A folder *on* the drive is not enough: registering the device needs its
+    /// own marker at the root and permission to the app's replica directory
+    /// beside every other folder there.
+    nonisolated static func isSameVolumeRoot(_ selectedURL: URL, _ rootURL: URL) -> Bool {
+        let selected = Set([
+            selectedURL.standardizedFileURL.path,
+            selectedURL.resolvingSymlinksInPath().standardizedFileURL.path,
+        ])
+        let root = Set([
+            rootURL.standardizedFileURL.path,
+            rootURL.resolvingSymlinksInPath().standardizedFileURL.path,
+        ])
+        return !selected.isDisjoint(with: root)
+    }
+
+    /// Turns a system-file-panel choice into the authoritative description of
+    /// an external device. The returned URL is the chosen URL, not the one the
+    /// mount sweep happened to enumerate: only the former carries permission
+    /// in an App Store build.
+    func userSelectedVolume(at selectedURL: URL, matching expected: VolumeInfo? = nil) -> VolumeInfo? {
+        let chosen = selectedURL.standardizedFileURL
+        guard let storage = TargetStorage.of(chosen) else {
+            lastError = "Could not work out which device that selection is on. Choose the external drive itself."
+            return nil
+        }
+        guard Self.isSameVolumeRoot(chosen, storage.volumeURL) else {
+            lastError = "Choose the external drive itself, not a folder inside it. The app needs the drive root so it can keep its own copy folder there."
+            return nil
+        }
+        guard !storage.isHostDevice else {
+            lastError = "That is this Mac's own disk. Use the This Mac row to choose a folder on it; this picker is for an external drive."
+            return nil
+        }
+        if let expected {
+            let samePath = Self.isSameVolumeRoot(chosen, expected.url)
+            let sameIdentity = expected.volumeUUID != nil
+                && storage.volumeUUID != nil
+                && expected.volumeUUID == storage.volumeUUID
+            guard samePath || sameIdentity else {
+                lastError = "That is not \(expected.name). Choose \(expected.name) itself, or cancel and add the other drive separately."
+                return nil
+            }
+        }
+
+        let keys: Set<URLResourceKey> = [
+            .volumeNameKey, .volumeUUIDStringKey, .volumeIsRemovableKey,
+            .volumeIsInternalKey, .volumeIsReadOnlyKey,
+        ]
+        let values = try? chosen.resourceValues(forKeys: keys)
+        return VolumeInfo(
+            url: chosen,
+            name: values?.volumeName ?? expected?.name ?? chosen.lastPathComponent,
+            volumeUUID: values?.volumeUUIDString ?? expected?.volumeUUID,
+            isRemovable: (values?.volumeIsRemovable ?? storage.isRemovable)
+                || !(values?.volumeIsInternal ?? storage.isInternal),
+            isReadOnly: values?.volumeIsReadOnly ?? expected?.isReadOnly ?? false,
+            marker: TargetMonitor.readMarker(at: chosen)
+        )
+    }
+
     /// Registers a mounted external volume as a target.
-    func registerVolumeTarget(volume: VolumeInfo, name: String) {
+    @discardableResult
+    func registerVolumeTarget(volume: VolumeInfo, name: String) -> Bool {
         // Before anything is attempted, because the alternative is what this
         // replaces: registration got as far as writing the marker file and
         // failed with the filesystem's own words — "You can't save the file
@@ -5426,14 +5562,14 @@ final class AppStore: ObservableObject {
         // drive to register.
         if volume.isReadOnly {
             lastError = "\(volume.name) is read-only, so nothing can be copied onto it. If this is the Heykinn Clicks installer, eject it — a device has to be something the archive can write to, like an external drive."
-            return
+            return false
         }
         if let storage = TargetStorage.of(volume.url),
            let clash = existingTarget(sharing: storage) {
             lastError = "\(clash.name) is already on this storage. Two copies on one device do not survive that device failing, so they count as one."
-            return
+            return false
         }
-        register(
+        return register(
             name: name.isEmpty ? volume.name : name,
             kind: .externalVolume,
             rootURL: volume.url,
@@ -5607,14 +5743,12 @@ final class AppStore: ObservableObject {
         assets.filter { $0.residency == .local && !$0.isLivePhotoMotion }.count
     }
 
-    /// Clears empty replica bucket directories from a connected device.
-    ///
-    /// Drops a target from the registry, freeing its slot.
+    /// Drops a target from the registry.
     ///
     /// Nothing on the target is deleted — forgetting says what the app manages,
     /// not what exists, and registering it again re-adopts the content in
-    /// place. This is the way out of the registration cap: without it, a failed
-    /// drive would leave the archive unable to restore its own redundancy.
+    /// place. A failed or retired drive can therefore be removed without the
+    /// app pretending its files were deleted.
     func forgetTarget(_ targetID: UUID) {
         guard let target = targetsByID[targetID] else { return }
         do {
@@ -5624,7 +5758,7 @@ final class AppStore: ObservableObject {
             // nobody asked for, and "its files were left untouched" should
             // extend to not still being able to reach them.
             targetBookmarks.forget(targetID: targetID)
-            audit(.drive, "Forgot \(target.name). Its files were left untouched and the slot is free for a replacement.")
+            audit(.drive, "Forgot \(target.name). Its files were left untouched; another device can be added whenever you choose.")
             // Forgetting this Mac is the supported way to run an archive the
             // boot disk cannot hold. Remember the decision, or first-launch
             // adoption puts the host target straight back on next launch and
@@ -5669,16 +5803,29 @@ final class AppStore: ObservableObject {
         }
     }
 
+    @discardableResult
     private func register(
         name: String,
         kind: TargetKind,
         rootURL: URL,
         volumeUUID: String?,
         configuredPath: String?
-    ) {
+    ) -> Bool {
         let targetID = UUID()
         let token = UUID().uuidString
         let marker = TargetMarker(targetID: targetID, markerToken: token, appName: "heykinn-clicks")
+        // In the sandbox this is not an optimisation. Refuse before writing a
+        // marker or catalog row if the picker URL cannot become a persistent
+        // bookmark, or the target would look registered until the next launch
+        // and disappear precisely when the archive needs it.
+        let recordedBookmark = targetBookmarks.record(targetID: targetID, path: rootURL.path)
+        let appRoot = appDirectory.standardizedFileURL.path
+        let targetRoot = rootURL.standardizedFileURL.path
+        let isInsideAppContainer = targetRoot == appRoot || targetRoot.hasPrefix(appRoot + "/")
+        if TargetBookmarks.isSandboxed, !recordedBookmark, !isInsideAppContainer {
+            lastError = "macOS did not grant lasting access to \(name). Choose the drive itself in the file panel and try again."
+            return false
+        }
         do {
             try TargetMonitor.writeMarker(marker, to: rootURL)
             let target = ReplicationTarget(
@@ -5700,7 +5847,6 @@ final class AppStore: ObservableObject {
             // root of a volume nobody handed the app is what the sandbox
             // forbids. Best-effort on purpose — registration does not fail for
             // want of one, since the marker sweep finds the drive either way.
-            targetBookmarks.record(targetID: targetID, path: rootURL.path)
             audit(.drive, "Registered \(kind.displayName.lowercased()) target \(target.name).", targetID: targetID)
             loadAll()
             // A new device does *not* owe a copy of everything. It owes a share
@@ -5737,8 +5883,11 @@ final class AppStore: ObservableObject {
                     targetID: targetID
                 )
             }
+            return true
         } catch {
+            if recordedBookmark { targetBookmarks.forget(targetID: targetID) }
             lastError = "Target registration failed: \(error.localizedDescription)"
+            return false
         }
     }
 

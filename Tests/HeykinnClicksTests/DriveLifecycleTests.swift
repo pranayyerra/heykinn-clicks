@@ -31,7 +31,7 @@ final class DriveLifecycleTests: XCTestCase {
         monitor.setReachablePathsForTesting([drive.id: mount])
 
         try FileManager.default.removeItem(at: mount)
-        monitor.rescan(targets: [drive])
+        monitor.rescanKnownLocations(targets: [drive])
         XCTAssertNil(monitor.reachablePaths[drive.id])
     }
 

@@ -46,7 +46,7 @@ final class TargetBookmarks: ObservableObject {
     /// `.withSecurityScope` requires the sandbox entitlement; asking for one
     /// without it fails, and falling back to a plain bookmark keeps the
     /// unsandboxed build working rather than silently storing nothing.
-    static var isSandboxed: Bool {
+    nonisolated static var isSandboxed: Bool {
         ProcessInfo.processInfo.environment["APP_SANDBOX_CONTAINER_ID"] != nil
     }
 

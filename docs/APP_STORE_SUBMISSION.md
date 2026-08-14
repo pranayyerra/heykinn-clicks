@@ -69,7 +69,7 @@ At [appstoreconnect.apple.com](https://appstoreconnect.apple.com) →
 ## 5. Build and upload
 
 ```bash
-./Packaging/bundle.sh --release --appstore --sign "Apple Distribution: PRANAY HASAN YERRA (344B87D3CV)"
+./Packaging/bundle.sh --release --appstore --sign "Apple Distribution: PRANAY HASAN YERRA (344B87D3CV)" --build-number 153
 ./Packaging/make-pkg.sh
 ```
 
@@ -109,6 +109,26 @@ grows from what has actually been met rather than from any published set.
 - **Description, keywords, category** — Photo & Video, or Utilities.
 - **Support URL** — the repository's issues page will do.
 
+## 7. App Review information
+
+The physical-device test record, evidence, and recording script live in
+[`APP_REVIEW_2_1_RESPONSE.md`](APP_REVIEW_2_1_RESPONSE.md). The separate
+[`APP_REVIEW_2_1_NOTES.txt`](APP_REVIEW_2_1_NOTES.txt) is the paste-ready
+seven-part answer; it is deliberately kept below App Store Connect's
+4,000-byte Notes limit. Fill its two placeholders from the exact submitted
+build pass, attach the recording and generated sample archive, then validate
+the packet before pasting it into **App Review Information → Notes** and the
+review reply:
+
+```bash
+./Packaging/validate-app-review-packet.sh \
+  docs/APP_REVIEW_2_1_NOTES.txt /path/to/review-recording.mov
+```
+
+There are no review credentials because the app has no account. Do not leave
+the credentials fields looking accidentally incomplete: state explicitly in
+Notes that no login or demo account is required.
+
 ---
 
 ## Before submitting, not after
@@ -116,9 +136,19 @@ grows from what has actually been met rather than from any published set.
 Two things worth doing first, because a rejection costs a review cycle:
 
 - **Register a drive in the sandboxed build and confirm it survives a
-  relaunch.** The sandbox reaches drives only through bookmarks, and that path
-  has been unit-tested but never run against a real drive.
+  relaunch.** The App Store flow now uses **Keep safe → Add Drive**, requires a
+  system-selected drive root, and reaches returning drives only through
+  bookmarks. Unit tests cover the contract; a signed physical-device pass is
+  still the release evidence.
+- **Discover a user-selected Takeout folder, quit, relaunch, then import it
+  without choosing the folder again.** Discovery and import are separate
+  actions, so the selected root must be restored through its own app-scoped
+  bookmark; retaining only the file panel's temporary grant is not enough.
 - **Remember the reviewer has no drive plugged in.** An app about external
   drives, opened on a machine with none, has to still make sense — the first-run
   screen is what they will see, and it should read as an app waiting for a drive
   rather than an app that is broken.
+- **Use the submitted build for the recording.** A local source build is not
+  evidence for the binary under review. Record a TestFlight/App Store-signed
+  install on a physical Mac, and list only devices on which that build completed
+  the manual flow.

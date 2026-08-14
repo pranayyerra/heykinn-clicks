@@ -14,6 +14,8 @@ struct DriveConnectPrompt: View {
     let volume: VolumeInfo
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
+    @State private var pendingDecision: VolumeDecision?
+    @State private var isDrivePickerPresented = false
 
     /// On by default, because being asked twice about the same disk is the
     /// complaint this exists to answer. Unchecking is the escape, and it means
@@ -25,8 +27,14 @@ struct DriveConnectPrompt: View {
     /// can land, and refusing it because the policy asks for two copies was
     /// the two ideas being confused.
     private func choose(_ decision: VolumeDecision) {
-        store.decide(decision, for: volume, remember: remember)
-        dismiss()
+        if TargetBookmarks.isSandboxed, decision != .ignore {
+            pendingDecision = decision
+            isDrivePickerPresented = true
+            return
+        }
+        if store.decide(decision, for: volume, remember: remember) {
+            dismiss()
+        }
     }
 
     var body: some View {
@@ -87,5 +95,35 @@ struct DriveConnectPrompt: View {
         }
         .padding(24)
         .frame(width: 460)
+        .fileImporter(
+            isPresented: $isDrivePickerPresented,
+            allowedContentTypes: [.folder],
+            allowsMultipleSelection: false
+        ) { result in
+            guard case .success(let urls) = result, let url = urls.first else {
+                pendingDecision = nil
+                return
+            }
+            guard let decision = pendingDecision else { return }
+            guard let access = SecurityScopedAccess(url: url) else {
+                store.lastError = "macOS did not grant access to \(url.lastPathComponent). Choose \(volume.name) itself and try again."
+                pendingDecision = nil
+                return
+            }
+            guard let chosen = store.userSelectedVolume(at: url, matching: volume) else {
+                pendingDecision = nil
+                return
+            }
+            let succeeded = withExtendedLifetime(access) {
+                store.decide(
+                    decision,
+                    for: chosen,
+                    remember: remember,
+                    retaining: access
+                )
+            }
+            pendingDecision = nil
+            if succeeded { dismiss() }
+        }
     }
 }

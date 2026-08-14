@@ -64,9 +64,26 @@ final class TargetMonitor: ObservableObject {
 
     /// `bookmarked` is where each registered device's bookmark says it is, for
     /// the devices that have one. Supplied by the caller rather than resolved
-    /// here so this type keeps knowing nothing about permissions.
+    /// here because bookmark storage and lifetime belong to the permission
+    /// service; the monitor only chooses the sandbox-safe discovery route.
     func rescan(targets: [ReplicationTarget], bookmarked: [UUID: URL] = [:]) {
+        // A sandboxed process may enumerate mount names, but it has no right to
+        // open every root and read a marker. Apart from being denied, that read
+        // can wait on a privacy gate and hold the whole scan hostage. The
+        // explicit Add Drive picker is how new devices enter; bookmarks are
+        // how registered ones return.
+        if TargetBookmarks.isSandboxed {
+            apply(volumes: [], targets: targets, bookmarked: bookmarked)
+            return
+        }
         apply(volumes: Self.enumerateVolumes(), targets: targets, bookmarked: bookmarked)
+    }
+
+    /// Resolves only paths explicitly supplied by the caller. Test and offline
+    /// archives use this so exercising registration cannot enumerate — much
+    /// less block on — the user's real removable drives.
+    func rescanKnownLocations(targets: [ReplicationTarget], bookmarked: [UUID: URL] = [:]) {
+        apply(volumes: [], targets: targets, bookmarked: bookmarked)
     }
 
     /// The same scan with the slow half moved off the main thread.
@@ -81,6 +98,10 @@ final class TargetMonitor: ObservableObject {
     /// Only the enumeration moves. Matching volumes to targets and publishing
     /// the result stay on the main actor, because they touch published state.
     func rescanOffMainThread(targets: [ReplicationTarget], bookmarked: [UUID: URL] = [:]) async {
+        if TargetBookmarks.isSandboxed {
+            apply(volumes: [], targets: targets, bookmarked: bookmarked)
+            return
+        }
         let volumes = await Task.detached(priority: .userInitiated) {
             Self.enumerateVolumes()
         }.value

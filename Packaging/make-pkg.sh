@@ -113,9 +113,13 @@ if [ -z "$IDENTITY" ]; then
 fi
 
 VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$APP/Contents/Info.plist")"
-PKG="build/HeykinnClicks-$VERSION.pkg"
+BUILD_NUMBER="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist")"
+# Include the build number so the package used for TestFlight and the one used
+# for the recording cannot be confused with an older binary carrying the same
+# marketing version.
+PKG="build/HeykinnClicks-$VERSION-$BUILD_NUMBER.pkg"
 
-echo "Building $PKG…"
+echo "Building ${PKG}…"
 rm -f "$PKG"
 # --component rather than a component plist: one app, installed to /Applications.
 productbuild \
@@ -125,7 +129,7 @@ productbuild \
 
 echo
 echo "Built $PKG"
-echo "  app version: $VERSION ($(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$APP/Contents/Info.plist"))"
+echo "  app version: $VERSION ($BUILD_NUMBER)"
 echo
 echo "Upload it with Transporter (free, from the Mac App Store): drag $PKG in."
 echo "The app record has to exist in App Store Connect first, with this bundle id:"

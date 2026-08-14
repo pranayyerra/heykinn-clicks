@@ -72,7 +72,7 @@ mkdir -p "$STAGE"
 ditto "$APP" "$STAGE/HeykinnClicks.app"
 ln -s /Applications "$STAGE/Applications"
 
-echo "Building $DMG…"
+echo "Building ${DMG}…"
 hdiutil create \
     -volname "Heykinn Clicks" \
     -srcfolder "$STAGE" \

@@ -196,6 +196,10 @@ struct TakeoutExportSet: Identifiable {
 struct TakeoutRedirect: Identifiable {
     let id = UUID()
     var url: URL
+    /// Keeps the original folder-picker grant alive while the explanation
+    /// sheet is open. The Takeout scan converts it to a persistent source
+    /// bookmark before the sheet disappears.
+    var access: SecurityScopedAccess? = nil
 
     var name: String { url.lastPathComponent }
 }

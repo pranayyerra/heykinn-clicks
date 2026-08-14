@@ -39,6 +39,26 @@ final class AccessGrantTests: XCTestCase {
         XCTAssertEqual(second.grant(forKey: "VOL-1")?.displayName, "Field Drive")
     }
 
+    func testAnExistingSelectedPathCarriesAPersistentBookmark() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("heykinn-access-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let defaults = makeDefaults()
+
+        AccessGrants(defaults: defaults).record(
+            decision: .scan,
+            forVolumeUUID: "VOL-BOOKMARK",
+            path: directory.path,
+            displayName: "Review Fixture"
+        )
+
+        XCTAssertNotNil(
+            AccessGrants(defaults: defaults).grant(forKey: "VOL-BOOKMARK")?.bookmark,
+            "A remembered scan without a bookmark cannot run after relaunch in the sandbox"
+        )
+    }
+
     /// The whole point of the change. "Scan it" used to be re-asked at every
     /// mount because only refusal was ever written down.
     func testEveryDecisionIsRemembered() {

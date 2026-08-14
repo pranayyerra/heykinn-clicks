@@ -24,7 +24,10 @@ empty and asks for permission only when you point it at something.
   drive.
 
 Everything it keeps is on your own Mac and your own drives. There is no account,
-no server, and nothing leaves the machine.
+app-operated server, upload, analytics, or advertising. If you connect Photos,
+Apple's PhotoKit may download an original from your own iCloud Photos library
+when it is not already on the Mac; the app uses it only to build the local
+archive and never uploads to or changes Photos.
 
 **What it does to your files.** Reads them. Photos are copied *into* the
 archive; the folders, libraries and Google exports you point it at are left
@@ -44,8 +47,11 @@ in steady state: `Local`, `AppleCloud` (iCloud / Apple Photos), or
 active migration job is a **violation** — flagged, never silently tolerated,
 never auto-fixed.
 
-**The host machine is the control plane.** The catalog (SQLite at
-`~/Library/Application Support/HeykinnClicks/catalog.sqlite`) is the canonical
+**The host machine is the control plane.** The catalog is SQLite in the shared
+app-group archive at
+`~/Library/Group Containers/344B87D3CV.com.heykinn.HeykinnClicks/HeykinnClicks/catalog.sqlite`.
+`~/Library/Application Support/HeykinnClicks` is only the legacy/fallback
+location used before the shared container existed. The catalog is the canonical
 authority for metadata, residency, duplicate state, policies, migration jobs,
 the target registry, per-target backlog, protection state, and audit history.
 Nothing about system state depends on a target being attached.
@@ -158,9 +164,10 @@ was noise sitting alongside a real archive.
 
 ### Working on it without touching your own archive
 
-`swift run` opens the real archive at
-`~/Library/Application Support/HeykinnClicks`. Point it somewhere else and it
-gets its own catalog, its own staging, and its own preferences:
+`swift run` opens the shared app-group archive when it exists, otherwise the
+legacy archive at `~/Library/Application Support/HeykinnClicks`. Point it
+somewhere else and it gets its own catalog, its own staging, and its own
+preferences:
 
 ```bash
 HEYKINN_ARCHIVE_DIRECTORY=/tmp/scratch-archive swift run
@@ -244,6 +251,8 @@ Sources/HeykinnClicks/
 │   ├── TargetMonitor.swift      volume enumeration, marker identity, mount notifications
 │   ├── AccessGrants.swift       remembered per-volume decisions + security-scoped
 │   │                            bookmarks; the store behind ⌘, → Access
+│   ├── SourceBookmarks.swift    per-machine access to selected Takeout roots,
+│   │                            retained across deferred import and relaunch
 │   ├── PlacementPlanner.swift   places copies on the devices a group names;
 │   │                            free space validates, never chooses
 │   ├── ReplicationService.swift copy/verify/remove backlog execution (hash-verified,
@@ -339,16 +348,13 @@ the external archive drive:
   stages everything as Local-resident assets, dedupes by content hash, and
   queues drive replication. The archive file itself is never modified.
 - **Residency semantics**: imports record **Local presence only**. The app has
-  no Google or Apple account connection and makes no network calls, so it
-  cannot know whether an export's photos are still in Google Photos — and an
-  assumption that silently becomes a fact eventually deletes someone's only
-  copy. A toggle at manual import lets you state the overlap yourself; it is
-  **off by default**, recorded as `userAsserted` rather than verified, and
-  creates a GoogleCloud → Local migration job so the overlap is legal, tracked,
-  and closed once you confirm deletion from Google. Automatic imports never
-  tick it. `CloudDomainVerifier` is the seam a real account integration slots
-  into; until one exists it reports `isConnected == false` and refuses to
-  answer, so no code path can mistake an assumption for evidence.
+  no Google account connection and cannot know whether an export's photos are
+  still in Google Photos; importing a Takeout therefore never claims current
+  Google presence. Apple Photos is different: after the user grants system
+  Photos access, the PhotoKit connector can index the library, export originals
+  (downloading from iCloud through PhotoKit when necessary), and verify a
+  byte-identical original. `CloudDomainVerifier` keeps provider answers behind
+  one seam, with an unconnected verifier refusing to guess.
 - **Extract-on-drive workflow**: zips can be extracted in place on their drive
   (folder named zip-name-minus-.zip, joining the same export set) so imports
   read directly from the drive instead of extracting ~10 GB parts to Mac
@@ -362,7 +368,7 @@ the external archive drive:
   seek-thrash and lose to serial), unknown media gets a conservative 4.
   Single-process ditto remains the fallback if the parallel path fails.
   Where a part exists as both zip and folder, imports prefer the folder. After
-  a folder's imported assets are **fully replicated to both drives**, a gated
+  a folder's imported assets satisfy that source's configured copy policy, a gated
   "Delete folder" action reclaims its space (import state transfers to the zip
   twin so the set still reads as imported). Re-scans refresh existing records
   (size, set grouping) without touching import state.
@@ -465,25 +471,18 @@ claim redundancy that evaporates the moment the drives hold different subsets).
   gets only a quick checksum — nothing read those bytes back in full, and
   calling it verified would be a lie.
 
-### Every source says where its copies are
+### Sources and copies have one home each
 
-Sources answers two questions about each place photos came from: how much of
-it made it into the archive, and **where those photos are now**. The second
-used to be answered only for Google exports, which reported per part which
-drive held them — a folder you added got a photo count and nothing else, even
-though the app had the replica states all along.
+**Add photos** answers where content came from and how much has arrived: the
+Photos library, Google Takeout downloads, and ordinary folders. Each source
+records how many copies it wants and whether the app should work out the
+devices or use a list chosen by the user.
 
-Now both read the same way, off `replicaStates` and `replicationTasks`:
-
-- **Which devices hold it** — named, including this Mac, with the ones that
-  are attached distinguished from the ones that are not.
-- **What is still owed** — how many photos from this folder are not yet on
-  which device, and how many bytes that is.
-- **What is in transit** — content held on this Mac for a drive that is not
-  currently connected, so a corridor that is doing its job looks different
-  from one that is stuck.
-- **What is load-bearing** — photos this folder holds the archive's only copy
-  of, so emptying it in Finder would cost a copy.
+**Keep safe** answers where those copies are now. Its storage matrix is built
+from `replicaStates` and `replicationTasks`, and shows which devices hold each
+group, what is still owed, what is in transit, and whether a folder or export is
+the archive's only known copy. Keeping those answers on one screen avoids a
+source card and the safety screen making competing claims about the same file.
 
 **Paths are shown whether or not the disk is attached.** Reachability decides
 whether *Show in Finder* is offered, not whether the path appears — "where is
@@ -536,25 +535,27 @@ protected on three levels.
   connected drive's root — outside the replica root, so replica cleanup can
   never touch it. Every snapshot is written under a temporary name, read back
   **read-only** (integrity check plus an asset count), and only then renamed
-  into place; a snapshot that fails verification is never published. The five
+  into place; a snapshot that fails verification is never published. The three
   newest per drive are kept. Backups run at launch, after an import, and when
   a drive connects, and freshness is judged from the snapshots actually
   present on that drive rather than a remembered timestamp — so a drive whose
   backups were deleted is caught immediately. Failures are written to the
   audit log, not just shown once.
 
-**To restore**: quit the app and copy a snapshot over
-`~/Library/Application Support/HeykinnClicks/catalog.sqlite` (delete the
-`-wal` and `-shm` files beside it). A snapshot is an ordinary SQLite database —
-inspect one any time with `sqlite3 <snapshot> "SELECT count(*) FROM assets;"`.
+**To restore**: open Settings → Safety → Restore, choose a verified snapshot
+from a connected drive, and confirm. The current catalog is checkpointed and
+kept as `catalog-replaced-<stamp>.sqlite` before the snapshot is installed.
+Unreadable, corrupt, or empty snapshots are not offered, and restoration is
+refused while an import, sync, or extraction is writing catalog state.
 
 ### Drive-connect prompt, and remembering the answer
 
-When an unmanaged external volume mounts, the app asks what it should be:
-register it as managed Local storage (when a slot is free), just scan it for
-Takeout archives, or leave it alone. Managed drives skip the prompt — on
-connect they auto-sync their backlog and get an automatic Takeout sweep, so no
-manual scanning is needed.
+In the website build, an unmanaged external volume mounting triggers a question:
+use it as Local archive storage, search it for Takeout archives, or leave it
+alone. The sandboxed App Store build cannot enumerate an unknown drive, so the
+user first chooses it under Keep safe; registration takes the same lasting
+bookmark. There is no device-count cap. Known managed drives skip setup — on
+connect they auto-sync their backlog and get an automatic Takeout sweep.
 
 **Answer once.** Every choice in that prompt can be remembered against the
 volume's identity, including the *action*, not only the suppression: a drive
@@ -569,6 +570,12 @@ disk is touched, and the next mount asks again. This is deliberately a pair;
 the previous "Don't ask again for this drive" wrote a key into preferences
 that no screen could remove.
 
+Takeout folders selected through **Find a download** have a separate
+per-machine source bookmark. Discovery and import are different user actions;
+the bookmark keeps the chosen root readable if the import happens later or
+after a relaunch, without storing machine-specific permission data in the
+portable catalog.
+
 **The system prompt is a separate thing.** macOS itself gates access to
 removable volumes, and that grant is keyed to the app's code-signing identity.
 `Packaging/bundle.sh` signs with any Apple Development certificate on the
@@ -578,7 +585,8 @@ the designated requirement becomes `cdhash H"…"` and every rebuild is a new
 app: the grant is dropped, and the app never appears in the Privacy list to be
 granted again. If a permission is stuck from an earlier ad-hoc build, clear it
 with `tccutil reset Photos com.heykinn.HeykinnClicks` (or `SystemPolicyRemovableVolumes`)
-and relaunch. A Developer ID signature is still what shipping needs.
+and relaunch. Developer ID is used for the website build; the Mac App Store
+build uses Apple Distribution signing, a provisioning profile, and the sandbox.
 
 ### Safety behaviors implemented
 
@@ -597,30 +605,23 @@ and relaunch. A Developer ID signature is still what shipping needs.
 
 ## What v1 defers (by design)
 
-- **Cloud transfer execution.** Migration jobs to/from Apple/Google track
-  explicit states, but the copy itself is a manual workflow the user confirms
-  (`Mark target copy complete` / `Mark verified`). Workflow helpers (Takeout
-  parsing, Apple export reconciliation) are Phase 4.
+- **Automated cloud deletion/reclamation.** Apple Photos can be indexed and its
+  originals copied/verified, but the app does not delete from Photos. Google
+  Takeout is processed locally and there is no Google account/API connection.
+  Cloud migration cleanup therefore remains an explicit user-confirmed
+  workflow.
 - Catalog access is main-actor synchronous; fine at personal-archive scale,
   and the `CatalogStore` boundary is where a background actor slots in later.
 - Perceptual duplicates, faces, semantic search, map view, sidecar export.
 
 ## Next implementation steps
 
-1. Scheduled verification sweeps that refresh `lastVerifiedAt` and demote
-   `FullyReplicated` → `VerificationOverdue` proactively.
-2. Duplicate review workflow (keep/supersede, storage reclaim via explicit jobs).
-3. Apple Photos export importer — Takeout is done; the Apple side needs its own
-   metadata reconciliation. Google's album JSON is read now: its title, date and
-   places, captured verbatim and projected into tags.
-4. Account integration behind `CloudDomainVerifier`, so cloud presence can be
-   recorded as `verified` instead of only asserted, and migrations can confirm
-   deletion rather than asking the user to.
-5. An icon, a Developer ID signature and notarisation. The bundle itself is
-   done — `Packaging/bundle.sh` assembles and signs `HeykinnClicks.app` around
-   the SwiftPM binary, which is what gives the app a stable identity for the
-   Photos permission. Not sandboxed, and not using security-scoped bookmarks:
-   the app reaches volumes the user registers and identifies them by a marker
-   file at the volume root, and that identity survives a rename, a remount and
-   a different mount path, which is more than a bookmark does. The cost is no
-   Mac App Store. See `Packaging/README.md`.
+1. Duplicate review workflow (keep/supersede, storage reclaim via explicit jobs).
+2. Guided fresh-Takeout comparison for the Google presence checks its API no
+   longer exposes for pre-existing libraries.
+3. User-guided cloud reclamation that preserves the same read-back guarantees
+   as local-device moves.
+4. Move synchronous catalog work behind an actor if personal-archive scale
+   demonstrates a UI bottleneck.
+5. Localize the currently English-only interface after the review-critical
+   workflows and terminology settle.
