@@ -78,12 +78,12 @@ struct AssetDetailView: View {
                         .padding(6)
                     }
 
-                    GroupBox("Residency") {
+                    GroupBox("Where this should be kept") {
                         VStack(alignment: .leading, spacing: 10) {
-                            Text("Changing residency here only reassigns the logical domain. Keep safe will list the presence mismatch until a migration moves the actual content — prefer creating a migration for real moves.")
+                            Text("This changes where the photo is meant to be kept. It does not move anything. Until something does, Keep safe will show it as being in the wrong place — so if you want it actually moved, start a move instead.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Picker("Residency domain", selection: Binding(
+                            Picker("Kept on", selection: Binding(
                                 get: { asset.residency },
                                 set: { pendingResidency = $0 }
                             )) {
@@ -111,7 +111,7 @@ struct AssetDetailView: View {
                                     .font(.callout)
                             }
                             if replicaRows(for: asset).isEmpty {
-                                Text("No drive replicas tracked.")
+                                Text("No copies on any drive yet.")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             }
@@ -151,7 +151,7 @@ struct AssetDetailView: View {
                     if let motion = store.livePhotoMotion(for: asset) {
                         GroupBox("Live Photo") {
                             VStack(alignment: .leading, spacing: 6) {
-                                Text("The moving half is kept as its own file, so it gets the same residency and damage checking as the still.")
+                                Text("The moving half is kept as its own file, so it is looked after and checked for damage the same way the still is.")
                                     .font(.caption)
                                     .foregroundStyle(.secondary)
                                 LabeledRow(label: "Motion file", value: motion.originalFilename)
@@ -227,10 +227,10 @@ struct AssetDetailView: View {
                 }
                 Button("Cancel", role: .cancel) { pendingResidency = nil }
             } message: {
-                Text("This flips the logical domain only. Content is not moved; any presence mismatch is listed under Keep safe.")
+                Text("This only changes where the photo is meant to be kept. Nothing is moved, and Keep safe will show it as being in the wrong place until something moves it.")
             }
         } else {
-            ContentUnavailableView("Asset not found", systemImage: "questionmark.square")
+            ContentUnavailableView("Photo not found", systemImage: "questionmark.square")
         }
     }
 

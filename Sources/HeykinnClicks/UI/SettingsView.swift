@@ -222,7 +222,7 @@ private struct SafetySettings: View {
                 // and copying it over the catalog by hand. A backup nobody can
                 // restore is a promise, not a safeguard.
                 HStack {
-                    Text("If this device's catalog is lost or goes wrong, restore it from one of these.")
+                    Text("If what this device knows about your photos is lost or goes wrong, restore it from one of these.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -251,9 +251,9 @@ private struct RestoreCatalogSheet: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Restore the catalog")
+            Text("Restore what the app knows")
                 .font(.title2).bold()
-            Text("This replaces what the app knows about your photos — which drives hold what, how copies were checked, and the albums and people read out of your exports. It changes nothing on any drive, and the catalog it replaces is kept rather than deleted.")
+            Text("This replaces what the app knows about your photos — which drives hold what, how copies were checked, and the albums and people read out of your exports. It changes nothing on any drive, and what it replaces is kept rather than deleted.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -308,7 +308,7 @@ private struct RestoreCatalogSheet: View {
         .padding(20)
         .frame(width: 520)
         .confirmationDialog(
-            "Replace the catalog with this snapshot?",
+            "Restore from this backup?",
             isPresented: Binding(get: { confirming != nil }, set: { if !$0 { confirming = nil } }),
             titleVisibility: .visible
         ) {

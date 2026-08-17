@@ -528,6 +528,25 @@ to a platform that has never heard of Apple.
     failure is made loud instead: refusing costs somebody a sync, and the
     alternative costs them data they will not notice losing.
 
+15. **Nothing on screen uses a word the app invented.** The person using this is
+    not technical and should never have to become so. They own *drives*,
+    *photos*, *copies*, and the question *are my photos safe* — and every screen,
+    prompt, error and log line answers in those terms.
+
+    A *target*, a *replica*, a *catalog*, a *marker*, a *residency domain*, a
+    *checkpoint*, a *merge*, a *journal* — these are our words for our problems.
+    They may live in the code and in these documents, where they are precise and
+    earn their keep, and they may not cross into the interface. The test is not
+    whether a sentence is accurate; it is whether somebody who has never read
+    this document knows what to do next.
+
+    *Partly true.* The main screens already speak plainly — the visible text uses
+    drive, copy, device and archive almost throughout. Error messages and the
+    detail panes were where the vocabulary leaked, and have been rewritten. The
+    deeper question, whether some of these concepts should be visible at all
+    rather than merely renamed, is open and is a design decision rather than a
+    copy one.
+
 ---
 
 ## The path

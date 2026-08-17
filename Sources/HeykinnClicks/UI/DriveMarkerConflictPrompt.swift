@@ -23,11 +23,11 @@ struct DriveMarkerConflictPrompt: View {
                 .font(.title3)
                 .bold()
 
-            Text("This drive carries a marker file from a Heykinn Clicks archive that this one does not recognise. That is how an archive knows a drive is its own when it is plugged in.")
+            Text("This drive is already being used by another Heykinn Clicks archive — one this app does not recognise. Each archive leaves a small ID file on its drives so it knows which ones are its own.")
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("If you use it here, the marker is replaced. Nothing on the drive is deleted and no photo is moved — but the other archive stops recognising this drive, and will no longer be able to say which of its copies live on it.")
+            Text("If you use it here, that ID is replaced. Nothing on the drive is deleted and no photo is moved — but the other archive will stop recognising this drive, and will no longer be able to tell you which of its copies are on it.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

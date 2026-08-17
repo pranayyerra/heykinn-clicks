@@ -280,7 +280,7 @@ struct StorageMatrix: View {
             notes.append(
                 snapshot.map {
                     "Everything the app knows — where copies are, what was verified, the albums and people read out of your exports — comes back from the catalog snapshot written \(Formatters.relative($0.createdAt)) on \($0.targetID.flatMap { store.targetsByID[$0]?.name } ?? "a drive")."
-                } ?? "No catalog snapshot exists on another device yet, so everything the app knows about these photos would have to be rebuilt by importing them again."
+                } ?? "Nothing on another device holds a backup of this yet, so everything the app knows about these photos would have to be rebuilt by importing them again."
             )
         default:
             break

@@ -25,8 +25,14 @@ open are listed at the end.
 | **R5** | No Apple or Google ecosystem lock-in |
 | **R6** | Sync by sharing metadata via the connected drives |
 | **R7** | If a cloud is ever used it is transit, not a store |
+| **R8** | **A person who is not technical can use it without learning our vocabulary.** Every word on screen is one they already own. |
 
-R0 is inherited from the app itself and constrains every decision below.
+R0 is inherited from the app itself and constrains every decision below. R8
+constrains what any of it is allowed to *look* like: the machinery on this page
+is elaborate, and none of it may surface. A person should never meet a target, a
+replica, a catalog, a marker, a residency domain, a checkpoint or a merge — those
+are our words for our problems. They own drives, photos, copies, and whether
+their photos are safe.
 
 ---
 
@@ -552,11 +558,18 @@ speed hint rather than a recorded fact.
 Three tiers, not two. A **status reader** — what exists, where the copies are,
 what is at risk — needs SQLite and the schema and **none** of the kernel. A
 **browser** adds zip reading, because 21,380 of 21,401 photographs are inside
-zips and thumbnails never leave the device that made them. A **writer** adds
-2,169 lines of clock, journal and merge, reimplemented where a mistake is silent
-and corrupts the shared archive.
+zips and thumbnails never leave the device that made them — and zip is a
+published format with a library on every platform, so this is not kernel work. A
+**writer** adds 3,534 lines of clock, journal, merge, segment codec and
+checkpoint, reimplemented where a mistake is silent and corrupts the shared
+archive for every device.
 
-**Recommended:** read-only, status tier first, photographs when O1 lands.
+The tiers are cumulative rather than alternatives: each strictly contains the one
+before, so the only real question is how far to go, and the last step can be
+declined indefinitely without stranding the first two.
+
+**Recommended:** read-only, status tier first. O1 has since landed, so the
+photographs are reachable as soon as somebody wants them.
 
 ### O3 · A migration job advanced on two devices
 

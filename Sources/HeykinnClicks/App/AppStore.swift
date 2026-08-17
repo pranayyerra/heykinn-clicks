@@ -785,7 +785,7 @@ final class AppStore: ObservableObject {
                 recipientDriveID: to,
                 sourceArchiveID: source.id,
                 heldPart: nil,
-                explanation: "Both targets are connected, so the part goes straight across."
+                explanation: "Both drives are connected, so it goes straight across."
             )
 
         case .driveToHoldingArea(let from, let intendedFor):
@@ -1652,7 +1652,7 @@ final class AppStore: ObservableObject {
                     identified += 1
                 }
                 takeoutActivity?.itemIndex = identified
-                takeoutActivity?.note = "\(Formatters.count(identified, "source")) identified from the catalog"
+                takeoutActivity?.note = "\(Formatters.count(identified, "source")) matched to photos already known"
 
                 // 2b. Whatever is left needs the file itself: a date to find,
                 //     or a source the catalog could not evidence. One rule
@@ -2502,7 +2502,7 @@ final class AppStore: ObservableObject {
                 task.errorMessage = "Requeued after an interrupted run"
                 try catalog.upsertReplicationTask(task)
             }
-            if !stuck.isEmpty { repairs.append("requeued \(Formatters.count(stuck.count, "interrupted replication task"))") }
+            if !stuck.isEmpty { repairs.append("requeued \(Formatters.count(stuck.count, "interrupted copy"))") }
 
             // 2. Staged files no asset points at: bytes copied in just before
             // the process died. Reclaimable, and nothing references them.
@@ -5732,7 +5732,7 @@ final class AppStore: ObservableObject {
         let path = url.standardizedFileURL.path
 
         guard let storage = TargetStorage.of(url) else {
-            lastError = "Could not work out which disk that folder is on, so it cannot be registered as a target."
+            lastError = "Could not work out which disk that folder is on, so it cannot be used to keep copies."
             return
         }
         guard storage.isHostDevice else {
@@ -5744,11 +5744,11 @@ final class AppStore: ObservableObject {
         // room as a copy.
         let stagingPath = staging.rootURL.standardizedFileURL.path
         if path == stagingPath || path.hasPrefix(stagingPath + "/") || stagingPath.hasPrefix(path + "/") {
-            lastError = "That folder overlaps the app's staging area, which holds content no target has yet. Pick a folder outside it."
+            lastError = "That folder is inside the app's own waiting area, which holds photos no drive has taken yet. Pick a folder outside it."
             return
         }
         if TargetMonitor.readMarker(at: url) != nil {
-            lastError = "That folder already holds a target marker. Registering it again would give one place two identities."
+            lastError = "That folder is already one of the places this archive keeps copies. Adding it again would have the app counting one place as two."
             return
         }
         // Redundancy means surviving a device failing, so two targets on one
@@ -5876,7 +5876,7 @@ final class AppStore: ObservableObject {
             .drive,
             "\(conflict.name) already carried another archive's marker (target "
             + "\(conflict.existing.targetID.uuidString)); registered it here on your say-so. "
-            + "That archive can no longer recognise this drive by its marker."
+            + "That archive can no longer recognise this drive as its own."
         )
         return register(
             name: conflict.name,
@@ -6180,7 +6180,7 @@ final class AppStore: ObservableObject {
             audit(.replication, "\(target.name): content had moved; repointed \(what.joined(separator: " and ")) to their new location. Nothing was copied.", targetID: targetID)
         }
         if unresolved > 0 {
-            audit(.violation, "\(target.name): \(Formatters.count(unresolved, "replica")) are not where the catalog recorded them and were not found on the target.", targetID: targetID)
+            audit(.violation, "\(target.name): \(Formatters.count(unresolved, "replica")) are not where the app expected them, and were not found anywhere on the drive.", targetID: targetID)
         }
         if repaired > 0 || unresolved > 0 || repairedArchives > 0 { loadAll() }
         return (repaired, unresolved)
@@ -6653,7 +6653,7 @@ final class AppStore: ObservableObject {
         if !returned.isEmpty {
             audit(
                 .drive,
-                "\(target.name): \(Formatters.count(returned.count, "export archive")) previously recorded as gone are back where the catalog expects them.",
+                "\(target.name): \(Formatters.count(returned.count, "export archive")) previously reported missing are back where the app expected them.",
                 targetID: targetID
             )
         }
@@ -6799,7 +6799,7 @@ final class AppStore: ObservableObject {
         if !absent.isEmpty {
             audit(
                 .violation,
-                "\(target.name): \(Formatters.count(absent.count, "copy", "copies")) the catalog recorded are not on the drive (e.g. \(absentExample ?? "a file the catalog expected")), and were not found anywhere else on it. They no longer count towards the redundancy policy.",
+                "\(target.name): \(Formatters.count(absent.count, "copy", "copies")) the app expected are not on the drive (e.g. \(absentExample ?? "a file it expected")), and were not found anywhere else on it. They no longer count towards the redundancy policy.",
                 targetID: targetID
             )
         }
