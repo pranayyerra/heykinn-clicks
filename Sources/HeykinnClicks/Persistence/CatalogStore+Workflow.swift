@@ -5,27 +5,29 @@ extension CatalogStore {
     // MARK: - Policy rules
 
     func upsertPolicyRule(_ rule: PolicyRule) throws {
-        try database.run("""
-        INSERT INTO policy_rules (id, name, priority, enabled, match_origin, match_kind, min_file_size, target_residency)
-        VALUES (?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            name = excluded.name,
-            priority = excluded.priority,
-            enabled = excluded.enabled,
-            match_origin = excluded.match_origin,
-            match_kind = excluded.match_kind,
-            min_file_size = excluded.min_file_size,
-            target_residency = excluded.target_residency;
-        """, [
-            .text(rule.id.uuidString),
-            .text(rule.name),
-            .int(Int64(rule.priority)),
-            .bool(rule.isEnabled),
-            .optionalText(rule.matchOrigin?.rawValue),
-            .optionalText(rule.matchKind?.rawValue),
-            .optionalInt(rule.minFileSize),
-            .text(rule.targetResidency.rawValue),
-        ])
+        try journaled("policy_rules", [rule.id.uuidString]) {
+            try database.run("""
+            INSERT INTO policy_rules (id, name, priority, enabled, match_origin, match_kind, min_file_size, target_residency)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                name = excluded.name,
+                priority = excluded.priority,
+                enabled = excluded.enabled,
+                match_origin = excluded.match_origin,
+                match_kind = excluded.match_kind,
+                min_file_size = excluded.min_file_size,
+                target_residency = excluded.target_residency;
+            """, [
+                .text(rule.id.uuidString),
+                .text(rule.name),
+                .int(Int64(rule.priority)),
+                .bool(rule.isEnabled),
+                .optionalText(rule.matchOrigin?.rawValue),
+                .optionalText(rule.matchKind?.rawValue),
+                .optionalInt(rule.minFileSize),
+                .text(rule.targetResidency.rawValue),
+            ])
+        }
     }
 
     func fetchPolicyRules() throws -> [PolicyRule] {
@@ -53,27 +55,29 @@ extension CatalogStore {
     // MARK: - Migration jobs
 
     func upsertMigrationJob(_ job: MigrationJob) throws {
-        try database.run("""
-        INSERT INTO migration_jobs (id, asset_ids_json, from_domain, to_domain, state, created_at, updated_at, note)
-        VALUES (?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            asset_ids_json = excluded.asset_ids_json,
-            from_domain = excluded.from_domain,
-            to_domain = excluded.to_domain,
-            state = excluded.state,
-            created_at = excluded.created_at,
-            updated_at = excluded.updated_at,
-            note = excluded.note;
-        """, [
-            .text(job.id.uuidString),
-            .text(Self.encodeJSON(job.assetIDs)),
-            .text(job.fromDomain.rawValue),
-            .text(job.toDomain.rawValue),
-            .text(job.state.rawValue),
-            .date(job.createdAt),
-            .date(job.updatedAt),
-            .optionalText(job.note),
-        ])
+        try journaled("migration_jobs", [job.id.uuidString]) {
+            try database.run("""
+            INSERT INTO migration_jobs (id, asset_ids_json, from_domain, to_domain, state, created_at, updated_at, note)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                asset_ids_json = excluded.asset_ids_json,
+                from_domain = excluded.from_domain,
+                to_domain = excluded.to_domain,
+                state = excluded.state,
+                created_at = excluded.created_at,
+                updated_at = excluded.updated_at,
+                note = excluded.note;
+            """, [
+                .text(job.id.uuidString),
+                .text(Self.encodeJSON(job.assetIDs)),
+                .text(job.fromDomain.rawValue),
+                .text(job.toDomain.rawValue),
+                .text(job.state.rawValue),
+                .date(job.createdAt),
+                .date(job.updatedAt),
+                .optionalText(job.note),
+            ])
+        }
     }
 
     func fetchMigrationJobs() throws -> [MigrationJob] {
@@ -97,27 +101,29 @@ extension CatalogStore {
     // MARK: - Import batches
 
     func upsertImportBatch(_ batch: ImportBatch) throws {
-        try database.run("""
-        INSERT INTO import_batches (id, source_path, started_at, completed_at, imported_count, duplicate_count, failed_count, origin)
-        VALUES (?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            source_path = excluded.source_path,
-            started_at = excluded.started_at,
-            completed_at = excluded.completed_at,
-            imported_count = excluded.imported_count,
-            duplicate_count = excluded.duplicate_count,
-            failed_count = excluded.failed_count,
-            origin = excluded.origin;
-        """, [
-            .text(batch.id.uuidString),
-            .text(batch.sourcePath),
-            .date(batch.startedAt),
-            .date(batch.completedAt),
-            .int(Int64(batch.importedCount)),
-            .int(Int64(batch.duplicateCount)),
-            .int(Int64(batch.failedCount)),
-            .optionalText(batch.origin?.rawValue),
-        ])
+        try journaled("import_batches", [batch.id.uuidString]) {
+            try database.run("""
+            INSERT INTO import_batches (id, source_path, started_at, completed_at, imported_count, duplicate_count, failed_count, origin)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                source_path = excluded.source_path,
+                started_at = excluded.started_at,
+                completed_at = excluded.completed_at,
+                imported_count = excluded.imported_count,
+                duplicate_count = excluded.duplicate_count,
+                failed_count = excluded.failed_count,
+                origin = excluded.origin;
+            """, [
+                .text(batch.id.uuidString),
+                .text(batch.sourcePath),
+                .date(batch.startedAt),
+                .date(batch.completedAt),
+                .int(Int64(batch.importedCount)),
+                .int(Int64(batch.duplicateCount)),
+                .int(Int64(batch.failedCount)),
+                .optionalText(batch.origin?.rawValue),
+            ])
+        }
     }
 
     func fetchImportBatches() throws -> [ImportBatch] {
@@ -141,17 +147,19 @@ extension CatalogStore {
     // MARK: - Audit events
 
     func appendAuditEvent(_ event: AuditEvent) throws {
-        try database.run("""
-        INSERT INTO audit_events (id, at, category, message, asset_id, drive_id)
-        VALUES (?,?,?,?,?,?);
-        """, [
-            .text(event.id.uuidString),
-            .date(event.at),
-            .text(event.category.rawValue),
-            .text(event.message),
-            .uuid(event.assetID),
-            .uuid(event.targetID),
-        ])
+        try journaled("audit_events", [event.id.uuidString]) {
+            try database.run("""
+            INSERT INTO audit_events (id, at, category, message, asset_id, drive_id)
+            VALUES (?,?,?,?,?,?);
+            """, [
+                .text(event.id.uuidString),
+                .date(event.at),
+                .text(event.category.rawValue),
+                .text(event.message),
+                .uuid(event.assetID),
+                .uuid(event.targetID),
+            ])
+        }
     }
 
     func fetchAuditEvents(limit: Int = 500) throws -> [AuditEvent] {

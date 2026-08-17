@@ -196,6 +196,22 @@ final class SQLiteDatabase {
             int(index) != 0
         }
 
+        /// The column's value with its storage class preserved.
+        ///
+        /// Every other accessor here knows what it expects. This one is for the
+        /// change journal, which copies values between devices without knowing
+        /// what any particular column means — and must not turn an integer into
+        /// a float on the way, because SQLite tells them apart and a column
+        /// that quietly changed class would be a very hard bug to see.
+        func changeValue(_ index: Int32) -> ChangeValue {
+            switch sqlite3_column_type(statement, index) {
+            case SQLITE_NULL: return .null
+            case SQLITE_INTEGER: return .integer(int(index))
+            case SQLITE_FLOAT: return .real(real(index))
+            default: return .text(text(index))
+            }
+        }
+
         func uuid(_ index: Int32) -> UUID {
             UUID(uuidString: text(index)) ?? UUID()
         }

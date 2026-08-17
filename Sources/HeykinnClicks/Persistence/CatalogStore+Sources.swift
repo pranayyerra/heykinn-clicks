@@ -70,6 +70,11 @@ extension CatalogStore {
         try dropColumnIfPresent(table: "import_batches", column: "source_id")
         try dropColumnIfPresent(table: "takeout_archives", column: "source_id")
 
+        // Before the migration below, and before anything reads a storage
+        // group: `fetchStorageGroups` and `upsertStorageGroup` both go through
+        // this table now, and the migration calls the second of them.
+        try createStorageGroupDestinationSchema()
+
         // Carries a pre-split catalog's policy onto the groups that now own it.
         // Runs here rather than from `AppStore` so a store opened by a test, a
         // backup restore, or the diagnostics path sees the same shape as one
@@ -103,41 +108,148 @@ extension CatalogStore {
         try? database.exec("ALTER TABLE \(table) DROP COLUMN \(column);")
     }
 
+    /// Which devices a storage group sends copies to — one row each.
+    ///
+    /// **A set two people can add to independently is a table, not a column.**
+    ///
+    /// This lived in `destination_ids_json` as a JSON array, which under
+    /// per-field merge is a single value: two devices each adding a different
+    /// drive produced one winner and one silently discarded addition. Measured
+    /// before this existed — 1 of 2 additions survived.
+    ///
+    /// As rows it needs no new merge machinery at all. Each destination has its
+    /// own identity, its own stamp and its own tombstone, so two additions are
+    /// two creations and a removal is a deletion that travels.
+    ///
+    /// The old column is still written for a build that predates this and reads
+    /// it; nothing here reads it back, so the two cannot disagree about which is
+    /// authoritative. Same arrangement as `drive_local_state`.
+    func createStorageGroupDestinationSchema() throws {
+        try database.exec("""
+        CREATE TABLE IF NOT EXISTS storage_group_destinations (
+            group_id  TEXT NOT NULL,
+            target_id TEXT NOT NULL,
+            -- Where the user put it in the list. Not decoration: when a group
+            -- names more devices than it wants copies, placement takes them in
+            -- order, so the first device somebody lists is the one they think
+            -- of as primary. Sorting by id instead would quietly send copies to
+            -- different drives.
+            position  INTEGER NOT NULL DEFAULT 0,
+            PRIMARY KEY (group_id, target_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_group_destinations_group
+            ON storage_group_destinations(group_id);
+        """)
+
+        // Carry across what the JSON column holds, once. Restricted to groups
+        // with no rows yet so it is idempotent, and so a later run cannot undo
+        // a destination somebody has since removed.
+        let existing = try database.query("""
+        SELECT id, destination_ids_json FROM storage_groups
+         WHERE id NOT IN (SELECT DISTINCT group_id FROM storage_group_destinations);
+        """) { (id: $0.text(0), json: $0.text(1)) }
+
+        for group in existing {
+            for (position, target) in (Self.decodeJSON([String].self, from: group.json) ?? []).enumerated() {
+                try database.run("""
+                INSERT INTO storage_group_destinations (group_id, target_id, position)
+                VALUES (?,?,?)
+                ON CONFLICT(group_id, target_id) DO NOTHING;
+                """, [.text(group.id), .text(target), .int(Int64(position))])
+            }
+        }
+    }
+
     // MARK: - Storage groups
 
+    /// The first table taken through the journal end to end.
+    ///
+    /// Nothing ships yet — no segment format exists — so the effect today is a
+    /// stamp on whichever columns moved, and nothing else. Storage groups went
+    /// first because they are small, shared, and edited by hand, which makes
+    /// two devices disagreeing about one both the likeliest case and the
+    /// easiest to reason about.
     func upsertStorageGroup(_ group: StorageGroup) throws {
-        try database.run("""
-        INSERT INTO storage_groups
-            (id, label, desired_copies, destination_ids_json, created_at, destination_mode)
-        VALUES (?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            label = excluded.label,
-            desired_copies = excluded.desired_copies,
-            destination_ids_json = excluded.destination_ids_json,
-            destination_mode = excluded.destination_mode;
-        """, [
-            .text(group.id.uuidString),
-            .text(group.label),
-            .int(Int64(group.desiredCopies)),
-            .text(Self.encodeJSON(group.destinationTargetIDs.map(\.uuidString))),
-            .real(group.createdAt.timeIntervalSince1970),
-            .text(group.destinationMode.rawValue),
-        ])
+        try journal.recordingWrite(
+            table: "storage_groups", rowID: ChangeJournal.rowID([group.id.uuidString])
+        ) {
+            try database.run("""
+            INSERT INTO storage_groups
+                (id, label, desired_copies, destination_ids_json, created_at, destination_mode)
+            VALUES (?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                label = excluded.label,
+                desired_copies = excluded.desired_copies,
+                destination_ids_json = excluded.destination_ids_json,
+                destination_mode = excluded.destination_mode;
+            """, [
+                .text(group.id.uuidString),
+                .text(group.label),
+                .int(Int64(group.desiredCopies)),
+                .text(Self.encodeJSON(group.destinationTargetIDs.map(\.uuidString))),
+                .real(group.createdAt.timeIntervalSince1970),
+                .text(group.destinationMode.rawValue),
+            ])
+        }
+
+        // The destinations, as rows. Written as a difference rather than a
+        // replacement: removing every row and putting them back would tombstone
+        // destinations nobody touched, and those tombstones would travel and
+        // remove them on other devices.
+        let positions = Dictionary(
+            uniqueKeysWithValues: group.destinationTargetIDs.map(\.uuidString).enumerated()
+                .map { ($0.element, Int64($0.offset)) }
+        )
+        let wanted = Set(positions.keys)
+        let held = Set(try database.query(
+            "SELECT target_id FROM storage_group_destinations WHERE group_id = ?;",
+            [.text(group.id.uuidString)]
+        ) { $0.text(0) })
+
+        for target in group.destinationTargetIDs.map(\.uuidString) {
+            try journaled("storage_group_destinations", [group.id.uuidString, target]) {
+                try database.run("""
+                INSERT INTO storage_group_destinations (group_id, target_id, position)
+                VALUES (?,?,?)
+                ON CONFLICT(group_id, target_id) DO UPDATE SET position = excluded.position;
+                """, [.text(group.id.uuidString), .text(target), .int(positions[target] ?? 0)])
+            }
+        }
+        for removed in held.subtracting(wanted).sorted() {
+            try database.run(
+                "DELETE FROM storage_group_destinations WHERE group_id = ? AND target_id = ?;",
+                [.text(group.id.uuidString), .text(removed)]
+            )
+        }
     }
 
     func fetchStorageGroups() throws -> [StorageGroup] {
-        try database.query("""
-        SELECT id, label, desired_copies, destination_ids_json, created_at, destination_mode
+        // Destinations come from their own table, never from the JSON column —
+        // that column is written only for an older build and goes stale the
+        // moment two devices touch the same group.
+        // Ordered by position, then by id so two devices that assigned the
+        // same position independently still agree on the order they show.
+        let rows = try database.query(
+            "SELECT group_id, target_id FROM storage_group_destinations ORDER BY position, target_id;",
+            row: { (group: $0.uuid(0), target: $0.uuid(1)) }
+        )
+        var destinations: [UUID: [UUID]] = [:]
+        for row in rows {
+            destinations[row.group, default: []].append(row.target)
+        }
+
+        return try database.query("""
+        SELECT id, label, desired_copies, created_at, destination_mode
         FROM storage_groups ORDER BY created_at DESC;
         """) { row in
-            StorageGroup(
-                id: row.uuid(0),
+            let id = row.uuid(0)
+            return StorageGroup(
+                id: id,
                 label: row.text(1),
                 desiredCopies: Int(row.int(2)),
-                destinationTargetIDs: (Self.decodeJSON([String].self, from: row.text(3)) ?? [])
-                    .compactMap(UUID.init(uuidString:)),
-                destinationMode: StorageGroup.DestinationMode(rawValue: row.text(5)) ?? .chosen,
-                createdAt: Date(timeIntervalSince1970: row.real(4))
+                destinationTargetIDs: destinations[id] ?? [],
+                destinationMode: StorageGroup.DestinationMode(rawValue: row.text(4)) ?? .chosen,
+                createdAt: Date(timeIntervalSince1970: row.real(3))
             )
         }
     }
@@ -146,11 +258,22 @@ extension CatalogStore {
         // Assets are left pointing at nothing rather than deleted with the
         // group. `AppStore` re-homes them; losing photos must never be a side
         // effect of tidying up a setting.
+        // The three writes below are each recorded by their table's own
+        // triggers — the assets losing their group, the destinations going, and
+        // the group itself — so nothing has to be read beforehand to describe
+        // them afterwards.
         try database.run(
             "UPDATE assets SET storage_group_id = NULL WHERE storage_group_id = ?;",
             [.text(id.uuidString)]
         )
+        try database.run(
+            "DELETE FROM storage_group_destinations WHERE group_id = ?;", [.text(id.uuidString)]
+        )
         try database.run("DELETE FROM storage_groups WHERE id = ?;", [.text(id.uuidString)])
+
+        // A tombstone, not merely an absent row. Absent here and absent on
+        // another device are indistinguishable from never-seen, so without this
+        // the next merge would hand the group straight back.
     }
 
     /// Puts a set of assets in a group. Membership is a strict partition, so
@@ -194,7 +317,7 @@ extension CatalogStore {
     /// and is left alone.
     ///
     /// The host device is excluded from the comparison on purpose. It is the
-    /// machine the drives exist to survive, so it is never one of the devices a
+    /// device the drives exist to survive, so it is never one of the devices a
     /// group is simply spread across, and a group that names it named it
     /// deliberately.
     ///
@@ -260,29 +383,31 @@ extension CatalogStore {
     // MARK: - Sources
 
     func upsertSource(_ source: PhotoArchiveSource) throws {
-        try database.run("""
-        INSERT INTO sources (id, kind, label, origin_path, desired_copies, destination_ids_json, added_at, export_set_id)
-        VALUES (?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            kind = excluded.kind,
-            label = excluded.label,
-            origin_path = excluded.origin_path,
-            export_set_id = excluded.export_set_id;
-        """, [
-            .text(source.id.uuidString),
-            .text(source.kind.rawValue),
-            .text(source.label),
-            source.originPath.map { SQLValue.text($0) } ?? .null,
-            // `desired_copies` and `destination_ids_json` are NOT NULL on
-            // catalogs written before policy moved to `storage_groups`, and
-            // SQLite has no DROP for a NOT NULL column without rebuilding the
-            // table. They are written once with placeholders and never read:
-            // the group is the only answer to what a photo owes.
-            .int(0),
-            .text("[]"),
-            .real(source.addedAt.timeIntervalSince1970),
-            source.exportSetID.map { SQLValue.text($0) } ?? .null,
-        ])
+        try journaled("sources", [source.id.uuidString]) {
+            try database.run("""
+            INSERT INTO sources (id, kind, label, origin_path, desired_copies, destination_ids_json, added_at, export_set_id)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                label = excluded.label,
+                origin_path = excluded.origin_path,
+                export_set_id = excluded.export_set_id;
+            """, [
+                .text(source.id.uuidString),
+                .text(source.kind.rawValue),
+                .text(source.label),
+                source.originPath.map { SQLValue.text($0) } ?? .null,
+                // `desired_copies` and `destination_ids_json` are NOT NULL on
+                // catalogs written before policy moved to `storage_groups`, and
+                // SQLite has no DROP for a NOT NULL column without rebuilding the
+                // table. They are written once with placeholders and never read:
+                // the group is the only answer to what a photo owes.
+                .int(0),
+                .text("[]"),
+                .real(source.addedAt.timeIntervalSince1970),
+                source.exportSetID.map { SQLValue.text($0) } ?? .null,
+            ])
+        }
     }
 
     func fetchSources() throws -> [PhotoArchiveSource] {

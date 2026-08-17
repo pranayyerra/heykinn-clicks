@@ -138,16 +138,18 @@ extension CatalogStore {
         version: Int = CatalogStore.currentCaptureVersion,
         at moment: Date = Date()
     ) throws {
-        try database.run("""
-        INSERT INTO export_capture_versions (set_id, part_number, version, captured_at)
-        VALUES (?,?,?,?)
-        ON CONFLICT(set_id, part_number) DO UPDATE SET
-            version = excluded.version,
-            captured_at = excluded.captured_at;
-        """, [
-            .text(setID), .int(Int64(partNumber)),
-            .int(Int64(version)), .date(moment),
-        ])
+        try journaled("export_capture_versions", [setID, String(partNumber)]) {
+            try database.run("""
+            INSERT INTO export_capture_versions (set_id, part_number, version, captured_at)
+            VALUES (?,?,?,?)
+            ON CONFLICT(set_id, part_number) DO UPDATE SET
+                version = excluded.version,
+                captured_at = excluded.captured_at;
+            """, [
+                .text(setID), .int(Int64(partNumber)),
+                .int(Int64(version)), .date(moment),
+            ])
+        }
     }
 
     /// Set id → part number → the reader that last read it.
@@ -216,14 +218,19 @@ extension CatalogStore {
     }
 
     func addTag(_ tag: AssetTag) throws {
-        try database.run("""
-        INSERT INTO asset_tags (asset_id, kind, value) VALUES (?,?,?)
-        ON CONFLICT(asset_id, kind, value) DO NOTHING;
-        """, [.text(tag.assetID.uuidString), .text(tag.kind.rawValue), .text(tag.value)])
+        try journaled("asset_tags", [tag.assetID.uuidString, tag.kind.rawValue, tag.value]) {
+            try database.run("""
+            INSERT INTO asset_tags (asset_id, kind, value) VALUES (?,?,?)
+            ON CONFLICT(asset_id, kind, value) DO NOTHING;
+            """, [.text(tag.assetID.uuidString), .text(tag.kind.rawValue), .text(tag.value)])
+        }
     }
 
     /// Throws away every derived tag, for a rebuild.
     func deleteAllTags() throws {
+        // Each row is tombstoned by the table's delete trigger. Rebuilding
+        // tags locally is cheap; letting another device's copy of them quietly
+        // reappear is not.
         try database.run("DELETE FROM asset_tags;", [])
     }
 
@@ -268,32 +275,34 @@ extension CatalogStore {
     /// describes — a count that can drift from the thing it counts is worse
     /// than no count.
     func upsertMetadataRecord(_ record: MetadataRecord) throws {
-        try database.run("""
-        INSERT INTO metadata_records
-            (id, asset_id, source_id, scope, provider, origin_path, captured_at,
-             schema_fingerprint, payload)
-        VALUES (?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(source_id, origin_path) DO UPDATE SET
-            asset_id = excluded.asset_id,
-            scope = excluded.scope,
-            provider = excluded.provider,
-            captured_at = excluded.captured_at,
-            schema_fingerprint = excluded.schema_fingerprint,
-            payload = excluded.payload,
-            -- New bytes have been read by nothing, whatever was true of the
-            -- ones they replace.
-            projected_version = 0;
-        """, [
-            .text(record.id.uuidString),
-            record.assetID.map { SQLValue.text($0.uuidString) } ?? .null,
-            .text(record.sourceID.uuidString),
-            .text(record.scope.rawValue),
-            .text(record.provider),
-            .text(record.originPath),
-            .real(record.capturedAt.timeIntervalSince1970),
-            .text(record.schemaFingerprint),
-            .text(record.payload),
-        ])
+        try journaled("metadata_records", [record.id.uuidString]) {
+            try database.run("""
+            INSERT INTO metadata_records
+                (id, asset_id, source_id, scope, provider, origin_path, captured_at,
+                 schema_fingerprint, payload)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(source_id, origin_path) DO UPDATE SET
+                asset_id = excluded.asset_id,
+                scope = excluded.scope,
+                provider = excluded.provider,
+                captured_at = excluded.captured_at,
+                schema_fingerprint = excluded.schema_fingerprint,
+                payload = excluded.payload,
+                -- New bytes have been read by nothing, whatever was true of the
+                -- ones they replace.
+                projected_version = 0;
+            """, [
+                .text(record.id.uuidString),
+                record.assetID.map { SQLValue.text($0.uuidString) } ?? .null,
+                .text(record.sourceID.uuidString),
+                .text(record.scope.rawValue),
+                .text(record.provider),
+                .text(record.originPath),
+                .real(record.capturedAt.timeIntervalSince1970),
+                .text(record.schemaFingerprint),
+                .text(record.payload),
+            ])
+        }
         try noteSchema(of: record)
     }
 
@@ -368,7 +377,11 @@ extension CatalogStore {
         let keys = record.payload.data(using: .utf8)
             .flatMap { try? JSONSerialization.jsonObject(with: $0) }
             .flatMap { $0 as? [String: Any] }
-            .map { $0.keys.sorted() } ?? []
+            // Bytewise, like the fingerprint these keys belong to. Provider
+            // keys are not guaranteed ASCII, this list is stored in
+            // `keys_json`, and Swift's ordering is not the one other languages
+            // use. See `ByteOrdering`.
+            .map { $0.keys.sortedByBytes() } ?? []
 
         // One whole payload per shape, kept forever.
         //
@@ -382,6 +395,7 @@ extension CatalogStore {
         // an export and the census claims more records than exist. The count is
         // taken from the records themselves at read time, so it cannot be
         // wrong; this table holds only what a count cannot give you.
+        try journaled("metadata_schemas", [record.schemaFingerprint]) {
         try database.run("""
         INSERT INTO metadata_schemas
             (fingerprint, provider, scope, keys_json, example_path,
@@ -397,6 +411,7 @@ extension CatalogStore {
             .text(record.payload),
             .real(record.capturedAt.timeIntervalSince1970),
         ])
+        }
     }
 
     /// Applies what a projection worked out, without touching the payload.
@@ -420,6 +435,18 @@ extension CatalogStore {
             .int(Int64(version)),
             .text(recordID.uuidString),
         ])
+
+        // The conclusion travels; the bookkeeping does not.
+        //
+        // `asset_id` and `scope` are what this payload turned out to be about,
+        // and another device should be told rather than working it out again.
+        // `projected_version` only records that *this* device has read the
+        // payload with *this* version of the reader, which is a fact about the
+        // work rather than about the archive. Deliberately left out: syncing it
+        // over 24,000 records would cost a stamp each to save the other device
+        // re-deriving something it can derive from rows it already has — and
+        // when it does, it writes the same values, which produces no change and
+        // therefore no news.
     }
 
     /// Payloads the current projection logic has not been over.

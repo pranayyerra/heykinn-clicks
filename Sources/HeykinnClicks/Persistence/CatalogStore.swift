@@ -1,8 +1,8 @@
 import Foundation
 
-/// The canonical catalog, hosted on the Mac. Every fact the system relies on —
+/// The canonical catalog, hosted on the device. Every fact the system relies on —
 /// residency, replica state, backlog, policies, migrations, audit history —
-/// lives here, so the Mac never needs a drive attached to know system state.
+/// lives here, so the device never needs a drive attached to know system state.
 final class CatalogStore {
     /// Not a `let` because restoring a snapshot closes this connection and
     /// opens another over the replaced file. Read-only to everyone else.
@@ -10,13 +10,139 @@ final class CatalogStore {
     /// Kept so the connection can be reopened over the same path.
     let databasePath: String
 
-    private static let encoder = JSONEncoder()
+    /// Sorted keys, because the output of this is **stored and compared**.
+    ///
+    /// Swift dictionaries have no defined iteration order, so encoding the same
+    /// `[String: String]` twice can produce two different strings. Nothing
+    /// noticed while a column was only ever written and read back — but the
+    /// change journal compares a row before and after a write to see what
+    /// moved, and re-saving an asset whose EXIF had not changed at all looked
+    /// like a change every single time. A routine rescan would have read to
+    /// every other device as the whole archive being rewritten.
+    ///
+    /// It is also a cross-platform requirement. Two clients encoding the same
+    /// map in different orders produce different text for identical data, and
+    /// would overwrite each other's `exif_json` forever without either being
+    /// wrong. See `docs/SPEC-format.md` §2.2.
+    private static let encoder: JSONEncoder = {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        return encoder
+    }()
     private static let decoder = JSONDecoder()
+
+    /// The schema this build understands.
+    ///
+    /// Bump it whenever `applySchema` starts writing something an older build
+    /// would not know to preserve. Not every additive column needs one — a
+    /// column an old build never selects and never writes is harmless — but
+    /// anything an old build would *overwrite* does, because every upsert here
+    /// rewrites whole rows.
+    ///
+    /// 1 — the schema as of the version that introduced this stamp. Catalogs
+    ///     written before it read as 0, which is SQLite's default for a file
+    ///     nobody has stamped, and migrate forward normally.
+    static let schemaVersion: Int64 = 1
+
+    enum OpenError: Error, LocalizedError {
+        /// The catalog was last written by a build newer than this one.
+        case builtForNewerVersion(found: Int64, supported: Int64)
+
+        var errorDescription: String? {
+            switch self {
+            case .builtForNewerVersion(let found, let supported):
+                return """
+                This archive was last opened by a newer version of Heykinn Clicks \
+                (catalog version \(found); this copy understands \(supported)). Update the app \
+                to open it.
+                """
+            }
+        }
+    }
+
+    /// Records when each field was last written, so two devices holding the
+    /// same archive can work out whose write is later. Not yet shipped
+    /// anywhere — see `ChangeJournal`.
+    private(set) var journal: ChangeJournal!
 
     init(databasePath: String) throws {
         self.databasePath = databasePath
         database = try SQLiteDatabase(path: databasePath)
+        try checkSchemaVersion()
+        try openJournal()
         try applySchema()
+        // After the schema, because the triggers are generated from it — a
+        // column added by a migration needs one, and a table that does not exist
+        // yet cannot have one.
+        try journal.installTriggers()
+        try stampSchemaVersion()
+    }
+
+    /// Opens the journal, **before** `applySchema`.
+    ///
+    /// Ordering that matters: some schema migrations write rows — the move of
+    /// per-source policies into storage groups is one — and a write that
+    /// happens before the journal exists is a write nothing has stamped. The
+    /// journal's own tables are independent of the rest of the schema, so it
+    /// can be brought up first and is.
+    ///
+    /// The archive directory is derived rather than handed in, so the store
+    /// stays openable from a path alone. Every test and every tool relies on
+    /// that.
+    private func openJournal() throws {
+        journal = try ChangeJournal(
+            database: database,
+            device: DeviceIdentity.resolve(
+                inDirectory: URL(fileURLWithPath: databasePath).deletingLastPathComponent()
+            )
+        )
+    }
+
+    /// Refuses a catalog written by a build newer than this one.
+    ///
+    /// Opening it would not fail — SQLite reads a newer file perfectly well,
+    /// and every query here names its columns explicitly, so nothing would
+    /// throw. That is the problem. The upserts rewrite whole rows, so a build
+    /// that has never heard of a column writes the row back without it, and
+    /// the catalog stays readable while quietly losing whatever the newer
+    /// build recorded. It is the same failure `ArchiveLock` exists to prevent,
+    /// arriving through time rather than through a second process.
+    ///
+    /// Refusing costs somebody the ability to open their archive on an old
+    /// build, which is real. It buys not silently discarding their data, which
+    /// is worth more — and once catalogs travel between devices on a drive,
+    /// meeting a newer one stops being an edge case.
+    private func checkSchemaVersion() throws {
+        let found = try storedSchemaVersion()
+        guard found <= Self.schemaVersion else {
+            throw OpenError.builtForNewerVersion(found: found, supported: Self.schemaVersion)
+        }
+    }
+
+    private func storedSchemaVersion() throws -> Int64 {
+        try database.query("PRAGMA user_version;") { Int64($0.int(0)) }.first ?? 0
+    }
+
+    /// The version stamped on a catalog this store is not connected to — a
+    /// snapshot being considered for restore, or one found on a drive.
+    ///
+    /// Read-only, so inspecting a snapshot cannot switch it to WAL or leave
+    /// journals beside it, for the same reason `SQLiteDatabase(readOnly:)`
+    /// exists.
+    static func schemaVersion(ofDatabaseAt url: URL) throws -> Int64 {
+        let probe = try SQLiteDatabase(path: url.path, readOnly: true)
+        defer { probe.close() }
+        return try probe.query("PRAGMA user_version;") { Int64($0.int(0)) }.first ?? 0
+    }
+
+    /// Records the version this build just brought the file up to.
+    ///
+    /// Interpolated rather than bound: `PRAGMA` does not accept a parameter for
+    /// its value. The interpolated value is an `Int64` constant defined above,
+    /// never anything read from outside.
+    private func stampSchemaVersion() throws {
+        guard try storedSchemaVersion() != Self.schemaVersion else { return }
+        try database.exec("PRAGMA user_version = \(Self.schemaVersion);")
     }
 
     /// Opens the file at `databasePath` and brings it up to the current schema.
@@ -34,6 +160,7 @@ final class CatalogStore {
         try createSourceSchema()
         try createMetadataSchema()
         try createTagSchema()
+        try createDriveLocalStateSchema()
     }
 
     /// Swaps the live catalog for the database at `url`, keeping the outgoing
@@ -50,6 +177,17 @@ final class CatalogStore {
     /// app is never left running on no catalog at all.
     @discardableResult
     func replaceContents(withDatabaseAt url: URL) throws -> URL {
+        // Before anything is moved. A snapshot is written by whichever build
+        // was running when the drive was last connected, and once catalogs
+        // travel between devices that is routinely not this one. Restoring a
+        // newer snapshot and then refusing to open it would leave somebody with
+        // no working archive and their previous one renamed out from under
+        // them; checking first means a refused restore changes nothing at all.
+        let incoming = try Self.schemaVersion(ofDatabaseAt: url)
+        guard incoming <= Self.schemaVersion else {
+            throw OpenError.builtForNewerVersion(found: incoming, supported: Self.schemaVersion)
+        }
+
         let live = URL(fileURLWithPath: databasePath)
         let stamp = Self.replacedStampFormatter.string(from: Date())
         let keptAside = live.deletingLastPathComponent()
@@ -74,11 +212,27 @@ final class CatalogStore {
                 try? FileManager.default.moveItem(at: keptAside, to: live)
             }
             database = try SQLiteDatabase(path: databasePath)
+            try openJournal()
             try applySchema()
+            try journal.installTriggers()
             throw error
         }
         database = try SQLiteDatabase(path: databasePath)
+        // The journal holds the connection it was opened on, and that one has
+        // just been closed and replaced. Without this it would go on stamping
+        // into a dead handle — and the restored catalog would carry the *old*
+        // catalog's clock, which is the state this is meant to resume.
+        try openJournal()
         try applySchema()
+        // And the triggers, which live *in* the file that was just replaced.
+        //
+        // A snapshot carries whatever triggers it had — possibly none, if it
+        // predates them — and carries `change_pending_stamp` with the id of the
+        // device that wrote it. Without this, a restored archive either records
+        // nothing at all, or records this device's changes under another
+        // device's identity: the exact thing `DeviceIdentity` living outside the
+        // catalog exists to prevent. Reinstalling rebuilds both.
+        try journal.installTriggers()
         return keptAside
     }
 
@@ -306,6 +460,22 @@ final class CatalogStore {
         try database.transaction(body)
     }
 
+    // MARK: - Journalling
+
+    /// Runs a write to a shared table and records which columns it changed, so
+    /// another device can be told about it.
+    ///
+    /// `key` is the row's primary-key values, in key order — one for most
+    /// tables, several for the few keyed by a combination.
+    ///
+    /// Wrapping rather than being called afterwards because the journal has to
+    /// see the row on both sides of the write: every statement here is an
+    /// upsert, and an upsert cannot say which values it moved.
+    @discardableResult
+    func journaled<T>(_ table: String, _ key: [String], _ write: () throws -> T) throws -> T {
+        try journal.recordingWrite(table: table, rowID: ChangeJournal.rowID(key), write)
+    }
+
     // MARK: - JSON helpers
 
     static func encodeJSON<T: Encodable>(_ value: T) -> String {
@@ -320,68 +490,70 @@ final class CatalogStore {
     // MARK: - Assets
 
     func upsertAsset(_ asset: Asset) throws {
-        try database.run("""
-        INSERT INTO assets (id, kind, original_filename, import_origin, capture_date,
-            import_date, updated_date, file_size, pixel_width, pixel_height, content_hash,
-            residency, residency_source, presence_local, presence_apple, presence_google,
-            staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at, capture_date_source, edited_from_asset_id, provider_local_id, counterpart_asset_id)
-        VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
-        ON CONFLICT(id) DO UPDATE SET
-            kind = excluded.kind,
-            original_filename = excluded.original_filename,
-            import_origin = excluded.import_origin,
-            capture_date = excluded.capture_date,
-            import_date = excluded.import_date,
-            updated_date = excluded.updated_date,
-            file_size = excluded.file_size,
-            pixel_width = excluded.pixel_width,
-            pixel_height = excluded.pixel_height,
-            content_hash = excluded.content_hash,
-            residency = excluded.residency,
-            residency_source = excluded.residency_source,
-            presence_local = excluded.presence_local,
-            presence_apple = excluded.presence_apple,
-            presence_google = excluded.presence_google,
-            staging_relpath = excluded.staging_relpath,
-            import_batch_id = excluded.import_batch_id,
-            exif_json = excluded.exif_json,
-            cloud_evidence = excluded.cloud_evidence,
-            cloud_checked_at = excluded.cloud_checked_at,
-            live_photo_still_id = excluded.live_photo_still_id,
-            live_photo_checked_at = excluded.live_photo_checked_at,
-            capture_date_source = excluded.capture_date_source,
-            edited_from_asset_id = excluded.edited_from_asset_id,
-            provider_local_id = excluded.provider_local_id,
-            counterpart_asset_id = excluded.counterpart_asset_id;
-        """, [
-            .text(asset.id.uuidString),
-            .text(asset.kind.rawValue),
-            .text(asset.originalFilename),
-            .text(asset.importOrigin.rawValue),
-            .date(asset.captureDate),
-            .date(asset.importDate),
-            .date(asset.updatedDate),
-            .int(asset.fileSize),
-            .optionalInt(asset.pixelWidth.map(Int64.init)),
-            .optionalInt(asset.pixelHeight.map(Int64.init)),
-            .text(asset.contentHash),
-            .text(asset.residency.rawValue),
-            .text(asset.residencySource.rawValue),
-            .bool(asset.presence.local),
-            .bool(asset.presence.appleCloud),
-            .bool(asset.presence.googleCloud),
-            .optionalText(asset.stagingRelativePath),
-            .uuid(asset.importBatchID),
-            .text(Self.encodeJSON(asset.exifSummary)),
-            .text(asset.cloudPresenceEvidence.rawValue),
-            .date(asset.cloudPresenceCheckedAt),
-            .uuid(asset.livePhotoStillID),
-            .date(asset.livePhotoCheckedAt),
-            .text(asset.captureDateSource.rawValue),
-            .uuid(asset.editedFromAssetID),
-            .optionalText(asset.providerLocalID),
-            .uuid(asset.counterpartAssetID),
-        ])
+        try journaled("assets", [asset.id.uuidString]) {
+            try database.run("""
+            INSERT INTO assets (id, kind, original_filename, import_origin, capture_date,
+                import_date, updated_date, file_size, pixel_width, pixel_height, content_hash,
+                residency, residency_source, presence_local, presence_apple, presence_google,
+                staging_relpath, import_batch_id, exif_json, cloud_evidence, cloud_checked_at, live_photo_still_id, live_photo_checked_at, capture_date_source, edited_from_asset_id, provider_local_id, counterpart_asset_id)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(id) DO UPDATE SET
+                kind = excluded.kind,
+                original_filename = excluded.original_filename,
+                import_origin = excluded.import_origin,
+                capture_date = excluded.capture_date,
+                import_date = excluded.import_date,
+                updated_date = excluded.updated_date,
+                file_size = excluded.file_size,
+                pixel_width = excluded.pixel_width,
+                pixel_height = excluded.pixel_height,
+                content_hash = excluded.content_hash,
+                residency = excluded.residency,
+                residency_source = excluded.residency_source,
+                presence_local = excluded.presence_local,
+                presence_apple = excluded.presence_apple,
+                presence_google = excluded.presence_google,
+                staging_relpath = excluded.staging_relpath,
+                import_batch_id = excluded.import_batch_id,
+                exif_json = excluded.exif_json,
+                cloud_evidence = excluded.cloud_evidence,
+                cloud_checked_at = excluded.cloud_checked_at,
+                live_photo_still_id = excluded.live_photo_still_id,
+                live_photo_checked_at = excluded.live_photo_checked_at,
+                capture_date_source = excluded.capture_date_source,
+                edited_from_asset_id = excluded.edited_from_asset_id,
+                provider_local_id = excluded.provider_local_id,
+                counterpart_asset_id = excluded.counterpart_asset_id;
+            """, [
+                .text(asset.id.uuidString),
+                .text(asset.kind.rawValue),
+                .text(asset.originalFilename),
+                .text(asset.importOrigin.rawValue),
+                .date(asset.captureDate),
+                .date(asset.importDate),
+                .date(asset.updatedDate),
+                .int(asset.fileSize),
+                .optionalInt(asset.pixelWidth.map(Int64.init)),
+                .optionalInt(asset.pixelHeight.map(Int64.init)),
+                .text(asset.contentHash),
+                .text(asset.residency.rawValue),
+                .text(asset.residencySource.rawValue),
+                .bool(asset.presence.local),
+                .bool(asset.presence.appleCloud),
+                .bool(asset.presence.googleCloud),
+                .optionalText(asset.stagingRelativePath),
+                .uuid(asset.importBatchID),
+                .text(Self.encodeJSON(asset.exifSummary)),
+                .text(asset.cloudPresenceEvidence.rawValue),
+                .date(asset.cloudPresenceCheckedAt),
+                .uuid(asset.livePhotoStillID),
+                .date(asset.livePhotoCheckedAt),
+                .text(asset.captureDateSource.rawValue),
+                .uuid(asset.editedFromAssetID),
+                .optionalText(asset.providerLocalID),
+                .uuid(asset.counterpartAssetID),
+            ])
+        }
     }
 
     func fetchAssets() throws -> [Asset] {
@@ -427,6 +599,10 @@ final class CatalogStore {
     }
 
     func deleteAsset(id: UUID) throws {
+        // Both deletes are tombstoned by their tables' triggers — the photo,
+        // and every claim about where its copies live. A row that merely
+        // vanishes is indistinguishable, on another device, from one it has
+        // never been told about, and the next merge would hand it back.
         try database.run("DELETE FROM assets WHERE id = ?;", [.text(id.uuidString)])
         try database.run("DELETE FROM replica_states WHERE asset_id = ?;", [.text(id.uuidString)])
     }
