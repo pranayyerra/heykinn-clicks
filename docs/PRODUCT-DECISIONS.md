@@ -3,8 +3,9 @@
 *Four decisions about the interface, in the shape of `ARCHITECTURE-DECISIONS.md`:
 what is true today, what the options are, what each costs, and a recommendation.*
 
-**All four recommendations are accepted. P3 is built; P1, P2 and P4 are not.**
-Settled questions waiting for a turn, not open ones to be argued again.
+**All four recommendations are accepted. P3 is built, P4 already was, and P1
+and P2 are not.** Settled questions waiting for a turn, not open ones to be
+argued again.
 
 Companion to invariant 15 and requirement R8: *a person who is not technical can
 use this without learning our vocabulary.* That invariant has been satisfied for
@@ -75,7 +76,25 @@ default is just a hidden decision.
 answer changes what a photograph found in the Photos library *means*, and
 guessing would have the app claiming a copy it has not checked. That one stays.
 
-**Status:** decided, not yet built.
+**Status:** partly built, and the first part was not what this section
+predicted.
+
+The queue of questions is real but secondary. The measured problem was harder:
+**a fresh install with no drive plugged in could not add photographs at all.**
+Automatic placement considers external drives only — deliberately, because a
+copy on the device the drives exist to outlive is not redundancy — so with no
+drive the destination set came back empty, and `AddSourceSheet` disables its
+confirm button on exactly that. A person who had not plugged anything in yet was
+told nothing except that the button did not work.
+
+Fixed by falling back to this device when there is no drive. Drives stay
+preferred; "prefer drives" and "refuse to proceed without one" were always
+different rules and only the first was intended. One copy is reported as one
+copy, in the same words as any other shortfall, and the rest arrive when a drive
+is registered. `SafeByDefaultTests`.
+
+What remains of this section is the softer half: the sheet still asks, prefilled,
+rather than proceeding and saying what it chose.
 
 ---
 
@@ -165,6 +184,14 @@ most of the time the answer to *are my photos safe* is **yes**, and a screen
 that only knows how to show work in progress and things at risk answers a
 question nobody asked.
 
+**This was written up as an open decision in error.** It had already been taken
+and built — `8d6c612`, "Let Overview be the short answer it says it is", five
+days before the session that produced this document. The overview opens with
+`theAnswer`: a seal or a warning, and one sentence — *"Every photo is in 2
+places."* The description of "today" below was written from assumption rather
+than from reading the screen, which is the mistake the rest of this document was
+careful to avoid.
+
 **Options**
 
 | | |
@@ -178,7 +205,9 @@ can already run, and it is the difference between a tool that reports and a tool
 that reassures. It also gives risk somewhere to be *loud* against, which the
 current design cannot do — everything is equally prominent.
 
-**Status:** decided, not yet built.
+**Status:** already built, and the decision recorded here after the fact. What
+this document adds is one line the overview did not have: how much of the
+archive no longer needs its iCloud copy — see `ReclamationPlanner.Plan.plainSummary`.
 
 ---
 

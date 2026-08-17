@@ -3623,10 +3623,22 @@ final class AppStore: ObservableObject {
             // A worked-out set is worked out here too, rather than prefilled
             // from `targets` — which included this device and would have opened
             // the sheet proposing the device the drives exist to survive.
+            //
+            // Falling back to this device when there is no drive, though,
+            // because the alternative is worse than the thing the exclusion
+            // guards against. `automaticEligibleDeviceIDs` is external drives
+            // only, so on a fresh install — which is everybody, once — the set
+            // came back empty, the sheet's confirm button was disabled on it,
+            // and photographs could not be added at all. A person with no drive
+            // yet was told nothing except that the button did not work.
+            //
+            // One copy on this device is not redundancy and the app does not
+            // pretend otherwise: it says "in one place only" straight away, in
+            // the same words it uses for any other shortfall, and the copies
+            // arrive the moment a drive is registered. That is an honest
+            // starting position. Refusing the import is not.
             destinationTargetIDs: defaults.destinationMode == .automatic
-                ? StorageGroup.automaticDestinations(
-                    copies: defaults.desiredCopies, among: automaticEligibleDeviceIDs
-                  )
+                ? automaticDestinationsOrThisDevice(copies: defaults.desiredCopies)
                 : defaults.destinationTargetIDs,
             destinationMode: defaults.destinationMode
         )
@@ -6900,6 +6912,23 @@ final class AppStore: ObservableObject {
             .filter { $0.kind == .externalVolume }
             .sorted { $0.registeredAt < $1.registeredAt }
             .map(\.id)
+    }
+
+    /// Where automatic placement would put copies, and never nowhere.
+    ///
+    /// Drives are preferred and this device is the fallback, in that order and
+    /// for the reason the whole app exists: a copy on the device the drives are
+    /// meant to outlive is not redundancy. But "prefer drives" and "refuse to
+    /// proceed without one" are different rules, and only the first was
+    /// intended. Somebody who has not plugged anything in yet still has
+    /// photographs worth recording, and one honest copy — reported as one — is
+    /// where every archive starts.
+    func automaticDestinationsOrThisDevice(copies: Int) -> [UUID] {
+        let drives = StorageGroup.automaticDestinations(
+            copies: copies, among: automaticEligibleDeviceIDs
+        )
+        guard drives.isEmpty else { return drives }
+        return targets.filter { $0.kind == .hostDevice }.map(\.id)
     }
 
     @discardableResult
