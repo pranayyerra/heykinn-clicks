@@ -43,6 +43,7 @@ struct DriveCard: View {
                 capacityBar(capacity)
             }
             agreementLine
+            metadataSyncLine
             if let progress {
                 syncProgress(progress)
             }
@@ -194,6 +195,38 @@ struct DriveCard: View {
             .font(.caption2)
             .foregroundStyle(.secondary)
             .help("Your devices are meant to hold different photos. What matters is that every photo is on enough of them, which the Overview reports.")
+        }
+    }
+
+    /// What this drive last carried between devices.
+    ///
+    /// Shown only once there is something to say. A drive that has never met a
+    /// second device has nothing to report here, and a line reading "0 changes"
+    /// would invite somebody to wonder what went wrong with a device they do
+    /// not own.
+    @ViewBuilder
+    private var metadataSyncLine: some View {
+        if let sync = store.lastMetadataSync[drive.id] {
+            if let failure = sync.failure {
+                Label(failure, systemImage: "exclamationmark.triangle")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help("Your photos on this drive are unaffected. Only what the app knows about them failed to travel.")
+            } else if let damage = sync.damageNote {
+                Label("Some of what another device wrote here could not be read", systemImage: "bandage")
+                    .font(.caption2)
+                    .foregroundStyle(.orange)
+                    .help(damage)
+            } else if !sync.isQuiet {
+                Label(
+                    "Shared \(Formatters.count(sync.received, "change")) in, \(sync.sent.formatted()) out · \(Formatters.relative(sync.at))",
+                    systemImage: "arrow.left.arrow.right"
+                )
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .help("What this archive knows — which photos exist, where their copies are, how they are grouped — travelling between your devices on this drive. No photographs are moved by this.")
+            }
         }
     }
 

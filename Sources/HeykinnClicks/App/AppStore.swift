@@ -1,8 +1,8 @@
 import Foundation
 import SwiftUI
 
-/// Single observable source of truth for the UI, backed by the on-Mac catalog.
-/// The Mac is the control plane: everything here loads and works with zero
+/// Single observable source of truth for the UI, backed by the on-device catalog.
+/// The device is the control plane: everything here loads and works with zero
 /// targets attached.
 @MainActor
 final class AppStore: ObservableObject {
@@ -70,7 +70,33 @@ final class AppStore: ObservableObject {
     /// so a second instance does not corrupt the database; it silently
     /// overwrites whatever the first one did. The app refuses rather than
     /// running as the losing half of that.
+    /// What the last metadata sync with each drive did, for the Drives screen.
+    ///
+    /// Kept per drive rather than as one archive-wide "last synced", because
+    /// the honest answer is per drive: one may have been plugged in this
+    /// morning and another not since March, and a single date would describe
+    /// neither.
+    @Published private(set) var lastMetadataSync: [UUID: MetadataSyncSummary] = [:]
+
+    struct MetadataSyncSummary: Equatable {
+        var at: Date
+        /// Changes from other devices that this one did not have.
+        var received: Int
+        /// Changes this device wrote onto the drive.
+        var sent: Int
+        /// A device whose log stopped short, and what that means, or nil.
+        var damageNote: String?
+        /// Set when the sync could not run at all.
+        var failure: String?
+
+        var isQuiet: Bool { received == 0 && sent == 0 && damageNote == nil && failure == nil }
+    }
+
     @Published private(set) var archiveIsHeldByAnotherInstance = false
+    /// Set when the catalog on disk was written by a newer build than this one,
+    /// holding the explanation to show instead of the app. See
+    /// `CatalogStore.OpenError`.
+    @Published private(set) var catalogRequiresNewerApp: String?
     /// Held for the process's lifetime. The kernel gives it back on exit,
     /// including on a crash, so there is no stale lock to clear.
     private var archiveLock: ArchiveLock?
@@ -152,7 +178,7 @@ final class AppStore: ObservableObject {
     let accessGrants: AccessGrants
     /// Permission to reach each registered device, as against `accessGrants`,
     /// which remembers what the user decided about volumes they were *asked*
-    /// about. Per-machine and kept out of the catalog — see
+    /// about. Per-device and kept out of the catalog — see
     /// `Services/TargetBookmarks.swift`.
     let targetBookmarks: TargetBookmarks
     /// Permission to return to user-selected source roots between Takeout
@@ -265,7 +291,7 @@ final class AppStore: ObservableObject {
     @Published private(set) var accessGrantList: [AccessGrant] = []
 
     private let defaults: UserDefaults
-    /// Everything on this machine the app writes into. Staging, the export-part
+    /// Everything on this device the app writes into. Staging, the export-part
     /// relay, the thumbnail cache, the catalog and this device's own copy all
     /// hang off it — so it is also the answer to "is this folder ours".
     private let appDirectory: URL
@@ -366,7 +392,7 @@ final class AppStore: ObservableObject {
     }
 
     /// Where this asset's bytes can be read right now, for previews and
-    /// thumbnails: Mac staging first, then any present replica on a connected
+    /// thumbnails: local staging first, then any present replica on a connected
     /// drive — including archive-backed Takeout files, which makes
     /// drive-resident content viewable in the Library whenever the drive is
     /// attached. (Zip-member replicas are skipped: not directly readable.)
@@ -414,6 +440,26 @@ final class AppStore: ObservableObject {
 
         do {
             catalog = try CatalogStore(databasePath: appDirectory.appendingPathComponent("catalog.sqlite").path)
+        } catch let error as CatalogStore.OpenError {
+            // A catalog this build is too old to write to safely. Not a crash:
+            // the archive is fine, this copy of the app is simply the wrong one
+            // to open it with, and that is a sentence somebody can act on.
+            //
+            // A scratch catalog is opened so the rest of this initialiser has
+            // the object it requires. Nothing reads it — `ContentView` shows
+            // the explanation instead of the app, and the background-work guard
+            // below returns before any drive is touched — but `catalog` is not
+            // optional, and making it so would ripple through every screen to
+            // describe a state none of them can be in.
+            catalogRequiresNewerApp = error.localizedDescription
+            let scratch = FileManager.default.temporaryDirectory
+                .appendingPathComponent("HeykinnClicks-Unopened-\(UUID().uuidString)", isDirectory: true)
+            do {
+                try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+                catalog = try CatalogStore(databasePath: scratch.appendingPathComponent("catalog.sqlite").path)
+            } catch {
+                fatalError("Could not open catalog database: \(error)")
+            }
         } catch {
             fatalError("Could not open catalog database: \(error)")
         }
@@ -439,7 +485,7 @@ final class AppStore: ObservableObject {
         // Above the background-work guard on purpose. Reading how a group's
         // devices were arrived at touches the catalog and nothing else — no
         // volume is enumerated and no drive is written to — and it is part of
-        // opening a catalog correctly rather than part of running the machine.
+        // opening a catalog correctly rather than part of running the device.
         //
         // It was below the guard first, which meant it did not run in the one
         // harness built to check migrations against a real catalog. The check
@@ -484,10 +530,16 @@ final class AppStore: ObservableObject {
         }
         refreshApplePhotosState()
 
-        // A test drives reachability itself, and enumerating the real machine's
+        // A test drives reachability itself, and enumerating the real device's
         // volumes — or backing the catalog up onto the user's actual drives —
         // is exactly what it must not do.
         guard environment.runsBackgroundWork else { return }
+
+        // Ahead of the lock, not after it. This copy is not going to open the
+        // archive, so holding it shut against anything else would be taking a
+        // lock purely to refuse to use it — and the way out of this state is to
+        // launch a build that can.
+        guard catalogRequiresNewerApp == nil else { return }
 
         // Before anything reads or writes the archive, and before any drive is
         // touched. A test drives its own temporary directory and skips all of
@@ -572,7 +624,7 @@ final class AppStore: ObservableObject {
     /// Recomputed whenever targets connect or the archive changes, so the UI
     /// can say what is possible without starting anything.
     @Published private(set) var partTransferPlan = ExportPartTransferPlan()
-    /// Parts currently parked on the Mac mid-journey.
+    /// Parts currently parked on the device mid-journey.
     @Published private(set) var heldExportParts: [HeldExportPart] = []
     @Published private(set) var isTransferringParts = false
     private var transferCancelRequested = false
@@ -601,7 +653,7 @@ final class AppStore: ObservableObject {
     ///
     /// The two-drive case is the whole point: a part that exists only on drive
     /// A can reach drive B directly when both are connected, and by way of the
-    /// Mac's holding area when they never are. Parked parts are delivered and
+    /// device's holding area when they never are. Parked parts are delivered and
     /// deleted on the next connection, so the corridor drains itself.
     func transferExportParts() {
         guard !isTransferringParts, !isImporting, !isSyncing, takeoutActivity == nil else { return }
@@ -628,7 +680,7 @@ final class AppStore: ObservableObject {
         for held in partTransferPlan.discardable {
             do {
                 try relay.remove(held)
-                audit(.replication, "\(held.displayName) is on every managed drive; cleared it from the Mac's holding area, freeing \(Formatters.bytes.string(fromByteCount: held.sizeBytes)).")
+                audit(.replication, "\(held.displayName) is on every managed drive; cleared it from the device's holding area, freeing \(Formatters.bytes.string(fromByteCount: held.sizeBytes)).")
             } catch {
                 lastError = "Could not clear \(held.displayName) from the holding area: \(error.localizedDescription)"
             }
@@ -741,12 +793,12 @@ final class AppStore: ObservableObject {
             return ResolvedTransfer(
                 sourceURL: source.url,
                 destinationURL: relay.url(setID: transfer.setID, partNumber: transfer.partNumber),
-                destinationLabel: "the Mac's holding area",
+                destinationLabel: "the device's holding area",
                 donorDriveID: from,
                 recipientDriveID: nil,
                 sourceArchiveID: source.id,
                 heldPart: nil,
-                explanation: "\(targetsByID[intendedFor]?.name ?? "The other drive") is not connected, so the part waits on the Mac and moves across when it is."
+                explanation: "\(targetsByID[intendedFor]?.name ?? "The other drive") is not connected, so the part waits on the device and moves across when it is."
             )
 
         case .holdingAreaToDrive(let to):
@@ -762,7 +814,7 @@ final class AppStore: ObservableObject {
                 recipientDriveID: to,
                 sourceArchiveID: nil,
                 heldPart: held,
-                explanation: "Delivering a part that has been waiting on the Mac; it is deleted from there once it lands."
+                explanation: "Delivering a part that has been waiting on the device; it is deleted from there once it lands."
             )
         }
     }
@@ -824,7 +876,7 @@ final class AppStore: ObservableObject {
                     importBatchID: nil,
                     importedAssetCount: 0,
                     skippedDuplicateCount: 0,
-                    note: "Copied from \(step.donorDriveID.flatMap { targetsByID[$0]?.name } ?? "the Mac's holding area") so this export is kept on the drives its group works out.",
+                    note: "Copied from \(step.donorDriveID.flatMap { targetsByID[$0]?.name } ?? "the device's holding area") so this export is kept on the drives its group works out.",
                     exportSetID: transfer.setID,
                     partNumber: transfer.partNumber,
                     quickChecksum: outcome.quickChecksum
@@ -2469,7 +2521,7 @@ final class AppStore: ObservableObject {
             }
             if orphanedStaging > 0 { repairs.append("removed \(Formatters.count(orphanedStaging, "orphaned staged file"))") }
 
-            // 3. Abandoned zip-extraction workspaces on the Mac (each can be
+            // 3. Abandoned zip-extraction workspaces on the device (each can be
             // many GB) and half-written `.extracting` folders on targets.
             let workArea = staging.rootURL.deletingLastPathComponent()
                 .appendingPathComponent("TakeoutWork", isDirectory: true)
@@ -2631,21 +2683,21 @@ final class AppStore: ObservableObject {
         // photo in one place satisfies a one-copy group and reads as fine.
         // "Every photo is on two drives" is the safety answer, and it is the
         // one somebody opens this screen to get.
-        // Every registered device counts, this Mac included.
+        // Every registered device counts, this device included.
         //
         // It was briefly split — drives counted, the host discounted — on the
-        // reasoning that the host is "the machine the drives exist to survive".
+        // reasoning that the host is "the device the drives exist to survive".
         // That is a slogan, and checking it did not survive contact with the
         // code: a copy on a registered host target is written to the same
         // replica root, read back and verified the same way, and removed only
         // when a group stops naming it. `reclaimStaging` frees the *staging*
-        // area, never a target's replicas. If this Mac dies, a photo on it and
+        // area, never a target's replicas. If this device dies, a photo on it and
         // on one drive still has the drive. That is what a second place is for.
         //
         // Automatic placement still prefers drives, but for a different and
         // honest reason — capacity. A boot disk rarely has room for the whole
         // archive. Preferring a drive is a sensible default; calling a
-        // deliberate choice of this Mac a lesser copy was not true.
+        // deliberate choice of this device a lesser copy was not true.
         //
         // Motion halves are excluded for the same reason `driveBreakdowns`
         // excludes them a few lines up: every sentence built from these counts
@@ -2731,7 +2783,7 @@ final class AppStore: ObservableObject {
             )
         case .refusedBothExist(let legacy, let shared):
             lastError = """
-            There are two archives on this Mac and this app is using \(shared.path). Another one is at \
+            There are two archives on this device and this app is using \(shared.path). Another one is at \
             \(legacy.path), left by a version that kept its own.
 
             Nothing has been changed or merged: two catalogs describing overlapping sets of the same \
@@ -2821,6 +2873,12 @@ final class AppStore: ObservableObject {
             // in place; starting the backlog first would copy over the top of
             // files that are already there.
             Task {
+                // First, before anything reads the catalog to decide what this
+                // drive needs. A drive arriving from another device may be
+                // carrying groups, sources or replica claims this device has
+                // never heard of — and every step below reasons about what is
+                // owed to whom, which is a different answer once they land.
+                await syncMetadata(with: targetID)
                 await autoTakeoutPipeline(targetID: targetID)
                 await adoptContentAlreadyOnTarget(targetID)
                 if autoSyncOnConnect && backlogCount(for: targetID) > 0 {
@@ -3047,13 +3105,13 @@ final class AppStore: ObservableObject {
         }
 
         // Reading from a drive the app does not manage means copying every
-        // file onto the Mac, and the placement cannot be revised afterwards
+        // file onto the device, and the placement cannot be revised afterwards
         // without hashing all of it again. Registering the drive first makes
         // the same import free. Asked here because here is the only point at
         // which the cheaper answer is still available.
         // No device-count condition: there is no cap to be near, and the
         // saving this offer exists for — crediting the files where they sit
-        // instead of copying every one onto the Mac — is worth the same
+        // instead of copying every one onto the device — is worth the same
         // whether it is the first drive or the fifth.
         if offeringRegistration, let volume = unmanagedVolume(holding: urls) {
             unmanagedSourceOffer = UnmanagedSourceOffer(volume: volume, urls: urls)
@@ -3066,9 +3124,9 @@ final class AppStore: ObservableObject {
 
     /// Why this import must not start, or nil to go ahead.
     ///
-    /// The reserve is the Mac's, the same one the export-part corridor keeps:
+    /// The reserve is the device's, the same one the export-part corridor keeps:
     /// staging is a corridor on the boot disk too, and a boot disk filled to
-    /// the last byte takes the whole machine with it rather than just the
+    /// the last byte takes the whole device with it rather than just the
     /// import. Says what it needs and what there is, because "not enough
     /// space" leaves somebody guessing whether to delete two files or two
     /// hundred gigabytes.
@@ -3100,10 +3158,10 @@ final class AppStore: ObservableObject {
 
         let bytes = Formatters.bytes
         return """
-        Not importing: this needs \(bytes.string(fromByteCount: needed)) of room on this Mac and \
+        Not importing: this needs \(bytes.string(fromByteCount: needed)) of room on this device and \
         there is \(bytes.string(fromByteCount: max(usable, 0))) to spare — \
         \(bytes.string(fromByteCount: available)) free, keeping \(bytes.string(fromByteCount: reserve)) \
-        for the Mac itself. Photos are copied here first and released once your drives hold them, so \
+        for the device itself. Photos are copied here first and released once your drives hold them, so \
         free up space or import the folder in parts. Nothing was copied and nothing was changed.
         """
     }
@@ -3225,7 +3283,7 @@ final class AppStore: ObservableObject {
 
     /// Whether every copy this archive holds of an asset is a file the user
     /// manages — adopted where it sat, under their own name, with nothing
-    /// staged on the Mac behind it.
+    /// staged on the device behind it.
     ///
     /// Adoption is what stops the app duplicating a drive's own content, and
     /// its cost is this: the copy is in a folder somebody may reorganise or
@@ -3240,7 +3298,7 @@ final class AppStore: ObservableObject {
 
     // MARK: - Bridging targets that are never present together
 
-    /// Brings onto the Mac what an absent target is owed, while the target that
+    /// Brings onto the device what an absent target is owed, while the target that
     /// holds it is here.
     ///
     /// Two drives that are never plugged in at the same time cannot copy to
@@ -3250,18 +3308,18 @@ final class AppStore: ObservableObject {
     /// behind, and the archive quietly stops being able to repair itself.
     ///
     /// Export parts already had the answer. A part that cannot go straight
-    /// across goes to a holding area on the Mac and is delivered when the
+    /// across goes to a holding area on the device and is delivered when the
     /// receiving drive appears. Ordinary photos had no such route, and once
     /// their staged copy is released — correctly, both targets have them — the
     /// last source both drives could reach is gone.
     ///
     /// The holding area for a photo is staging, because that is exactly what
-    /// staging is: a copy on the Mac that exists to be a source and is never
+    /// staging is: a copy on the device that exists to be a source and is never
     /// counted as protection. So this puts one back, and `StagingReclaimer`
     /// takes it away again the moment the target it was for is holding it.
     ///
     /// Bounded twice over — only what an absent target is actually owed, and
-    /// never past the reserve the Mac keeps free for the export-part holding
+    /// never past the reserve the device keeps free for the export-part holding
     /// area. It bridges what it can and leaves the rest for next time.
     func relayForAbsentTargets(from targetID: UUID) async {
         guard !isSyncing, !isImporting, reachablePaths[targetID] != nil else { return }
@@ -3317,7 +3375,7 @@ final class AppStore: ObservableObject {
         let waiting = absent.compactMap { targetsByID[$0]?.name }.sorted().joined(separator: " and ")
         audit(
             .replication,
-            "Held \(Formatters.count(staged.count, "photo")) — \(Formatters.bytes.string(fromByteCount: bytes)) — from \(name) on this Mac, so \(waiting.isEmpty ? "the other target" : waiting) can be given them without both being connected at once.",
+            "Held \(Formatters.count(staged.count, "photo")) — \(Formatters.bytes.string(fromByteCount: bytes)) — from \(name) on this device, so \(waiting.isEmpty ? "the other target" : waiting) can be given them without both being connected at once.",
             targetID: targetID
         )
         loadAll()
@@ -3375,12 +3433,12 @@ final class AppStore: ObservableObject {
     }
 
     /// The drive a chosen folder sits on, when that drive is one the app could
-    /// manage but does not. Nil for anything on this Mac's own disk, for a
+    /// manage but does not. Nil for anything on this device's own disk, for a
     /// drive already registered, and for one the user has said not to ask
     /// about again.
     /// Whether a folder is one the app writes its own copies into.
     ///
-    /// Two families: everything under the app's directory on this machine —
+    /// Two families: everything under the app's directory on this device —
     /// staging, the relay, and this device's own copy — and the single folder
     /// the app owns at the root of each registered drive.
     ///
@@ -3582,8 +3640,8 @@ final class AppStore: ObservableObject {
                 : urls.map(\.lastPathComponent).joined(separator: ", "),
             desiredCopies: defaults.desiredCopies,
             // A worked-out set is worked out here too, rather than prefilled
-            // from `targets` — which included this Mac and would have opened
-            // the sheet proposing the machine the drives exist to survive.
+            // from `targets` — which included this device and would have opened
+            // the sheet proposing the device the drives exist to survive.
             destinationTargetIDs: defaults.destinationMode == .automatic
                 ? StorageGroup.automaticDestinations(
                     copies: defaults.desiredCopies, among: automaticEligibleDeviceIDs
@@ -4912,7 +4970,7 @@ final class AppStore: ObservableObject {
                 // that drive's replica — the disk already holds the bytes.
                 // An extracted export sits on the drive that holds it, so its
                 // workspace resolves against that one target; a zip unpacked
-                // into a Mac temp workspace resolves against none.
+                // into a local temp workspace resolves against none.
                 let placement = archive.kind == .folder
                     ? reachablePaths.first { archive.path.hasPrefix($0.value.path + "/") }
                         .map { TargetPlacement(targetID: $0.key, mountPath: $0.value.path) }
@@ -5127,7 +5185,7 @@ final class AppStore: ObservableObject {
                 audit(.importEvent, "Extracted \(archive.displayName) on its drive; imports will use the folder.", targetID: archive.targetID)
             } catch {
                 // Keep going: a part that can't be extracted (e.g. space) can
-                // still be imported from its zip via the Mac workspace.
+                // still be imported from its zip via the local workspace.
                 lastError = "Extraction failed at \(archive.displayName): \(error.localizedDescription)"
                 audit(.importEvent, "Extraction of \(archive.displayName) failed (\(error.localizedDescription)); its zip will be imported the slower way.", targetID: archive.targetID)
             }
@@ -5279,7 +5337,7 @@ final class AppStore: ObservableObject {
 
         // Parts the policy still wants elsewhere: move them while this drive
         // is here to give or receive them. Whether that means a direct copy,
-        // parking a part on the Mac, or delivering one that has been waiting
+        // parking a part on the device, or delivering one that has been waiting
         // depends on what else is plugged in, and is decided in the planner.
         refreshPartTransferPlan()
         if !partTransferPlan.isEmpty {
@@ -5519,7 +5577,7 @@ final class AppStore: ObservableObject {
             return nil
         }
         guard !storage.isHostDevice else {
-            lastError = "That is this Mac's own disk. Use the This Mac row to choose a folder on it; this picker is for an external drive."
+            lastError = "That is this device's own disk. Use the This device row to choose a folder on it; this picker is for an external drive."
             return nil
         }
         if let expected {
@@ -5578,7 +5636,7 @@ final class AppStore: ObservableObject {
         )
     }
 
-    /// The folder this machine holds its copy in when nobody has chosen one.
+    /// The folder this device holds its copy in when nobody has chosen one.
     ///
     /// Beside the catalog rather than in Pictures or Documents: it is the app's
     /// own storage, it should not appear in the user's own folders uninvited,
@@ -5593,15 +5651,15 @@ final class AppStore: ObservableObject {
     }
 
     /// Set when the user forgets the host target, so the app does not silently
-    /// re-adopt this Mac on the next launch and undo their decision. Forgetting
+    /// re-adopt this device on the next launch and undo their decision. Forgetting
     /// is the supported way to run an archive that will not fit on the boot
     /// disk (SPEC invariant 4), and a default that reasserts itself is not a
     /// default, it is a policy.
     private var hostTargetDeclined: Bool = false
 
-    /// Makes this machine a target on first launch.
+    /// Makes this device a target on first launch.
     ///
-    /// The Mac is a device like any other, and treating it only as a corridor
+    /// The device is a device like any other, and treating it only as a corridor
     /// meant a fresh install with no drive attached held nothing the policy
     /// counted — while a boot disk with room to spare sat unused. Under the
     /// default two-copy policy this is copy one, and the second is the first
@@ -5616,7 +5674,7 @@ final class AppStore: ObservableObject {
     ///   anything of, would be alarming and unactionable. A later launch, or an
     ///   explicit registration from the Drives screen, still works.
     /// - It does not require room for the whole archive. Under `k`-of-`n` the
-    ///   Mac takes the share that fits and placement routes the rest to
+    ///   device takes the share that fits and placement routes the rest to
     ///   drives, so the old "will the entire archive fit on the boot disk"
     ///   gate was asking a question that no longer decides anything.
     func adoptHostDeviceIfNeeded() {
@@ -5645,26 +5703,26 @@ final class AppStore: ObservableObject {
         lastError = existingError
     }
 
-    /// What this Mac is called, so the Drives screen and every source's copy
-    /// status name the machine rather than saying "This device" twice.
+    /// What this device is called, so the Drives screen and every source's copy
+    /// status name the device rather than saying "This device" twice.
     var hostDeviceName: String {
         let name = Host.current().localizedName ?? ""
-        return name.isEmpty ? "This Mac" : name
+        return name.isEmpty ? "This device" : name
     }
 
-    /// Whether this machine currently holds a counted copy.
+    /// Whether this device currently holds a counted copy.
     var hostTarget: ReplicationTarget? {
         targets.first { $0.kind == .hostDevice }
     }
 
-    /// Records that the user does not want this Mac holding a copy, so the
+    /// Records that the user does not want this device holding a copy, so the
     /// first-launch adoption does not put it back.
     func declineHostTarget() {
         hostTargetDeclined = true
         defaults.set(true, forKey: "hostTargetDeclined")
     }
 
-    /// Registers this machine as a target, holding its copy in the folder the
+    /// Registers this device as a target, holding its copy in the folder the
     /// user picked. The folder says where; the device is what is being
     /// registered — so a folder that turns out to live on an external drive is
     /// refused, because that drive is a target in its own right and would
@@ -5677,7 +5735,7 @@ final class AppStore: ObservableObject {
             return
         }
         guard storage.isHostDevice else {
-            lastError = "That folder is on \(storage.volumeURL.lastPathComponent), not on this machine's own disk. Register that drive as an external target instead — otherwise it would be registered twice under two identities."
+            lastError = "That folder is on \(storage.volumeURL.lastPathComponent), not on this device's own disk. Register that drive as an external target instead — otherwise it would be registered twice under two identities."
             return
         }
         // Staging is transit: content sitting only there is replicated nowhere,
@@ -5713,7 +5771,7 @@ final class AppStore: ObservableObject {
             return
         }
 
-        // Registering this Mac on purpose overrides an earlier decision not to
+        // Registering this device on purpose overrides an earlier decision not to
         // have it — otherwise the flag from a previous "forget" would sit there
         // invisibly and un-register it on the next launch.
         hostTargetDeclined = false
@@ -5759,7 +5817,7 @@ final class AppStore: ObservableObject {
             // extend to not still being able to reach them.
             targetBookmarks.forget(targetID: targetID)
             audit(.drive, "Forgot \(target.name). Its files were left untouched; another device can be added whenever you choose.")
-            // Forgetting this Mac is the supported way to run an archive the
+            // Forgetting this device is the supported way to run an archive the
             // boot disk cannot hold. Remember the decision, or first-launch
             // adoption puts the host target straight back on next launch and
             // the user has no way to make it stop.
@@ -6822,9 +6880,9 @@ final class AppStore: ObservableObject {
     /// Writes only where the answer actually moved, so an ordinary launch does
     /// no work and logs nothing.
     ///
-    /// **Only external drives are eligible.** The host is the machine the
+    /// **Only external drives are eligible.** The host is the device the
     /// drives exist to survive, so it is never somewhere a group is merely
-    /// spread onto — counting it would let "2 copies" be satisfied by this Mac
+    /// spread onto — counting it would let "2 copies" be satisfied by this device
     /// plus one drive and report that as safe. Naming it stays possible, but
     /// only as a `.chosen` device, which is a deliberate act.
     /// The devices a worked-out group draws from, in the order it draws them.
@@ -7006,6 +7064,112 @@ final class AppStore: ObservableObject {
 
     /// Requests a backlog sync for one connected drive. If another drive is
     /// already syncing, the request queues behind it (syncs stay serial).
+    // MARK: - Metadata sync
+
+    /// Trades this archive's changes with whatever the drive is carrying.
+    ///
+    /// **Metadata only** — no photographs move here. That is the point: the
+    /// bytes already travel by being copied onto the drive, and what has never
+    /// travelled is everything the catalog knows *about* them. This is the part
+    /// that makes two devices one archive rather than two that happen to share
+    /// disks.
+    ///
+    /// Failures are recorded and shown, never thrown away and never fatal. A
+    /// drive that cannot be written to still holds photographs, and refusing to
+    /// use it because its metadata would not sync would be the wrong trade by a
+    /// wide margin.
+    func syncMetadata(with targetID: UUID) async {
+        guard let target = targetsByID[targetID], let mount = reachablePaths[targetID] else { return }
+
+        // Under the app's own folder on the drive, beside the replicas and the
+        // catalog snapshots. One folder, so somebody can see at a glance what
+        // belongs to the app and what is theirs.
+        let root = mount
+            .appendingPathComponent(ReplicationTarget.appFolderName, isDirectory: true)
+            .appendingPathComponent("Sync", isDirectory: true)
+
+        let summary = await syncMetadata(
+            with: DirectorySegmentStore(root: root), named: target.name, targetID: targetID
+        )
+        lastMetadataSync[targetID] = summary
+    }
+
+    /// The same, against any place sync files can live.
+    ///
+    /// Split out because the drive is only one such place — a share on the
+    /// local network or a folder acting as a courier would come through here
+    /// too — and because it is what lets this be tested without a drive to
+    /// plug in. See `SegmentStore`.
+    @discardableResult
+    func syncMetadata(
+        with store: SegmentStore, named name: String, targetID: UUID?
+    ) async -> MetadataSyncSummary {
+        var summary = MetadataSyncSummary(at: Date(), received: 0, sent: 0)
+
+        do {
+            let published = try DriveSync.publish(from: catalog, to: store)
+            summary.sent = published.recordsWritten
+
+            // Worth saying out loud. It is the one moment a sync deletes
+            // anything on a drive — this device's own superseded log — and a
+            // person looking at why a drive suddenly holds fewer files deserves
+            // to find the reason written down rather than have to work it out.
+            if let checkpoint = published.checkpoint {
+                audit(
+                    .drive,
+                    "\(name): wrote a full copy of the archive's state (\(checkpoint.rows) rows) "
+                    + "and retired \(published.segmentsPruned) log file(s) it replaces.",
+                    targetID: targetID
+                )
+            }
+
+            // Sliced, so the window keeps drawing. A first sync of a full
+            // archive is tens of thousands of records and the catalog is
+            // written on this actor; in one piece it would hold everything
+            // still for as long as it took.
+            let report = try await DriveSync.merge(
+                into: catalog, from: store, sliceSize: 2_000
+            ) {
+                await Task.yield()
+            }
+            summary.received = report.outcome.applied
+
+            if !report.truncatedPeers.isEmpty {
+                summary.damageNote = """
+                Part of what another device wrote here could not be read — most often a drive \
+                unplugged while it was being written. Nothing has been lost: that device writes \
+                it again the next time it sees this drive.
+                """
+            }
+            if !report.outcome.rejected.isEmpty {
+                audit(
+                    .drive,
+                    "\(name): \(report.outcome.rejected.count) changes were not understood and were left alone.",
+                    targetID: targetID
+                )
+            }
+        } catch {
+            summary.failure = error.localizedDescription
+        }
+
+        if let failure = summary.failure {
+            audit(.drive, "\(name): could not sync what this archive knows — \(failure)", targetID: targetID)
+        } else if !summary.isQuiet {
+            audit(
+                .drive,
+                "\(name): received \(summary.received) and sent \(summary.sent) changes about the archive.",
+                targetID: targetID
+            )
+        }
+
+        // Everything on screen is drawn from state loaded at launch, so a merge
+        // that changed rows underneath it has to be picked up here or the
+        // window goes on showing what was true before the drive arrived.
+        if summary.received > 0 { loadAll() }
+
+        return summary
+    }
+
     func syncDrive(_ targetID: UUID) {
         if isSyncing {
             if syncProgress?.targetID != targetID && !pendingSyncTargetIDs.contains(targetID) {
@@ -7092,7 +7256,7 @@ final class AppStore: ObservableObject {
                 let existingReplica = replicasByKey["\(task.assetID.uuidString)/\(task.targetID.uuidString)"]
                 syncProgress?.currentItem = asset?.originalFilename
                 syncProgress?.currentAction = task.action
-                // Source can be Mac staging or any readable copy on another
+                // Source can be local staging or any readable copy on another
                 // connected drive, so drive-only assets replicate drive-to-drive.
                 let sourceURL = asset.flatMap { localFileURL(for: $0) }
                 let result = await Task.detached(priority: .utility) {
@@ -7395,7 +7559,7 @@ final class AppStore: ObservableObject {
     /// walking the mounted volumes and reading each root is exactly what is not
     /// allowed, so a drive with no bookmark is not merely slow to find, it is
     /// invisible, and every one of somebody's drives would read as away while
-    /// sitting plugged into the machine.
+    /// sitting plugged into the device.
     ///
     /// Empty unless sandboxed, because that is the only build where it is true.
     var targetsNeedingLocating: [ReplicationTarget] {
@@ -7524,7 +7688,7 @@ final class AppStore: ObservableObject {
 
     /// The catalog side of indexing, kept apart from PhotoKit so the
     /// link-or-add decision can be exercised against a library that does not
-    /// exist on this machine.
+    /// exist on this device.
     func mergeLibraryIndex(_ items: [ApplePhotosVerifier.LibraryItem]) {
         guard !isIndexingApplePhotos else { return }
         applePhotosLibraryCount = items.count
@@ -7646,7 +7810,7 @@ final class AppStore: ObservableObject {
     /// How originals leave the Photos library. A property rather than a call
     /// straight into PhotoKit, so what this import decides about each item —
     /// merge, stage, or pair — can be tested against a library that does not
-    /// exist on the machine running the tests.
+    /// exist on the device running the tests.
     var exportOriginalFromPhotos: (String, URL) async throws -> ApplePhotosVerifier.ExportedOriginal =
         { try await ApplePhotosVerifier.exportOriginal(localIdentifier: $0, to: $1) }
 
@@ -7981,9 +8145,9 @@ final class AppStore: ObservableObject {
             return
         }
         let unsearchable = requested - results.count
-        var line = "Apple Photos check: \(found) of \(results.count) byte-identical in the Photos library on this Mac"
+        var line = "Apple Photos check: \(found) of \(results.count) byte-identical in the Photos library on this device"
         if results.isEmpty && unsearchable > 0 {
-            line = "Apple Photos check: none of \(requested) could be compared — their originals are not on this Mac (an optimised library with iCloud Photos off keeps previews, not originals)"
+            line = "Apple Photos check: none of \(requested) could be compared — their originals are not on this device (an optimised library with iCloud Photos off keeps previews, not originals)"
         }
         if found > 0 {
             line += " — recorded as verified presence; the Local coexistence is listed under Keep safe until migrated or reclaimed"
@@ -7991,7 +8155,7 @@ final class AppStore: ObservableObject {
         if unsearchable > 0 { line += "; \(unsearchable) had no capture date to search by" }
         audit(.system, line + ".")
         lastApplePhotosCheckSummary = results.isEmpty && unsearchable > 0
-            ? "originals not on this Mac — nothing could be compared"
+            ? "originals not on this device — nothing could be compared"
             : "\(found) found · \(absent) not found"
                 + (unsearchable > 0 ? " · \(unsearchable) originals unavailable" : "")
         isCheckingApplePhotos = false

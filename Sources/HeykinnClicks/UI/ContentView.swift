@@ -229,7 +229,23 @@ struct ContentView: View {
     }
 
     var body: some View {
-        if store.archiveIsHeldByAnotherInstance {
+        if let explanation = store.catalogRequiresNewerApp {
+            // Above the lock check, because this one is true whether or not
+            // anybody else has the archive open, and "quit the other copy"
+            // would send somebody chasing a problem they do not have.
+            //
+            // Instead of the app, for the same reason as the lock: every screen
+            // is drawn from state loaded into memory and written back as whole
+            // rows, so a build that has never heard of a column would write it
+            // away. Refusing to show the archive is refusing to damage it.
+            ContentUnavailableView {
+                Label("This archive needs a newer version", systemImage: "arrow.up.circle")
+            } description: {
+                Text("\(explanation)\n\nNothing is wrong with your archive and nothing has been changed. It was opened on a device running a newer version of the app — updating this copy will open it.")
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .frame(minWidth: 520, minHeight: 340)
+        } else if store.archiveIsHeldByAnotherInstance {
             // Instead of the app, not beside it. Both builds share one archive
             // on purpose, so the second one to open is looking at a catalog
             // somebody else is already writing to — and everything here is
