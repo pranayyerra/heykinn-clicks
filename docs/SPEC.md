@@ -545,7 +545,8 @@ to a platform that has never heard of Apple.
     detail panes were where the vocabulary leaked, and have been rewritten. The
     deeper question, whether some of these concepts should be visible at all
     rather than merely renamed, is open and is a design decision rather than a
-    copy one.
+    copy one; the four decisions it comes down to are laid out in
+    [`PRODUCT-DECISIONS.md`](PRODUCT-DECISIONS.md).
 
 ---
 
