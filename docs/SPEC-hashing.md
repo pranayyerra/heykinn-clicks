@@ -114,60 +114,36 @@ the defined input.
 
 ---
 
-## 4. Merkle tree
+## 4. Merkle tree — withdrawn
 
-Compares what two targets hold without reading either. Roots are compared, and
-where they differ the tree is descended to find the responsible assets.
+**This section defined a format nothing writes, and has been removed.** The
+construction is in git history if it is ever wanted again; it is not normative
+and an implementation does not need it.
 
-A matching root is never proof the bytes are good — it compares what the catalog
-*recorded*, so a file whose bytes decayed while its recorded hash stayed put
-leaves the root unchanged. Git has the same property, which is why `git fsck`
-still reads every object.
+It compared what two targets held by comparing roots. The reason it went is that
+both trees took their leaf digests from `asset.contentHash` — a value the
+*catalog* recorded — so a shared asset carried an identical digest on both sides
+by construction, and the comparison could only ever report which asset keys each
+target held. Under k-of-n placement that difference is the design rather than a
+fault. Every question it was reached for now has a better answer:
 
-### Construction
+| Question | Answered by |
+|---|---|
+| Which targets should hold this asset? | The placement audit, off the same rows |
+| Has anything moved on disk? | Anchor `stat`s — a handful of calls, whatever the archive's size |
+| Has a file been edited under an intact path? | The observed size and modification date recorded per replica |
 
-Input is a set of leaves, each a `(key, digest)` pair of strings. In this app
-`key` is an asset id and `digest` is that asset's recorded content hash, but the
-construction does not depend on that.
+A tree over recorded hashes could never have answered the last two: it changes
+only when the catalog changes, never when the disk does.
 
-1. **Sort** the leaves by `key`, bytewise per §1. Duplicate keys are not
-   permitted.
-2. **Leaf digests** — for each leaf, in sorted order:
-   ```
-   leaf = SHA256("leaf:" ‖ key ‖ 0x1F ‖ digest)
-   ```
-   `"leaf:"` is the five ASCII bytes `6c 65 61 66 3a`. `0x1F` is the ASCII unit
-   separator, and it is what stops `("ab", "c")` and `("a", "bc")` hashing alike.
-3. **Levels** — while the current level holds more than one node, build the next
-   by taking nodes in pairs, left to right:
-   ```
-   node = SHA256(0x01 ‖ left ‖ right)
-   ```
-   over the **raw 32-byte digests**, not their hex. A node left over at the end
-   of an odd-length level is **promoted unchanged to the next level** — never
-   paired with itself, which would make two different leaf sets hash alike.
-4. **Root** — `hex()` of the single remaining node. A tree with no leaves has
-   **no root**, which is distinct from a root over zero bytes.
+The section number is kept so §5 and §6 do not shift under references written
+against them.
 
-The `"leaf:"` prefix and the `0x01` node tag are domain separation: they ensure
-a leaf digest can never be mistaken for an interior node digest.
-
-### Worked example
-
-Leaves `("a","1111")`, `("b","2222")`, `("c","3333")`:
-
-```
-leaf a  = 5a2e0e20b862cea08c8fef167c5b3832a50d7aef99258f707320e7efe1adba65
-leaf b  = fdf8df5f146387fe3f4a4b075dac5e3fd456d55fdc8a5bc728a2e58dc86e6efc
-leaf c  = c8560758c930a76f22b7fe1d481d9da72a33eb99de64810eeeb6cff066da6264
-
-node(a,b) = 35562d5b5bfa98191a350d9c30bc6b28dba777aa9afa6a5793f072f7f1c51dc8
-            ── leaf c is promoted unchanged ──
-root      = 5b2ac10a80b62d5006a6efe74844641a7ffa264c8b3bc0042ab60b5d948f76cb
-```
-
-An implementation that reproduces those five values is almost certainly correct.
-One that reproduces only the root may still have the levels wrong.
+**One thing outlived it.** The tree sorted its leaves with Swift's `String <` —
+Unicode collation, not byte order — which two platforms implement differently.
+That hazard was real and its fix, `ByteOrdering`, is still used and still
+specified in §1: `MetadataRecord.fingerprint` sorts JSON object keys with it, and
+the hybrid logical clock breaks stamp ties with it.
 
 ---
 
@@ -201,7 +177,6 @@ executable form of this document and covers, deliberately:
 - streaming in arbitrary chunk sizes matching a single-shot hash
 - bytewise ordering **where it disagrees with the platform's native ordering**
 - composed vs decomposed forms being distinct
-- the Merkle worked example, order-independence, and odd-node promotion
 - quick checksum at the 4 MiB boundary, on an empty file, under truncation, and
   under a single changed byte inside a sampled window
 

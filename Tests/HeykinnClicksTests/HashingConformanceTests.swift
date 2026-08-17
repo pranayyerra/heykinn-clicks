@@ -10,7 +10,7 @@ import XCTest
 /// same numbers. See `docs/SPEC-hashing.md`.
 ///
 /// Changing an expected value in this file is changing the format. Every
-/// checksum, fingerprint and Merkle root already recorded in every user's
+/// checksum and fingerprint already recorded in every user's
 /// catalog was computed under these rules.
 final class HashingConformanceTests: XCTestCase {
 
@@ -122,66 +122,6 @@ final class HashingConformanceTests: XCTestCase {
             ["b", "A", "a", "B", "0", "_"].sortedByBytes(),
             ["0", "A", "B", "_", "a", "b"]
         )
-    }
-
-    // MARK: - Merkle construction
-
-    /// A fixed root for a fixed leaf set. If this changes, every recorded root
-    /// in every catalog just became wrong.
-    ///
-    /// Derived independently of this code, by applying the written rules with
-    /// `shasum`, so it checks the implementation against the specification
-    /// rather than against itself:
-    ///
-    ///     leaf(k,d) = SHA256("leaf:" ‖ k ‖ 0x1F ‖ d)
-    ///     node(l,r) = SHA256(0x01 ‖ l ‖ r)          over raw digests
-    ///     root      = node(node(leaf a, leaf b), leaf c)    — c is promoted
-    func testMerkleRootsAreStable() {
-        let tree = MerkleTree(leaves: [
-            .init(key: "a", digest: "1111"),
-            .init(key: "b", digest: "2222"),
-            .init(key: "c", digest: "3333"),
-        ])
-        XCTAssertEqual(
-            tree.root,
-            "5b2ac10a80b62d5006a6efe74844641a7ffa264c8b3bc0042ab60b5d948f76cb"
-        )
-    }
-
-    /// The order leaves arrive in must not reach the root — only the sort does.
-    func testLeafOrderDoesNotAffectTheRoot() {
-        let forwards = MerkleTree(leaves: [
-            .init(key: "a", digest: "1"), .init(key: "b", digest: "2"), .init(key: "c", digest: "3"),
-        ])
-        let backwards = MerkleTree(leaves: [
-            .init(key: "c", digest: "3"), .init(key: "b", digest: "2"), .init(key: "a", digest: "1"),
-        ])
-        XCTAssertEqual(forwards.root, backwards.root)
-    }
-
-    /// Sorting is bytewise, so a non-ASCII key set builds the tree a client on
-    /// another platform would build. Under Swift's ordering these two sort
-    /// differently, and the roots would not match.
-    func testNonAsciiKeysSortByBytes() {
-        let tree = MerkleTree(leaves: [
-            .init(key: "z", digest: "1"),
-            .init(key: "e\u{0301}", digest: "2"),
-        ])
-        XCTAssertEqual(tree.keys, ["e\u{0301}", "z"])
-    }
-
-    /// An odd node is promoted, never paired with itself — otherwise two
-    /// different leaf sets can produce the same root.
-    func testAnOddNodeIsPromotedRatherThanDoubled() {
-        let three = MerkleTree(leaves: [
-            .init(key: "a", digest: "1"), .init(key: "b", digest: "2"), .init(key: "c", digest: "3"),
-        ])
-        let four = MerkleTree(leaves: [
-            .init(key: "a", digest: "1"), .init(key: "b", digest: "2"),
-            .init(key: "c", digest: "3"), .init(key: "d", digest: "4"),
-        ])
-        XCTAssertNotEqual(three.root, four.root)
-        XCTAssertNotNil(three.root)
     }
 
     // MARK: - Quick checksum

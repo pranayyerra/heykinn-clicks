@@ -650,15 +650,6 @@ and reclamation from Google stays a manual act the app can only guide.
 Things that are true of the code today and would otherwise be discovered by
 somebody reading it and drawing the wrong conclusion.
 
-- **`Domain/MerkleTree.swift` is dead code.** Cross-target tree comparison was
-  removed for the reasons recorded above, and the type was left behind. Nothing
-  in `Sources/` constructs it; its own documentation still describes it as
-  active machinery — "what replaces re-reading every replica on a timer" — which
-  is no longer true and is exactly the costume the removal was meant to take
-  off. Its construction is specified in `SPEC-hashing.md` §4 and has conformance
-  vectors, which currently protect a format nothing writes. Either delete both,
-  or give it a job; leaving it as is means the next reader believes there is a
-  cross-target check.
 - **`projected_version` is deliberately not journalled**, though it lives in a
   shared table. It records that *this* device has read a payload with *this*
   version of the reader — work, not archive. Its conclusions do travel.

@@ -83,7 +83,7 @@ Five hazards were found in the kernel layer. **All five are now addressed.**
 | | Hazard | Why it matters | State |
 |---|---|---|---|
 | **H1** | `HashingService.quickChecksum` was a bespoke algorithm defined only by its Swift implementation | A Windows client windowing the file differently gets a different checksum for an identical copy — good copies reported as damaged, or damaged as good. | **Fixed** — written down as [`SPEC-hashing.md`](SPEC-hashing.md) §3, pinned by `HashingConformanceTests`. |
-| **H2** | `MerkleTree` sorted leaves with Swift's `String <` — Unicode collation, not byte order | Rust, Kotlin and C# order non-ASCII differently. Two platforms build different trees from identical content and permanently disagree about what diverged. | **Fixed** — `ByteOrdering`, bytewise over UTF-8. |
+| **H2** | `MerkleTree` sorted leaves with Swift's `String <` — Unicode collation, not byte order | Rust, Kotlin and C# order non-ASCII differently. Two platforms build different trees from identical content and permanently disagree about what diverged. | **Fixed** — `ByteOrdering`, bytewise over UTF-8. The tree itself has since been deleted as dead code, but the fix outlived it: `MetadataRecord.fingerprint` and the clock's tie-break both use it. |
 | **H3** | Zip reading and extraction shelled out to `/usr/bin/unzip`, `tar` and `ditto` | Absent on Windows and Android. Needs a real zip reader, not a shim. | **Fixed** — `ZipContainer`, `ZipReader`, `ZipExtractor`. Also fixed a live name-mangling defect; see below. |
 | **H4** | `CryptoKit` in `Domain/MerkleTree.swift` and `Domain/MetadataRecord.swift` | The only thing keeping two otherwise-portable domain files Apple-only. | **Fixed** — `Digest256` seam; CryptoKit on Apple, `SHA256Reference` elsewhere. |
 | **H5** | Foundation's default `Date`/`Codable` encoding in a written format | `Date` encodes as seconds-since-2001. A non-Apple reader is 31 years wrong, silently. | **Not a live bug.** Everything through `encodeJSON` is UUIDs and strings, `SQLValue.date` already uses Unix epoch, and `TargetMarker` carries no dates. Stays a *rule for the segment format*, not a fix. |
@@ -142,7 +142,7 @@ replica was good. **The kernel is scoped by blast radius, not by convenience.**
 |---|---|
 | Content hash (SHA-256, hex, lowercase) | False duplicates, or a copy believed good that is not |
 | Quick checksum (H1) | Copies compared across platforms disagree |
-| Merkle leaf/node digests and ordering (H2) | Two devices permanently disagree about what diverged |
+| Bytewise string ordering (H2) | Two devices order the same keys differently and hash them differently |
 | HLC encoding and comparison | Conflicts resolve differently on different devices — divergence that never heals |
 | Segment format and parse rules | A client cannot read another's log, or reads it wrong |
 | Merge/LWW rules and tombstone semantics | The archives never converge |
