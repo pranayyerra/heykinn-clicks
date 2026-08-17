@@ -1,8 +1,11 @@
 # Product decisions — what a person should have to understand
 
 *Four decisions about the interface, in the shape of `ARCHITECTURE-DECISIONS.md`:
-what is true today, what the options are, what each costs, and a recommendation.
-**None of these is taken.** They are written so they can be.*
+what is true today, what the options are, what each costs, and a recommendation.*
+
+**All four recommendations are accepted, and none is built.** Agreed in
+principle, deferred on timing — so these are settled questions waiting for a
+turn, not open ones to be argued again.*
 
 Companion to invariant 15 and requirement R8: *a person who is not technical can
 use this without learning our vocabulary.* That invariant has been satisfied for
@@ -73,7 +76,7 @@ default is just a hidden decision.
 answer changes what a photograph found in the Photos library *means*, and
 guessing would have the app claiming a copy it has not checked. That one stays.
 
-**Status:** open.
+**Status:** decided, not yet built.
 
 ---
 
@@ -100,7 +103,7 @@ with it.
 **What it costs.** The matrix is a good screen and it becomes an advanced one.
 That is the point, and it is still a loss for the person it was designed for.
 
-**Status:** open.
+**Status:** decided, not yet built.
 
 ---
 
@@ -135,7 +138,12 @@ there.
 iCloud, you have it wrong" — loses the way to say so. Worth knowing whether that
 has ever been the reason anybody used it.
 
-**Status:** open. My strongest recommendation of the four.
+**Status:** decided, not yet built. To be taken first.
+
+One thing is still worth
+knowing before the control goes: whether anybody has ever used it to *correct*
+the app — "this really is in iCloud, you have it wrong". If that is why it
+exists, that use needs somewhere else to live.
 
 ---
 
@@ -159,7 +167,7 @@ can already run, and it is the difference between a tool that reports and a tool
 that reassures. It also gives risk somewhere to be *loud* against, which the
 current design cannot do — everything is equally prominent.
 
-**Status:** open.
+**Status:** decided, not yet built.
 
 ---
 
