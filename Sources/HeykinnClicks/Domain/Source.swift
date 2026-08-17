@@ -110,10 +110,7 @@ struct RetargetPlan {
     var isNonDestructive: Bool { departing.allSatisfy { $0.toDelete == 0 } }
 
     var totalToCopy: Int { arriving.reduce(0) { $0 + $1.toCopy } }
-    var totalBytesToCopy: Int64 { arriving.reduce(0) { $0 + $1.bytesToCopy } }
     var totalToDelete: Int { departing.reduce(0) { $0 + $1.toDelete } }
-    var totalBytesFreed: Int64 { departing.reduce(0) { $0 + $1.bytesFreed } }
-    var totalToRelease: Int { departing.reduce(0) { $0 + $1.toRelease } }
 
     var isEmpty: Bool { arriving.isEmpty && departing.isEmpty }
 }

@@ -64,15 +64,6 @@ struct ReplicationTarget: Identifiable, Hashable {
     /// is theirs.
     static let appFolderName = "HeykinnClicks"
     static let defaultReplicaRoot = appFolderName + "/Replicas"
-
-    /// A folder target is expected at a fixed path; a removable one is wherever
-    /// it happens to be mounted.
-    var expectedPath: String? {
-        switch kind {
-        case .hostDevice: return configuredPath
-        case .externalVolume: return nil
-        }
-    }
 }
 
 /// The storage a path actually sits on.

@@ -1014,19 +1014,6 @@ final class AppStore: ObservableObject {
 
     // MARK: - Backfilling provider metadata
 
-    /// How much of the export's metadata is held, and how much is still only
-    /// in the zips.
-    var exportMetadataProgress: (captured: Int, partsWithZipHere: Int, partsTotal: Int) {
-        let captured = (try? catalog.metadataRecordCount()) ?? 0
-        let parts = archivePlan.parts
-        let here = parts.filter { part in
-            part.copies.values.contains {
-                $0.kind == .zip && FileManager.default.fileExists(atPath: $0.path)
-            }
-        }
-        return (captured, here.count, parts.count)
-    }
-
     /// Reads the metadata Google wrote beside the photos, out of the zips.
     ///
     /// Capture only began when it was built, so photos imported before that
@@ -2110,7 +2097,6 @@ final class AppStore: ObservableObject {
         strandedByExportSet[exportSetID] ?? 0
     }
 
-
     /// What each device actually holds of one group, and in what form.
     ///
     /// The archive-wide split cannot answer "where are the rest of them": it
@@ -2229,7 +2215,6 @@ final class AppStore: ObservableObject {
         var id: String { path }
     }
 
-
     private func buildHoldings(
         group: StorageGroup,
         perTarget: [UUID: (Set<UUID>, Int)]
@@ -2289,8 +2274,6 @@ final class AppStore: ObservableObject {
         }
         return byTarget
     }
-
-
 
     /// How many photos sit on how many drives, keyed by the number of drives.
     ///
@@ -3273,9 +3256,6 @@ final class AppStore: ObservableObject {
     }
 
     // MARK: - Where a source's photos are
-
-
-
 
     /// How long a note about a path is worth keeping. Long enough that a drive
     /// swept every few months still benefits; short enough that the table does
@@ -5195,16 +5175,6 @@ final class AppStore: ObservableObject {
         loadAll()
     }
 
-    /// True when every asset of the batch is safe without its source archive:
-    /// Local assets fully replicated to both targets (cloud-resident assets
-    /// don't depend on local copies).
-    /// O(1): the set is derived once per catalog change rather than scanning
-    /// every asset per call — this is read from view bodies, once per row.
-    func isBatchFullyReplicated(_ batchID: UUID?) -> Bool {
-        guard let batchID else { return false }
-        return fullyReplicatedBatchIDs.contains(batchID)
-    }
-
     /// The zero-button path, run whenever a managed drive connects:
     /// 1. Scan it for Takeout exports.
     /// 2. Reconcile content the catalog already knows, where this drive lacks
@@ -5709,11 +5679,6 @@ final class AppStore: ObservableObject {
     var hostDeviceName: String {
         let name = Host.current().localizedName ?? ""
         return name.isEmpty ? "This device" : name
-    }
-
-    /// Whether this device currently holds a counted copy.
-    var hostTarget: ReplicationTarget? {
-        targets.first { $0.kind == .hostDevice }
     }
 
     /// Records that the user does not want this device holding a copy, so the
@@ -7384,21 +7349,6 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// Whether this drive holds export parts whose copies could be compared by
-    /// checksum right now, covering replicas not yet confirmed.
-    func archiveChecksumCheckWouldHelp(_ targetID: UUID) -> Bool {
-        let unconfirmed = Set(
-            replicaStates
-                .filter { $0.targetID == targetID && $0.state == .present && $0.lastVerifiedAt == nil }
-                .compactMap(\.relativePath)
-        )
-        guard !unconfirmed.isEmpty else { return false }
-        return archivePlan.partsMeetingPolicy.contains { part in
-            part.copies.values.allSatisfy { FileManager.default.fileExists(atPath: $0.path) }
-                && unconfirmed.contains { $0.contains(part.displayName) }
-        }
-    }
-
     /// Queues a bounded verification sweep: the stalest replicas first, up to
     /// a file and byte budget. Re-hashing a whole archive in one go can mean
     /// hours of drive reads, so a sweep takes a slice and the next sweep picks
@@ -7571,7 +7521,6 @@ final class AppStore: ObservableObject {
     @Published var importFromApplePhotos: Bool = true {
         didSet { defaults.set(importFromApplePhotos, forKey: "importFromApplePhotos") }
     }
-    private var lastApplePhotosImport: Date?
     @Published private(set) var applePhotosLibraryCount = 0
     @Published private(set) var isCheckingApplePhotos = false
     @Published private(set) var lastApplePhotosCheckSummary: String?
@@ -7814,18 +7763,6 @@ final class AppStore: ObservableObject {
         lastApplePhotosCheckSummary = "\(added.formatted()) added · \(linked.formatted()) linked"
         isIndexingApplePhotos = false
         loadAll()
-    }
-
-    /// What reclamation would release if it existed, computed from evidence the
-    /// app already holds. Nothing acts on this: it removes nothing, and it is
-    /// here so the preconditions are visible rather than only written down.
-    var reclamationPlan: ReclamationPlanner.Plan {
-        ReclamationPlanner.plan(
-            assets: assets,
-            replicasByAssetID: replicasByAssetID,
-            registeredTargetIDs: Set(targets.map(\.id)),
-            desiredCopies: { [self] in desiredCopies(forAsset: $0) }
-        )
     }
 
     /// Assets indexed from the Photos library whose bytes the app does not yet
