@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// A Merkle tree over the catalog's recorded content hashes, one per target.
 ///
@@ -16,9 +15,16 @@ import CryptoKit
 /// `git fsck` still reads every object. A matching root is never proof the
 /// bytes are good.
 ///
-/// Built rather than taken from a package: this is a hundred lines against
-/// CryptoKit, and a dependency here would add supply-chain and version risk to
+/// Built rather than taken from a package: this is a hundred lines against a
+/// SHA-256, and a dependency here would add supply-chain and version risk to
 /// replace code smaller than the tests covering it.
+///
+/// **Every detail of the construction is specification, not implementation.**
+/// The leaf and node forms, the domain-separating prefixes, the promotion of an
+/// odd node, and the leaf ordering all decide the root — so a client on another
+/// platform that gets any one of them wrong reports a healthy archive as
+/// diverged, permanently and with no bad bytes anywhere. They are written down
+/// in `docs/SPEC-hashing.md` and pinned by `HashingConformanceTests`.
 struct MerkleTree: Equatable {
 
     /// One asset's contribution: its identity, and the hash the catalog holds
@@ -34,7 +40,9 @@ struct MerkleTree: Equatable {
     }
 
     /// Sorted by key, so two targets holding the same content always build the
-    /// same tree regardless of the order rows came out of the database.
+    /// same tree regardless of the order rows came out of the database — and,
+    /// since the order decides the shape, regardless of which platform built it.
+    /// See `ByteOrdering` for why that is bytewise rather than Swift's `<`.
     private(set) var keys: [String]
     /// `levels[0]` is the leaf hashes; each level above is the pairwise hash of
     /// the one below, up to a single root.
@@ -46,13 +54,13 @@ struct MerkleTree: Equatable {
 
     /// Hex only at the boundary, where a human or a log might see it.
     var root: String? {
-        levels.last?.first.map { $0.map { String(format: "%02x", $0) }.joined() }
+        levels.last?.first.map { Digest256.hex($0) }
     }
     var isEmpty: Bool { keys.isEmpty }
     var leafCount: Int { keys.count }
 
     init(leaves: [Leaf]) {
-        let sorted = leaves.sorted { $0.key < $1.key }
+        let sorted = leaves.sorted { ByteOrdering.precedes($0.key, $1.key) }
         keys = sorted.map(\.key)
 
         guard !sorted.isEmpty else {
@@ -97,7 +105,7 @@ struct MerkleTree: Equatable {
         if agrees(with: other) { return [] }
 
         if keys == other.keys {
-            return divergentLeafIndices(from: other).map { keys[$0] }.sorted()
+            return divergentLeafIndices(from: other).map { keys[$0] }.sortedByBytes()
         }
 
         let mine = Set(keys)
@@ -110,7 +118,7 @@ struct MerkleTree: Equatable {
                 result.append(key)
             }
         }
-        return result.sorted()
+        return result.sortedByBytes()
     }
 
     /// Descends both trees together, following only the subtrees whose hashes
@@ -148,7 +156,7 @@ struct MerkleTree: Equatable {
         input.append(contentsOf: key.utf8)
         input.append(0x1f)
         input.append(contentsOf: digest.utf8)
-        return Data(SHA256.hash(data: input))
+        return Digest256.hash(input)
     }
 
     private static func nodeDigest(_ left: Data, _ right: Data) -> Data {
@@ -156,6 +164,6 @@ struct MerkleTree: Equatable {
         input.append(contentsOf: [0x01])
         input.append(left)
         input.append(right)
-        return Data(SHA256.hash(data: input))
+        return Digest256.hash(input)
     }
 }

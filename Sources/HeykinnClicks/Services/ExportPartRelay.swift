@@ -1,7 +1,6 @@
 import Foundation
-import CryptoKit
 
-/// The Mac's holding area for export parts in transit between targets.
+/// The device's holding area for export parts in transit between targets.
 ///
 /// Two managed targets are often not plugged in at the same time — one port,
 /// one drive at the desk, one kept elsewhere. Without somewhere to put a part
@@ -165,14 +164,14 @@ struct ExportPartRelay {
         FileManager.default.createFile(atPath: temporary.path, contents: nil)
         let writer = try FileHandle(forWritingTo: temporary)
 
-        var hasher = SHA256()
+        var hasher = Digest256.Streaming()
         var written: Int64 = 0
         do {
             while true {
                 if isCancelled() { throw TransferError.cancelled }
                 guard let chunk = try reader.read(upToCount: 8 * 1024 * 1024), !chunk.isEmpty else { break }
                 try writer.write(contentsOf: chunk)
-                hasher.update(data: chunk)
+                hasher.update(chunk)
                 written += Int64(chunk.count)
                 progress(written)
             }

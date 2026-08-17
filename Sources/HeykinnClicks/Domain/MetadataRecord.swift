@@ -1,5 +1,4 @@
 import Foundation
-import CryptoKit
 
 /// One piece of provider metadata, kept exactly as it arrived.
 ///
@@ -83,9 +82,13 @@ struct MetadataRecord: Identifiable, Hashable {
             // surfaced rather than silently grouped with everything else.
             return "unparsed"
         }
-        let keys = dictionary.keys.sorted().joined(separator: ",")
-        let digest = SHA256.hash(data: Data(keys.utf8))
-        return digest.compactMap { String(format: "%02x", $0) }.joined().prefix(16).description
+        // Bytewise, not Swift's `<`: this fingerprint is stored and compared,
+        // and provider keys are not guaranteed to be ASCII. Two platforms
+        // ordering the same key set differently would fingerprint one schema as
+        // two. See `ByteOrdering`.
+        let keys = dictionary.keys.sortedByBytes().joined(separator: ",")
+        let digest = Digest256.hash(Data(keys.utf8))
+        return Digest256.hex(digest).prefix(16).description
     }
 }
 
