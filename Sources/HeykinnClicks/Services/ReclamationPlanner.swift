@@ -44,6 +44,40 @@ enum ReclamationPlanner {
         var withVerifiedCloudCopy = 0
 
         var isEmpty: Bool { withVerifiedCloudCopy == 0 }
+
+        /// The plan as one sentence somebody can act on, or nil when there is
+        /// nothing to say.
+        ///
+        /// **States evidence, never intent.** The app cannot release anything
+        /// yet, so this must not read as a promise that it will, nor as advice
+        /// to go and delete things — only as what is now true: these
+        /// photographs are held, in enough places, and every copy has been read
+        /// back and matched. What somebody does with that is theirs.
+        ///
+        /// Says iCloud rather than "the cloud" because that is what was
+        /// checked: `plan` looks at Apple's cloud alone, and a sentence that
+        /// implied Google too would be claiming a verification nobody ran.
+        var plainSummary: String? {
+            guard withVerifiedCloudCopy > 0 else { return nil }
+
+            let waiting = [
+                blocked[.notEnoughCopies].map { "\($0.formatted()) are waiting for another copy" },
+                blocked[.notReadBack].map { "\($0.formatted()) for a copy to be read back" },
+            ].compactMap { $0 }.joined(separator: ", ")
+
+            guard !releasableAssetIDs.isEmpty else {
+                return waiting.isEmpty
+                    ? nil
+                    : "None of your \(withVerifiedCloudCopy.formatted()) photos in iCloud can do "
+                        + "without it yet — \(waiting)."
+            }
+
+            let size = ByteCountFormatter.string(fromByteCount: releasableBytes, countStyle: .file)
+            let headline = "\(releasableAssetIDs.count.formatted()) photos — \(size) — no longer "
+                + "need their iCloud copy: you hold enough of your own, and every one has been "
+                + "read back and checked."
+            return waiting.isEmpty ? headline : headline + " Another \(waiting)."
+        }
     }
 
     /// Preconditions are per asset, never per device pair.

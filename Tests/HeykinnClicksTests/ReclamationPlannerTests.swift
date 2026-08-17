@@ -151,4 +151,53 @@ final class ReclamationPlannerTests: XCTestCase {
 
         XCTAssertEqual(result.blocked[.notEnoughCopies], 1)
     }
+
+    // MARK: - Saying it in a sentence
+
+    /// The line is shown to somebody who is not technical, so it may not use a
+    /// word the app invented, and it may not promise an action the app cannot
+    /// take. See invariant 15 and R8.
+    func testTheSummaryReadsAsEvidenceRatherThanAdvice() {
+        var plan = ReclamationPlanner.Plan()
+        plan.withVerifiedCloudCopy = 5_040
+        plan.releasableAssetIDs = Set((0..<1_240).map { _ in UUID() })
+        plan.releasableBytes = 14_000_000_000
+        plan.blocked = [.notEnoughCopies: 3_000, .notReadBack: 800]
+
+        let summary = plan.plainSummary ?? ""
+
+        XCTAssertTrue(summary.contains("1,240 photos"), summary)
+        XCTAssertTrue(summary.contains("iCloud"), "must name what was actually checked: \(summary)")
+        XCTAssertTrue(summary.contains("3,000"), summary)
+        XCTAssertTrue(summary.contains("800"), summary)
+
+        for invented in ["reclamation", "releasable", "blocked", "asset", "replica", "precondition"] {
+            XCTAssertFalse(
+                summary.lowercased().contains(invented),
+                "\"\(invented)\" is our word, not the reader's: \(summary)"
+            )
+        }
+        // Evidence, not instruction.
+        for promise in ["delete", "will be removed", "free up", "you should"] {
+            XCTAssertFalse(summary.lowercased().contains(promise), "reads as advice: \(summary)")
+        }
+    }
+
+    /// Nothing in the cloud is a different statement from nothing qualifying,
+    /// and neither is worth a line on the screen.
+    func testThereIsNothingToSayWhenNothingIsInICloud() {
+        XCTAssertNil(ReclamationPlanner.Plan().plainSummary)
+    }
+
+    /// Some verified in iCloud, none of them clear yet — worth saying, because
+    /// it tells somebody what is holding it up.
+    func testItSaysWhatIsHoldingThingsUpWhenNothingQualifies() throws {
+        var plan = ReclamationPlanner.Plan()
+        plan.withVerifiedCloudCopy = 200
+        plan.blocked = [.notEnoughCopies: 200]
+
+        let summary = try XCTUnwrap(plan.plainSummary)
+        XCTAssertTrue(summary.contains("200"), summary)
+        XCTAssertTrue(summary.contains("waiting for another copy"), summary)
+    }
 }

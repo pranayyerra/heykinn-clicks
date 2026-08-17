@@ -342,6 +342,16 @@ struct OverviewView: View {
                     .foregroundStyle(everythingRead ? Color.green : Color.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 }
+                // The one line in the app that answers "how close am I to not
+                // paying for this any more". Shown beside the safety answer
+                // rather than on a screen of its own, because it is the same
+                // question: what do you actually own outright.
+                if let ownedOutright = store.reclamationPlan.plainSummary {
+                    Label(ownedOutright, systemImage: "icloud.slash")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if store.archiveBackedOnlyCount > 0 {
                     Label(
                         "\(store.archiveBackedOnlyCount.formatted()) of them are inside your Google Takeout files rather than copied out of them.",

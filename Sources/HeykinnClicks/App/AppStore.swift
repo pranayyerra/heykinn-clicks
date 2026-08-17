@@ -7765,6 +7765,23 @@ final class AppStore: ObservableObject {
         loadAll()
     }
 
+    /// How much of the archive no longer needs its iCloud copy, on the evidence
+    /// the app already holds.
+    ///
+    /// Removes nothing, and is not a step towards removing anything today —
+    /// releasing a cloud copy needs a check against the provider at the moment
+    /// of release, which nothing here has run. What this answers is the
+    /// question underneath the whole app: how close is this archive to owning
+    /// itself outright.
+    var reclamationPlan: ReclamationPlanner.Plan {
+        ReclamationPlanner.plan(
+            assets: assets,
+            replicasByAssetID: replicasByAssetID,
+            registeredTargetIDs: Set(targets.map(\.id)),
+            desiredCopies: { [self] in desiredCopies(forAsset: $0) }
+        )
+    }
+
     /// Assets indexed from the Photos library whose bytes the app does not yet
     /// hold. These are visible to the app and protected by nothing.
     var applePhotosAwaitingImport: [Asset] {
