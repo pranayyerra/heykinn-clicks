@@ -375,6 +375,9 @@ struct ContentView: View {
         .sheet(item: $store.unmanagedSourceOffer) { offer in
             UnmanagedSourcePrompt(offer: offer)
         }
+        .sheet(item: $store.markerConflict) { conflict in
+            DriveMarkerConflictPrompt(conflict: conflict)
+        }
         .sheet(isPresented: $commands.isHelpPresented) {
             HelpView()
         }

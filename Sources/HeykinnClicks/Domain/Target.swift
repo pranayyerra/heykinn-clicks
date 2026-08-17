@@ -120,6 +120,35 @@ struct TargetMarker: Codable, Hashable {
     var appName: String
 }
 
+/// A drive that already carries a marker naming an archive this one does not
+/// know, offered to the user rather than overwritten.
+///
+/// **Invariant 13.** Registration writes a marker at the drive's root, and used
+/// to overwrite whatever was there. Two archives on one device is not exotic —
+/// the app itself offers a test archive beside the real one — and the second to
+/// register a drive took it: the first archive's marker was replaced and it
+/// could no longer identify, by its primary mechanism, what was as far as it
+/// knew still its drive. Found by doing it, setting up a throwaway archive for
+/// screenshots with a real drive mounted.
+///
+/// It matters more now than when it was written down. The drive also carries
+/// that archive's sync directory, so taking the marker leaves the other archive
+/// unable to attribute its own replicas — which is the failure R0 exists to
+/// prevent, arrived at by a route nobody would look down.
+///
+/// Carries everything registration needs, so answering "use it anyway" resumes
+/// exactly where it stopped rather than asking the user to start again.
+struct DriveMarkerConflict: Identifiable {
+    let id = UUID()
+    /// The marker already on the drive.
+    var existing: TargetMarker
+    var name: String
+    var kind: TargetKind
+    var rootURL: URL
+    var volumeUUID: String?
+    var configuredPath: String?
+}
+
 /// A folder chosen for import that sits on a drive the app could manage but
 /// does not.
 ///

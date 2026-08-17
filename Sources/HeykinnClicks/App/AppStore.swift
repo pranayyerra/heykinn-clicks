@@ -48,8 +48,6 @@ final class AppStore: ObservableObject {
     /// at some point, which is what tells a first refusal apart from a
     /// permission that used to work.
     @Published private(set) var applePhotosIndexedCount: Int = 0
-    /// A Merkle tree per target over what the catalog records it holding, so
-    /// "do these two targets agree?" costs one comparison instead of a sweep.
     /// The few directories a target's recorded paths hang from.
     private var targetAnchors: [UUID: Set<String>] = [:]
     /// When each target's anchors were last confirmed present.
@@ -155,6 +153,9 @@ final class AppStore: ObservableObject {
     /// A folder somebody chose that sits on a drive the app does not manage,
     /// held back long enough to offer the version of this that costs nothing.
     @Published var unmanagedSourceOffer: UnmanagedSourceOffer?
+    /// A drive that already names another archive, waiting on the user. See
+    /// `DriveMarkerConflict` and invariant 13.
+    @Published var markerConflict: DriveMarkerConflict?
 
     private var syncCancelRequested = false
     /// Drives waiting their turn while another drive syncs (syncs are serial).
@@ -5861,14 +5862,57 @@ final class AppStore: ObservableObject {
         }
     }
 
+    /// Registers the drive anyway, after the user has been shown whose marker is
+    /// on it and said to go ahead.
+    ///
+    /// The old marker is replaced rather than merged — a drive belongs to one
+    /// archive at a time, and two markers would mean neither could be trusted.
+    /// What this buys over the old behaviour is not a different outcome but a
+    /// decision: somebody chose it, and it is in the audit log.
+    @discardableResult
+    func takeOverDrive(_ conflict: DriveMarkerConflict) -> Bool {
+        markerConflict = nil
+        audit(
+            .drive,
+            "\(conflict.name) already carried another archive's marker (target "
+            + "\(conflict.existing.targetID.uuidString)); registered it here on your say-so. "
+            + "That archive can no longer recognise this drive by its marker."
+        )
+        return register(
+            name: conflict.name,
+            kind: conflict.kind,
+            rootURL: conflict.rootURL,
+            volumeUUID: conflict.volumeUUID,
+            configuredPath: conflict.configuredPath,
+            takingOverMarker: true
+        )
+    }
+
     @discardableResult
     private func register(
         name: String,
         kind: TargetKind,
         rootURL: URL,
         volumeUUID: String?,
-        configuredPath: String?
+        configuredPath: String?,
+        takingOverMarker: Bool = false
     ) -> Bool {
+        // Invariant 13: a marker naming another archive is never overwritten
+        // silently. A marker this catalog *does* know is a drive being
+        // re-registered, which is ordinary; one it does not know belongs to some
+        // other archive, and taking it leaves that archive unable to recognise
+        // its own drive. Asked rather than refused outright, because a forgotten
+        // target of this archive's own leaves a marker behind too and the user
+        // is the only one who can tell the two apart.
+        if !takingOverMarker, let existing = TargetMonitor.readMarker(at: rootURL),
+           !targets.contains(where: { $0.id == existing.targetID }) {
+            markerConflict = DriveMarkerConflict(
+                existing: existing, name: name, kind: kind, rootURL: rootURL,
+                volumeUUID: volumeUUID, configuredPath: configuredPath
+            )
+            return false
+        }
+
         let targetID = UUID()
         let token = UUID().uuidString
         let marker = TargetMarker(targetID: targetID, markerToken: token, appName: "heykinn-clicks")
