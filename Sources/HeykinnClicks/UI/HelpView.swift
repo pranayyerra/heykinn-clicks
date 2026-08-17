@@ -45,13 +45,13 @@ struct HelpView: View {
             symbol: "map",
             title: "Every photo lives in exactly one place",
             body: """
-            A photo's residency is Local, Apple's cloud, or Google's — one of them, never \
-            two. Being in two at once is the state you are paying twice for, so the app \
-            treats it as something to review rather than as normal.
+            A photo is kept in one place — your own drives, Apple's cloud, or Google's — \
+            never two at once. Being in two is the state you are paying twice for, so the \
+            app treats it as something to look at rather than as normal.
 
-            Residency is where a photo lives. Presence is where copies of it happen to be. \
-            They are different, and during a move they legitimately disagree; outside one, \
-            a disagreement is a finding.
+            Where a photo is *kept* and where copies of it *are* can differ: during a move \
+            they legitimately disagree. Outside a move, a disagreement is worth knowing \
+            about.
             """
         ),
         Topic(

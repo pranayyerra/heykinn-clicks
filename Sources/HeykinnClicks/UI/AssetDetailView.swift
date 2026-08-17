@@ -21,7 +21,7 @@ struct AssetDetailView: View {
                                 ResidencyBadge(domain: asset.residency)
                                 ProtectionBadge(state: store.protectionStates[asset.id] ?? .notApplicable, copies: store.desiredCopies(forAsset: asset.id))
                             }
-                            Text("Residency set by \(asset.residencySource.displayName.lowercased())")
+                            Text("Where it is kept was decided by \(asset.residencySource.displayName.lowercased())")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                             presenceChips(asset)
@@ -87,7 +87,7 @@ struct AssetDetailView: View {
                     GroupBox("Where this is kept") {
                         VStack(alignment: .leading, spacing: 6) {
                             LabeledRow(label: "Kept on", value: asset.residency.displayName)
-                            Text("To keep this somewhere else, move it — that copies the photo across and checks it landed. Changing this on its own would only change the label.")
+                            Text("To keep this somewhere else, move it — that copies the photo across and checks it landed.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
