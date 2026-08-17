@@ -3,7 +3,6 @@ import SwiftUI
 struct AssetDetailView: View {
     let assetID: UUID
     @EnvironmentObject private var store: AppStore
-    @State private var pendingResidency: ResidencyDomain?
 
     private var asset: Asset? { store.assetsByID[assetID] }
 
@@ -78,21 +77,20 @@ struct AssetDetailView: View {
                         .padding(6)
                     }
 
-                    GroupBox("Where this should be kept") {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Text("This changes where the photo is meant to be kept. It does not move anything. Until something does, Keep safe will show it as being in the wrong place — so if you want it actually moved, start a move instead.")
+                    // Where this is kept is something the app reports, not
+                    // something to set here. There used to be a picker, and all
+                    // it did was write a different label: nothing moved, and
+                    // the app then reported the photo as being in the wrong
+                    // place until something else moved it. A switch whose only
+                    // effect is to start a complaint is a trap however it is
+                    // worded — see docs/PRODUCT-DECISIONS.md P3.
+                    GroupBox("Where this is kept") {
+                        VStack(alignment: .leading, spacing: 6) {
+                            LabeledRow(label: "Kept on", value: asset.residency.displayName)
+                            Text("To keep this somewhere else, move it — that copies the photo across and checks it landed. Changing this on its own would only change the label.")
                                 .font(.caption)
                                 .foregroundStyle(.secondary)
-                            Picker("Kept on", selection: Binding(
-                                get: { asset.residency },
-                                set: { pendingResidency = $0 }
-                            )) {
-                                ForEach(ResidencyDomain.allCases) { domain in
-                                    Text(domain.displayName).tag(domain)
-                                }
-                            }
-                            .pickerStyle(.segmented)
-                            .frame(maxWidth: 420)
+                                .fixedSize(horizontal: false, vertical: true)
                         }
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(6)
@@ -212,23 +210,6 @@ struct AssetDetailView: View {
                 .padding()
             }
             .navigationTitle(asset.originalFilename)
-            .confirmationDialog(
-                "Reassign residency?",
-                isPresented: Binding(
-                    get: { pendingResidency != nil },
-                    set: { if !$0 { pendingResidency = nil } }
-                )
-            ) {
-                if let target = pendingResidency {
-                    Button("Reassign to \(target.displayName)") {
-                        store.setManualResidency(assetID: asset.id, to: target)
-                        pendingResidency = nil
-                    }
-                }
-                Button("Cancel", role: .cancel) { pendingResidency = nil }
-            } message: {
-                Text("This only changes where the photo is meant to be kept. Nothing is moved, and Keep safe will show it as being in the wrong place until something moves it.")
-            }
         } else {
             ContentUnavailableView("Photo not found", systemImage: "questionmark.square")
         }

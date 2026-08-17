@@ -3,9 +3,8 @@
 *Four decisions about the interface, in the shape of `ARCHITECTURE-DECISIONS.md`:
 what is true today, what the options are, what each costs, and a recommendation.*
 
-**All four recommendations are accepted, and none is built.** Agreed in
-principle, deferred on timing — so these are settled questions waiting for a
-turn, not open ones to be argued again.*
+**All four recommendations are accepted. P3 is built; P1, P2 and P4 are not.**
+Settled questions waiting for a turn, not open ones to be argued again.
 
 Companion to invariant 15 and requirement R8: *a person who is not technical can
 use this without learning our vocabulary.* That invariant has been satisfied for
@@ -138,12 +137,24 @@ there.
 iCloud, you have it wrong" — loses the way to say so. Worth knowing whether that
 has ever been the reason anybody used it.
 
-**Status:** decided, not yet built. To be taken first.
+**Status:** decided and built.
 
-One thing is still worth
-knowing before the control goes: whether anybody has ever used it to *correct*
-the app — "this really is in iCloud, you have it wrong". If that is why it
-exists, that use needs somewhere else to live.
+**The open question answered itself in the code.** It was whether anybody used
+the control to *correct* the app — "this really is in iCloud, you have it wrong".
+They cannot have been, because that is a claim this app already refuses: earlier
+versions let somebody state cloud presence and recorded the answer, and it was
+withdrawn deliberately, because a claim with no evidence under it is not data
+worth keeping (`CloudClaimWithdrawal`). The control was a leftover of the same
+idea wearing a different hat, which makes the case stronger than the one argued
+above rather than weaker.
+
+**What went:** the picker in the photo detail pane, and `setManualResidency`,
+whose only caller it was. **What stayed:** every path that changes residency
+because something actually happened — a migration that moves the bytes, the
+import default, placement, and the withdrawal above, which still runs on its own
+and still rewrites residency to follow the content that exists.
+
+`ResidencyIsObservedTests` covers those, and fails if a hand-set path returns.
 
 ---
 

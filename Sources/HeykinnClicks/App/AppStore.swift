@@ -7525,24 +7525,22 @@ final class AppStore: ObservableObject {
 
     // MARK: - Residency
 
-    func setManualResidency(assetID: UUID, to domain: ResidencyDomain) {
-        guard var asset = assetsByID[assetID] else { return }
-        let previous = asset.residency
-        guard previous != domain else { return }
-        // Direct manual reassignment only flips the logical domain; physical
-        // presence is unchanged, so the violation scanner will surface the
-        // resulting mismatch until a migration actually moves the bytes.
-        asset.residency = domain
-        asset.residencySource = .manual
-        asset.updatedDate = Date()
-        do {
-            try catalog.upsertAsset(asset)
-            audit(.policy, "Manual residency override for \(asset.originalFilename): \(previous.displayName) → \(domain.displayName).", assetID: assetID)
-            loadAll()
-        } catch {
-            lastError = "Residency update failed: \(error.localizedDescription)"
-        }
-    }
+    // `setManualResidency` was here, and the photo detail pane was its only
+    // caller. It flipped the recorded domain and moved nothing, so the
+    // violation scanner then reported the photograph as being in the wrong
+    // place until a migration caught up — a control whose whole effect was to
+    // start a complaint.
+    //
+    // It was also a way to assert something this app refuses to accept as
+    // asserted. Earlier versions let somebody state that content was in a
+    // cloud domain and recorded the answer as presence; that was withdrawn
+    // deliberately, because a claim with no evidence under it is not data worth
+    // keeping (`CloudClaimWithdrawal`). This was the same idea with a different
+    // control on it.
+    //
+    // Where content should live is changed by moving it — `createMigration`,
+    // which copies the bytes and checks they landed. See
+    // `docs/PRODUCT-DECISIONS.md` P3.
 
     // MARK: - Policies
 
