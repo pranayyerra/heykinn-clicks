@@ -1,10 +1,37 @@
 # heykinn-clicks: vision and path
 
-*Revision 3. Revisions 1–2 — the full build-time spec — are in git history.
+*Revision 4. Revisions 1–2 — the full build-time spec — are in git history.
 This document records the **vision**, the **invariants that must never
 regress**, and the **path from the current state**. For behavior that has
 already shipped, the code is the source of truth: this document points at it
 and does not restate it.*
+
+*Revision 4 adds the device dimension: the archive was one device's, and is
+becoming one archive that several devices hold a view of. The design work is in
+`MULTI_DEVICE_STATE.md`; the formats it depends on are normative in
+`SPEC-hashing.md` and `SPEC-format.md`.*
+
+---
+
+## In one page
+
+**Today.** One device holds the catalog. It knows every photo the user owns, where
+each copy lives across their drives, whether those copies have been read back
+and matched, and what is owed. It ingests Google Takeout and Apple Photos,
+places copies according to per-group policy, verifies them, finds damage, and
+never claims more than it checked. A second device would be a second, separate
+archive.
+
+**Where it is going.** *One* archive that any number of devices hold a view of,
+kept in step by the drives the user already carries between them — no account,
+no server, no cloud required, and no ecosystem that can withdraw it. Eventually
+readable from iOS, Windows and Android, because the archive should outlive the
+app, the device, and the company.
+
+**What has changed since revision 3.** The machinery for that exists and is
+tested: every fact the catalog holds is stamped with when and by which device,
+two devices merge without either losing work, and the changes travel on the
+drives. What is not done is stated in *The path*.
 
 ---
 
@@ -27,9 +54,41 @@ One person's lifetime photo and video archive, owned outright.
   deletion/reclamation and a Google account connector are not shipped.
 - The archive outlives the app: plain files in an understandable layout, a
   portable SQLite catalog mapping them.
+- **The archive is one thing, however many devices see it.** A person with
+  several devices owns one archive, not one per device that happen to share
+  drives. What each device knows travels on the drives already being carried
+  between them.
 
 Not a gallery and not a sync clone: storage governance, metadata authority,
 archive coordination.
+
+### One archive, several devices
+
+The unit is the *archive*, and a device is a viewer of it. That was implicit
+while there was only ever one device; making it explicit is what revision 4 is
+about.
+
+- **The drives are the transport.** Metadata travels the way the photographs
+  already do — on the disk somebody plugs in. Nothing here requires an account,
+  a server, a network, or a company to still exist.
+- **A cloud may only ever be a courier.** If one is ever used it carries the
+  same opaque files a drive carries, and the test is structural: *delete it
+  entirely, and nothing is lost, because every device still converges through
+  the drives.* A courier that fails that test has become a store of record, and
+  a store of record somebody else operates is the thing this app exists to
+  avoid.
+- **No device is authoritative.** Two devices that have seen the same changes
+  hold the same answers, including agreeing on which of two conflicting edits
+  won. There is no primary device and no server to arbitrate.
+- **What is true of the archive travels; what is true of a device does not.**
+  `/Volumes/My Passport` is a fact about one device, means nothing on another, and
+  on Android would not even be a path.
+- **Other platforms read the same archive.** iOS, Windows and Android are
+  intended readers, so anything recorded and later compared is defined by
+  specification rather than by whatever Swift happened to do.
+
+The limit is honest and inherent: **two devices that never share a drive never
+converge.** There is no network path, by choice.
 
 ### The residency model
 
@@ -59,11 +118,26 @@ Shipped and tested; the pointers are where to look.
 - **Catalog authority and durability** — atomic chunk commits, resumable
   imports, startup reconciliation, verified per-target snapshots:
   `Persistence/`, `Services/CatalogBackupService.swift`,
-  `AppStore.reconcileAfterRestart`. The schema is one declaration in
-  `CatalogStore.createSchema` — there are no incremental migrations to replay,
-  because the one catalog that needed them has had them. The store takes an
-  `AppEnvironment`, so a test builds a whole one over a temporary archive
-  rather than the user's: `App/AppEnvironment.swift`.
+  `AppStore.reconcileAfterRestart`. The store takes an `AppEnvironment`, so a
+  test builds a whole one over a temporary archive rather than the user's:
+  `App/AppEnvironment.swift`.
+
+  **The schema does have migrations, and revision 3 was wrong to say
+  otherwise.** It claimed one declaration in `createSchema` with nothing to
+  replay; in fact `createSourceSchema`, `createMetadataSchema` and
+  `createDriveLocalStateSchema` add columns and tables conditionally, one of
+  them moves rows, and additive migration is now the normal way the schema
+  grows. The correction matters because the old sentence invited the belief that
+  an old build and a new one see the same catalog.
+
+  **They do not, and the catalog now says so.** `PRAGMA user_version` is stamped
+  on open, and a catalog written by a *newer* build is refused rather than
+  opened. It would not have failed — SQLite reads a newer file happily and every
+  query names its columns — it would have written whole rows back without the
+  columns it had never heard of, leaving a perfectly readable catalog quietly
+  missing what the newer build recorded. The same check runs before a snapshot
+  is restored, so a refused restore changes nothing on disk:
+  `CatalogStore.schemaVersion`, `Tests/CatalogSchemaVersionTests.swift`.
 - **Targets** — host-device or external-volume, marker-file identity (never
   path), uncapped in number, forgettable without deleting anything, one
   device = one copy: `Domain/Target.swift`. **The host device is registered by
@@ -81,7 +155,7 @@ Shipped and tested; the pointers are where to look.
   `Services/AccessGrants.swift`, `UI/SettingsView.swift`.
 - **Selected source access** — a Takeout search and its later import are
   separate actions, so a path in the catalog is not enough under the App Store
-  sandbox. User-selected Takeout roots get per-machine app-scoped bookmarks,
+  sandbox. User-selected Takeout roots get per-device app-scoped bookmarks,
   resumed at launch and kept outside catalog snapshots:
   `Services/SourceBookmarks.swift`.
 
@@ -106,7 +180,7 @@ Shipped and tested; the pointers are where to look.
   layout rather than imposing one. A restored file goes back to the path it
   was recorded at; a delivered export part goes in beside the rest of its set
   wherever that drive keeps it. Everything the app writes that has no place of
-  its own — replicas of content imported from the Mac, catalog snapshots, a
+  its own — replicas of content imported from the device, catalog snapshots, a
   part with no set on that drive yet — lives under one `HeykinnClicks/` folder:
   `Domain/ArchiveReplication.swift` (`ExportSetLayout`),
   `AppStore.rehomeDeliveredParts`.
@@ -216,8 +290,62 @@ Shipped and tested; the pointers are where to look.
   is asked most often about content that is not currently reachable:
   `UI/RevealInFinder.swift`.
 
+- **One archive across devices — the machinery, not yet the habit.** Every fact
+  the catalog holds now records *when* it was written and *by which
+  installation*, so two devices can merge without either losing work.
+
+  - **Per field, not per row.** Verifying a photo on one device and re-grouping it
+    on another are not in conflict, and a row-scoped stamp cannot say so — one
+    of the two edits would be lost for no reason. Creating a row is recorded as
+    a single whole-row stamp that expands again on the way out, which is a
+    storage compression rather than a coarsening: it was measured at 16× and
+    620,000 rows per import the other way.
+  - **A hybrid logical clock, not a wall clock.** Two devices disagree by seconds
+    routinely and by hours when a timezone is wrong, and with no server there is
+    nothing to arbitrate — a fast device would win every conflict for ever. A
+    stamp claiming a wall time more than a day ahead is refused *and reported*,
+    which is what stops one broken clock capturing the archive permanently.
+  - **Deletions are tombstones.** A row deleted here and absent there is
+    indistinguishable from one never seen, so without them a merge hands it
+    straight back.
+  - **Device-local state is separated, in code.** `CatalogScope` classifies
+    every table, with a test that fails when a new one is not classified;
+    `drive_local_state` holds the mount paths that used to be mixed into
+    `drives`.
+  - **It travels on the drives.** Append-only JSON Lines under
+    `HeykinnClicks/Sync/`, one directory per device, every line checksummed. A
+    device writes only its own directory and only appends, which is what removes
+    the need for any locking on the drive — file locking differs across macOS,
+    Windows and Android and is close to meaningless over exFAT or SMB. Runs on
+    connect, in slices so the window keeps drawing, and reports what travelled
+    on the drive's card.
+  - **State is the base; the log is the delta.** Once a device's log outgrows
+    it, that device writes a checkpoint — the whole archive's state, one line
+    per row — and deletes the segments it covers. A per-field record spends more
+    on its stamp than on its value, so state is *smaller* than the history that
+    produced it: 10.2 MB of log against 2.1 MB of state for 2,000 photographs.
+    A new device reads one checkpoint instead of replaying years, and a drive
+    synced for years stops growing. Nothing consults another device before
+    deleting: a device behind the checkpoint reads it, a device past it needs
+    nothing below, so retiring a lost device was never needed at all.
+
+  `Persistence/ChangeJournal.swift`, `Domain/Portability/`, `Services/Sync/`,
+  `docs/SPEC-format.md`.
+
+- **Written down rather than merely implemented.** Every value that is recorded
+  and later compared — content hash, quick checksum, schema fingerprint, the
+  clock's encoding, the change record, the on-drive layout — is defined in
+  `SPEC-hashing.md` and `SPEC-format.md` and pinned by conformance vectors with
+  fixed expected values. This is what makes a second implementation possible
+  rather than hopeful, and it is not theoretical: writing it down found three
+  places sorting text with Swift's `String` ordering, which no other language
+  shares, in values that were being stored and compared.
+
 Stack: SwiftUI · Swift concurrency · raw `sqlite3` (WAL, `VACUUM INTO`) ·
-Apple frameworks only — zero third-party dependencies.
+Apple frameworks only — zero third-party dependencies. `Domain/` imports only
+Foundation, with SHA-256 behind a seam that uses CryptoKit where it exists and a
+plain-Swift implementation where it does not, so the domain layer can be lifted
+to a platform that has never heard of Apple.
 
 ---
 
@@ -301,26 +429,26 @@ Apple frameworks only — zero third-party dependencies.
    from the user in the same move.
 5. Never stage or copy what a target already holds; never delete
    archive-backed content; moved content is repointed, never re-copied. **The
-   host device is not exempt in principle** — a folder on this Mac's own disk
+   host device is not exempt in principle** — a folder on this device's own disk
    is content the host target already holds, and copying it into the managed
    folder writes a second copy on one disk, which is not a second copy of
    anything. It *is* exempt in fact today, and that gap is named in the path
    below rather than papered over: the `volume:` replica form resolves
-   relative to a target's root, so recording an arbitrary Mac path in it would
+   relative to a target's root, so recording an arbitrary device path in it would
    name a file that does not exist. Honouring this for the host device needs
    an absolute-path replica form first.
 9. A grant is remembered until it is taken back, and everything remembered is
    listed somewhere it can be taken back from. Re-asking a question the user
    has already answered is a defect, not caution — and a decision with no way
    to reverse it is worse than one the app never offered.
-10. **This machine is a device like any other.** It is registered as a target
+10. **This device is a device like any other.** It is registered as a target
     by default, and placement gives it a share sized by what fits — not the
     whole archive. Under the old every-device-holds-everything model the host
     had to be all-or-nothing, because a boot disk that could not take the full
     archive could not be a target at all; `k`-of-`n` removes that cliff. A
     full boot disk simply stops being chosen for new content, and the drives
     take it. Forgetting the host target remains the way to keep the archive
-    off this Mac entirely.
+    off this device entirely.
 12. **No operation may require two devices connected at once.** One cable and
     two drives is the ordinary setup, not an exotic one. Work that needs both
     is work that never runs: it does not fail, it reports "nothing to do" for
@@ -345,7 +473,7 @@ Apple frameworks only — zero third-party dependencies.
 
 13. **A marker naming another archive is never overwritten silently.**
     Registering a drive writes a marker file at its root, and registration will
-    currently overwrite one that is already there. Two archives on one Mac is
+    currently overwrite one that is already there. Two archives on one device is
     no longer an exotic case — the app itself offers a test archive beside the
     real one — and the second to register a drive takes it: the first archive's
     marker is replaced, and it can no longer identify by the primary mechanism
@@ -356,7 +484,7 @@ Apple frameworks only — zero third-party dependencies.
     that drive and overwrote the real archive's marker. No content was moved
     and nothing was lost — the volume UUID is a fallback and it held — but the
     archive was relying on its backup identity for a drive plugged into the
-    machine, and nothing said so.
+    device, and nothing said so.
 
     What it should do: read the marker before writing one, and when it names a
     different archive, say so and ask. "This drive already belongs to another
@@ -366,13 +494,95 @@ Apple frameworks only — zero third-party dependencies.
     refusal, and applies to every archive equally — the real one must not be
     able to quietly claim a test archive's drive either.
 
+14. **Two devices given the same changes reach the same answers.** Including
+    which of two conflicting edits won. If two devices resolve one conflict
+    differently they never converge again, and nothing afterwards can detect it
+    — so the merge is order-independent, idempotent, and total: every tie breaks
+    on device id, and no device is authoritative.
+
+15. **No cloud, account, or network may ever be required.** Metadata travels on
+    the drives that already carry the photographs. A courier may be *offered*,
+    never depended on, and the test is that deleting it entirely loses nothing.
+    A device is allowed to be offline for a year and then catch up from a drive.
+
+16. **What is true of a device never travels.** Mount paths, place handles,
+    the archive lock, the local work queue, caches. A `/Volumes` path from
+    another device is not a weaker fact, it is a meaningless one, and recording it
+    as though it meant something is the same failure as claiming an unverified
+    copy. `CatalogScope` is the list, and it is enforced by a test rather than by
+    memory.
+
+17. **Anything recorded and later compared is defined by specification, not by
+    implementation.** Hashes, orderings, encodings, the on-drive format. Swift's
+    `String` ordering is not Rust's, Kotlin's or C#'s; JSON object key order is
+    not stable unless it is made so; an integer and a float are one JSON number
+    and two SQLite values. Each of those was a live defect found by writing the
+    rules down. A value whose definition is "whatever the Swift does" cannot be
+    reproduced by a second implementation, and the archive is meant to outlive
+    this one.
+
+18. **A newer catalog, or a newer drive, is refused rather than downgraded.**
+    An older build must not open what a newer one wrote, because every upsert
+    rewrites whole rows and would silently discard the columns it does not know.
+    Version parity across devices and app stores is not achievable, so the
+    failure is made loud instead: refusing costs somebody a sync, and the
+    alternative costs them data they will not notice losing.
+
 ---
 
 ## The path
 
+### The end state, stated once
+
+So the target is legible without reading the steps.
+
+**One archive. Any number of devices. No dependency that can be withdrawn.**
+
+- A person with two devices, a phone and a work PC has **one** archive. Each device
+  holds whichever photographs it holds, and all of them agree about what exists,
+  where the copies are, and what is at risk.
+- They are kept in step by **the drives already being carried between them**.
+  Plugging one in is the whole interaction; there is nothing to sign into and
+  nothing to configure.
+- **Non-Apple clients read the same archive.** Windows and Android are not
+  ports of this app — a client needs to read JSON off a mounted volume and
+  reproduce a specified set of hashes. Read-only is enough to be worth having:
+  browse the archive, see where copies are, see what is at risk.
+- **Nothing about it can be taken away.** No account to be suspended, no API to
+  be deprecated the way Google's was in March 2025, no company that has to still
+  exist. The bytes are plain files; the catalog is portable SQLite; the sync
+  format is documented text.
+
+Two things are true of that end state and are not defects:
+
+- **Two devices that never share a drive never converge.** The alternative is a
+  network, and the network is what brings back the dependency.
+- **Every device is pointed at each drive once, by hand.** A permission macOS
+  gives an app for a drive cannot be transferred to another device, and Android
+  works the same way. It is a floor, not a bug — the thing to get right is that
+  it happens *once* per device, and that a new device is told what to expect
+  rather than meeting an empty app.
+
+### Next — multi-device
+
+The machinery is built and tested; these are what stand between it and being
+something to rely on.
+
+1. **Testing on real removable media.** Everything is proven against directories
+   standing in for drives, plus direct tests of the conditions a real volume
+   adds — macOS's hidden files, a read-only mount, non-segment files, a torn
+   tail. What has not happened is a drive actually being pulled out of a socket.
+   `docs/TESTING-SYNC.md` is the procedure.
+
+2. **A read-only client on one other platform.** The conformance vectors are
+   what make this safe rather than hopeful. Read-only first: it needs only the
+   shared tables, and it is where the format either proves portable or does not.
+   Nothing structural is in the way any more — the zip reader was the last
+   thing, and it is built.
+
 ### Next — no connector required
 
-1. **In-place replicas on the host device.** A folder anywhere on this Mac's
+1. **In-place replicas on the host device.** A folder anywhere on this device's
    own disk is content the host target already holds, and invariant 5 says not
    to copy it — but the replica cannot be recorded yet. `volume:<relative>` is
    resolved as `mountURL + relative`, and a host target's `mountURL` is its
@@ -427,6 +637,36 @@ and reclamation from Google stays a manual act the app can only guide.
 ### Later
 
 7. Perceptual duplicates, faces, semantic search, map view.
+8. **A courier, if it earns its place.** A share on the local network fixes the
+   "two devices on one desk never share a drive" case with no account and no
+   vendor. A folder in somebody's cloud storage would do the same over distance.
+   Both are the same adapter — a place that lists, reads and appends files — and
+   both are optional by construction (invariant 15).
+
+---
+
+## Loose ends, named rather than left
+
+Things that are true of the code today and would otherwise be discovered by
+somebody reading it and drawing the wrong conclusion.
+
+- **`Domain/MerkleTree.swift` is dead code.** Cross-target tree comparison was
+  removed for the reasons recorded above, and the type was left behind. Nothing
+  in `Sources/` constructs it; its own documentation still describes it as
+  active machinery — "what replaces re-reading every replica on a timer" — which
+  is no longer true and is exactly the costume the removal was meant to take
+  off. Its construction is specified in `SPEC-hashing.md` §4 and has conformance
+  vectors, which currently protect a format nothing writes. Either delete both,
+  or give it a job; leaving it as is means the next reader believes there is a
+  cross-target check.
+- **`projected_version` is deliberately not journalled**, though it lives in a
+  shared table. It records that *this* device has read a payload with *this*
+  version of the reader — work, not archive. Its conclusions do travel.
+- **The pre-split `drives` columns are still written and no longer read.** A
+  build that predates the split reads them, so they stay until no such build is
+  in use; `fetchTargets` takes all three from `drive_local_state`.
+- **Invariant 13 is still aspirational.** Registering a drive still overwrites
+  another archive's marker without asking.
 
 ---
 
@@ -524,7 +764,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     "where is my stuff", and that question is asked most often precisely when
     the thing is unreachable; hiding the answer exactly then leaves the reveal
     button useful only when it is not needed.
-28. The host device is a device. Treating this Mac as a corridor and never a
+28. The host device is a device. Treating this device as a corridor and never a
     destination meant a fresh install with no drive attached protected
     nothing, while a boot disk with room to spare sat unused.
 29. A source is not only where content came from; it is somewhere that content
@@ -546,7 +786,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     had just been registered.
 33. A device that was never asked to hold something does not owe it. Export
     parts were graded against every registered device rather than the ones
-    their export names, so a Mac holding none of the zips owed a copy of all of
+    their export names, so a device holding none of the zips owed a copy of all of
     them for ever — and no change to the export's settings could clear it,
     because its settings were never consulted.
 34. Withdrawing the task is not withdrawing the intention. Archive-level
@@ -625,7 +865,7 @@ Earned against a real 248 GB archive; the stories are in git history.
 47. A provider's day is the provider's day. Google timestamps an album in UTC
     and prints the UTC day beside it; rendering that instant in the viewer's
     timezone moved it, so an album titled "Wednesday night in Northgate" came
-    out as Thursday, and would have read differently again on a machine
+    out as Thursday, and would have read differently again on a device
     elsewhere. Showing a recorded date in local time is a reinterpretation, and
     this archive does not reinterpret dates — see the timeline banner, which
     promises the same thing about capture dates it knows to be wrong.
@@ -681,19 +921,19 @@ Earned against a real 248 GB archive; the stories are in git history.
 
 53. One decision, one rule, wherever it is applied. The device picker counted
     devices and the screen that judges the result counted drives, so choosing a
-    drive and this Mac satisfied "two copies" in silence and came back as an
+    drive and this device satisfied "two copies" in silence and came back as an
     orange warning. The app let somebody build the arrangement it goes on to
     complain about. Wherever a choice is made and wherever its result is
     judged, the same question has to be asked the same way — and the place to
     say something is where the choice is made, not only afterwards.
 
-54. Check the slogan against the code. "This Mac is the machine your drives
+54. Check the slogan against the code. "This device is the device your drives
     exist to survive" sounded like a reason and was used as one, to discount a
     copy on the host and to warn somebody off choosing it. It does not survive
     reading: a copy on a registered host target is written to the same replica
     root, verified the same way, and removed only when a group stops naming it
     — `reclaimStaging` frees the staging area, never a target's replicas. If
-    the Mac dies, a photo on it and on a drive still has the drive. Automatic
+    the device dies, a photo on it and on a drive still has the drive. Automatic
     placement still prefers drives, for the reason that is true: a boot disk
     rarely has room. A sensible default is not the same claim as a lesser copy.
 
@@ -918,3 +1158,59 @@ Earned against a real 248 GB archive; the stories are in git history.
     for ever. Nothing failed, nothing was logged, and the archive was left one
     delivery away from a silent no-op. Exclude the thing the reason is about —
     the waiting room — not the folder it happened to be the only occupant of.
+
+66. Stamping every column of a write is row-scoped last-writer-wins in
+    disguise. Every upsert here rewrites the whole row, so the obvious
+    implementation has each write claim authorship of every field — and a device
+    that changed one column overwrites another device's edit with the stale
+    value it happened to be carrying. The per-field test caught it at once:
+    *both* devices lost the rename. Stamp only what actually moved, which means
+    reading the row before and after, because an upsert cannot say which values
+    it changed.
+
+67. A coverage test at the wrong granularity is worse than none, because it is
+    believed. "Every shared table records something" passed while eleven
+    separate statements wrote to those same tables and recorded nothing —
+    assigning a photo to a group, pointing it at a source, repointing a copy
+    that moved, deleting a photo. Test the write *paths*, not the tables.
+
+68. A sync test that creates and modifies in one breath passes with the bug
+    still in it. A new row's creation stamp expands to every column at send
+    time, reading current values — so an unrecorded change to a row the other
+    device has never seen travels anyway, carried by the creation. It only bites
+    once the row is known elsewhere. Sync first, then change, then sync again;
+    and prove the test fails without the fix.
+
+69. Measure the path nobody is watching, not only the one they are. An import is
+    slow in front of somebody who asked for it; a first sync is slow on a device
+    that has just had a drive plugged in. That one was five and a half minutes
+    and nobody would have known until it happened to them.
+
+70. Assert in seconds against a real archive, not in multiples of a baseline.
+    The import baseline is a bare INSERT at ten microseconds, so any bookkeeping
+    at all looks like a large multiple while costing nothing anybody can feel.
+    A threshold should fail when a person would notice.
+
+71. Anything stored and later compared must have a defined encoding, or the
+    language quietly supplies one. Swift dictionaries have no iteration order,
+    so re-saving an asset whose EXIF had not changed produced different text
+    every time — invisible while the column was only written and read back, and
+    with a journal it would have made every routine rescan look like the whole
+    archive being rewritten.
+
+72. Sorting is an encoding. Swift's `String` ordering is Unicode collation, not
+    bytes; Rust, Kotlin and C# each do something else, and the differences only
+    appear outside ASCII — so the mistake ships, and surfaces years later on one
+    person's archive. Found three times in this codebase before it bit anything.
+
+73. A protocol earns its place when a second implementation is real and when
+    failure is otherwise untestable. One seam — a place that lists, reads and
+    appends files — bought the drive, the future courier, and the ability to
+    test a yanked drive without a drive. Everything else stayed concrete.
+
+74. Interrupting a write is not the whole failure; resuming after one is. A
+    torn tail cost the records inside it, which was expected. What was not: the
+    writer believed it had sent them, so nobody would ever offer them again —
+    and appending after a half-written line splices onto it, which a reader stops
+    at, blocking everything written afterwards for ever. Three fixes, and the
+    first two alone left it broken.
