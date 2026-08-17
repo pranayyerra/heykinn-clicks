@@ -22,7 +22,7 @@ struct MigrationsView: View {
                     } header: {
                         // The old line named a state ("Clearing Source") to
                         // explain why a rule is suspended, which only means
-                        // something to a reader who already knows the machine.
+                        // something to a reader who already knows the device.
                         Text("While a move is under way its photos are in both places at once. That is the one time the app allows it, and it is why a move has to be finished rather than left running.")
                             .fixedSize(horizontal: false, vertical: true)
                             .textCase(nil)

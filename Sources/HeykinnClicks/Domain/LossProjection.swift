@@ -2,7 +2,7 @@ import Foundation
 
 /// Something the archive could lose, in the way archives actually lose things.
 enum ArchiveLoss: Hashable {
-    /// A device fails, is stolen, or is dropped. If it is this Mac, the staging
+    /// A device fails, is stolen, or is dropped. If it is this device, the staging
     /// area goes with it — photos that arrived but have not reached a drive yet
     /// live there and nowhere else.
     case device(UUID)
@@ -64,7 +64,7 @@ extension LossProjection {
         var photos: [Asset]
         var replicas: [TargetReplicaState]
         var groupOfAsset: [UUID: UUID]
-        /// The registered target that *is* this Mac, if there is one.
+        /// The registered target that *is* this device, if there is one.
         var hostTargetID: UUID?
 
         init(
@@ -109,10 +109,10 @@ extension LossProjection {
 
         for photo in input.photos {
             let copies = byAsset[photo.id] ?? []
-            // Staging is a copy — an unmanaged one, on this Mac. It is the only
+            // Staging is a copy — an unmanaged one, on this device. It is the only
             // thing standing between a just-imported photo and nothing, and it
             // has no replica row, so a model built from replicas alone reports
-            // that losing this Mac costs zero and is wrong by exactly the
+            // that losing this device costs zero and is wrong by exactly the
             // photos that most needed saying.
             let staged = photo.stagingRelativePath != nil
 
@@ -149,7 +149,7 @@ extension LossProjection {
         }
     }
 
-    /// Staging lives on this Mac, so it goes when this Mac does — and only
+    /// Staging lives on this device, so it goes when this device does — and only
     /// then. Deleting downloads does not touch it, and neither does a drive
     /// failing.
     private static func stagingIsLost(_ loss: ArchiveLoss, host: UUID?) -> Bool {

@@ -129,10 +129,10 @@ enum ReplicationService {
     /// the outcome is always encoded in the returned task state so the caller
     /// can persist it and move on. Remove actions are only ever enqueued by
     /// explicit migration cleanup — never speculatively.
-    /// `sourceURL` is any readable copy of the asset — Mac staging, or a copy
+    /// `sourceURL` is any readable copy of the asset — local staging, or a copy
     /// on another connected drive (including archive-backed Takeout files).
     /// Assets that live only on targets are copied drive-to-drive without ever
-    /// being staged on the Mac.
+    /// being staged on the device.
     /// - Parameter archivePathsByStem: where each export part actually is on
     ///   this drive. Without it a part-backed replica can only be confirmed by
     ///   searching the volume for something with that name, which is a

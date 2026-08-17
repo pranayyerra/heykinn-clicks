@@ -48,7 +48,7 @@ struct ArchivePlace: Identifiable {
 /// met; **down a column** is what a device holds. Splitting them meant the
 /// crossing fact, *which group is on which device*, lived in neither and had to
 /// be opened for: on a real archive you could not see that SampleBooks skips My
-/// Passport for this Mac without expanding a row and reading a list.
+/// Passport for this device without expanding a row and reading a list.
 ///
 /// The orientation is not arbitrary. Rows grow — a group is made per import, so
 /// they accumulate for as long as the archive does. Columns do not; almost

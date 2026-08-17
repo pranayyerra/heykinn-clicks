@@ -132,9 +132,9 @@ final class TargetBookmarkTests: XCTestCase {
         XCTAssertNotNil(store.resolvedURL(for: second), "Forgetting one device must not reach the other")
     }
 
-    /// Bookmarks are per-machine and must never travel in a catalog snapshot,
-    /// which is copied to the drives and can be restored onto a different Mac.
-    /// Preferences are where per-machine state lives; the catalog is not.
+    /// Bookmarks are per-device and must never travel in a catalog snapshot,
+    /// which is copied to the drives and can be restored onto a different device.
+    /// Preferences are where per-device state lives; the catalog is not.
     func testBookmarksAreNotKeptInTheCatalog() throws {
         let directory = try makeDirectory()
         let catalogDirectory = try makeDirectory()
@@ -151,7 +151,7 @@ final class TargetBookmarkTests: XCTestCase {
             let columns = try catalog.database.query("PRAGMA table_info(\"\(table)\");") { $0.text(1) }
             XCTAssertFalse(
                 columns.contains { $0.localizedCaseInsensitiveContains("bookmark") },
-                "\(table) holds a bookmark column; a snapshot restored on another Mac would carry a pointer to nothing"
+                "\(table) holds a bookmark column; a snapshot restored on another device would carry a pointer to nothing"
             )
         }
     }

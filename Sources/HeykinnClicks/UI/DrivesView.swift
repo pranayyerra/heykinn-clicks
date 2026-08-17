@@ -115,7 +115,7 @@ struct DrivesView: View {
             case 1:
                 let alone = store.copyCoverage[1] ?? 0
                 return "\(Formatters.count(alone, "photo")) \(alone == 1 ? "is" : "are") in one place only."
-            // "Drives" was wrong the moment somebody named this Mac: it is a
+            // "Drives" was wrong the moment somebody named this device: it is a
             // place that holds a copy, which is the thing being counted.
             default: return "Every photo is in \(Formatters.count(fewest, "place"))."
             }
@@ -327,7 +327,7 @@ struct DrivesView: View {
     /// sandboxed build cannot find on its own.
     ///
     /// Shown above everything, because until it is dealt with every drive reads
-    /// as away while sitting plugged into the machine — and "away" is the app
+    /// as away while sitting plugged into the device — and "away" is the app
     /// saying it cannot see something rather than that it is gone.
     @ViewBuilder
     private var devicesToLocate: some View {
@@ -397,7 +397,7 @@ struct DrivesView: View {
             )
         }
 
-        // This Mac is adopted as a target on first launch, so an empty slot
+        // This device is adopted as a target on first launch, so an empty slot
         // here means it was deliberately forgotten — the supported way to run
         // an archive the boot disk cannot hold. The detail says what taking it
         // back would cost, since that is the decision being offered.
@@ -503,7 +503,7 @@ struct DrivesView: View {
                 Spacer()
             }
             // Said before it happens, not after. A copy disappearing from the
-            // Mac is alarming unless the reader already knows the rule, and
+            // device is alarming unless the reader already knows the rule, and
             // the rule is the reassuring part: it goes because the drives have
             // it, and only once they have been read back and matched.
             if !reclaimable.isEmpty {

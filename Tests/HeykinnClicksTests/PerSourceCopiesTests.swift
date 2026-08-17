@@ -4,7 +4,7 @@ import XCTest
 /// Every photo is judged against what its own source asks for.
 ///
 /// There is no archive-wide copy count any more. The interesting case — the one
-/// a single global number could never express — is two sources on one machine
+/// a single global number could never express — is two sources on one device
 /// wanting different things, and both being right at the same time.
 @MainActor
 final class PerSourceCopiesTests: XCTestCase {

@@ -1,13 +1,13 @@
 import Foundation
 
 /// Which device a target's copy lives on. A target *is* a device: the kind says
-/// whether that device is the machine running the app or a drive attached to
+/// whether that device is the device running the app or a drive attached to
 /// it, and that difference is why availability works differently for each.
 enum TargetKind: String, Codable, CaseIterable, Hashable {
     /// A drive with its own identity, found among mounted volumes by its
     /// marker, present only while it is attached.
     case externalVolume
-    /// The machine the app runs on, holding its copy in a folder the user
+    /// The device the app runs on, holding its copy in a folder the user
     /// chose. The folder is where the copy goes; the device is what the target
     /// is — so a folder that resolves onto an external volume is that volume,
     /// and must be registered as one instead.
@@ -86,7 +86,7 @@ struct TargetStorage: Equatable {
     var isInternal: Bool
     var isRemovable: Bool
 
-    /// The machine's own storage: internal, and not something you unplug.
+    /// The device's own storage: internal, and not something you unplug.
     var isHostDevice: Bool { isInternal && !isRemovable }
 
     /// Same physical place. Volume UUID when the filesystem reports one, volume
@@ -125,7 +125,7 @@ struct TargetMarker: Codable, Hashable {
 ///
 /// Worth stopping for, because the two outcomes differ by a whole copy of the
 /// content. Registering first costs nothing and the files are credited where
-/// they already are; importing first copies all of them onto the Mac, and the
+/// they already are; importing first copies all of them onto the device, and the
 /// decision cannot be revisited later without reading every byte again. The
 /// moment to ask is the only moment the answer is free.
 struct UnmanagedSourceOffer: Identifiable {

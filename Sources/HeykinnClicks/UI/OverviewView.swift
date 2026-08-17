@@ -165,7 +165,7 @@ struct OverviewView: View {
     /// So an empty archive gets the two things that have to happen, in order,
     /// each with the button that does it and a tick once it is done. Ordered
     /// this way round deliberately: photos can be imported with no target
-    /// registered at all — they stage on this Mac and queue — and telling
+    /// registered at all — they stage on this device and queue — and telling
     /// someone to buy a drive before they can try the app would be false.
     private var firstRun: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -247,8 +247,8 @@ struct OverviewView: View {
 
     private var targetStepDetail: String {
         guard !store.targets.isEmpty else {
-            return "A device is somewhere holding a whole copy: this Mac, an external drive, "
-                + "or both. Until one exists, photos wait in a staging area on this Mac — "
+            return "A device is somewhere holding a whole copy: this device, an external drive, "
+                + "or both. Until one exists, photos wait in a staging area on this device — "
                 + "safe, but only in one place."
         }
         let registered = store.targets.map(\.name).sorted().joined(separator: ", ")

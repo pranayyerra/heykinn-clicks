@@ -1,6 +1,6 @@
 import Foundation
 
-/// Per-machine permission to return to folders the user selected as sources.
+/// Per-device permission to return to folders the user selected as sources.
 ///
 /// A Takeout search and a Takeout import are deliberately separate actions:
 /// the search records what it finds, then the user chooses which parts to
@@ -9,8 +9,8 @@ import Foundation
 /// permission to read it later; a security-scoped bookmark is.
 ///
 /// These bookmarks stay in preferences rather than the catalog for the same
-/// reason target bookmarks do: a catalog snapshot can move to another Mac,
-/// while a bookmark is meaningful only on the Mac and under the signing
+/// reason target bookmarks do: a catalog snapshot can move to another device,
+/// while a bookmark is meaningful only on the device and under the signing
 /// identity that created it.
 @MainActor
 final class SourceBookmarks {

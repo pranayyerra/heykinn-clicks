@@ -34,7 +34,7 @@ final class AppStoreOrchestrationTests: XCTestCase {
 
     /// A store over a throwaway archive: its own catalog, its own staging, its
     /// own preferences, and none of the background work that would otherwise
-    /// scan the machine's real volumes.
+    /// scan the device's real volumes.
     private func makeStore(
         preferences: [String: Any] = [:]
     ) throws -> (store: AppStore, directory: URL) {
@@ -877,7 +877,7 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertEqual(store.applePhotosAwaitingImport.count, 0)
     }
 
-    /// With iCloud Photos off, the library is this Mac's — recording its
+    /// With iCloud Photos off, the library is this device's — recording its
     /// contents as cloud presence would be a claim nobody checked.
     func testAnUnsyncedLibraryIsRecordedLocalWithNoCloudEvidence() throws {
         let (store, _) = try makeStore()

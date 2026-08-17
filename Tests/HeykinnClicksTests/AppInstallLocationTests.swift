@@ -46,7 +46,7 @@ final class AppInstallLocationTests: XCTestCase {
     }
 
     /// Modern macOS mounts a read-only system volume at "/", and every app on
-    /// the machine would otherwise be reported as unrunnable.
+    /// the device would otherwise be reported as unrunnable.
     func testTheReadOnlySystemVolumeIsNotMistakenForADiskImage() {
         XCTAssertNil(AppInstallLocation.problem(bundleURL: URL(fileURLWithPath: "/")))
     }

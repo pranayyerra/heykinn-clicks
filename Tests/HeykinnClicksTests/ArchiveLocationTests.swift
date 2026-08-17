@@ -5,7 +5,7 @@ import XCTest
 ///
 /// A sandboxed build gets a container of its own, so without a shared location
 /// somebody who installed both the App Store and the website build would own
-/// two catalogs on one Mac — each describing an overlapping half of the same
+/// two catalogs on one device — each describing an overlapping half of the same
 /// photographs, and each screen quietly reporting the wrong total.
 final class ArchiveLocationTests: XCTestCase {
 

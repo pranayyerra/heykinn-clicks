@@ -76,7 +76,7 @@ final class ExportPartTransferTests: XCTestCase {
     }
 
     /// A part already parked must not also be copied from the donor again —
-    /// that would be a second 10 GB read for bytes already on the Mac.
+    /// that would be a second 10 GB read for bytes already on the device.
     func testAParkedPartIsNotCopiedFromTheDonorAgain() {
         let plan = ExportPartTransferPlanner.plan(
             replication: replicationPlan([archive(part: 1, drive: driveA)]),
@@ -84,7 +84,7 @@ final class ExportPartTransferTests: XCTestCase {
             heldParts: [held(part: 1)],
             availableHoldingBytes: plentyOfRoom
         )
-        XCTAssertTrue(plan.transfers.isEmpty, "Nothing to do: the part is on the Mac waiting for drive B")
+        XCTAssertTrue(plan.transfers.isEmpty, "Nothing to do: the part is on the device waiting for drive B")
     }
 
     func testNothingToDoWhenBothDrivesAlreadyHoldThePart() {
@@ -99,7 +99,7 @@ final class ExportPartTransferTests: XCTestCase {
     }
 
     /// The corridor drains itself: once a part is on every drive, the copy on
-    /// the Mac is dead weight on the boot disk.
+    /// the device is dead weight on the boot disk.
     func testAParkedPartIsDiscardedOnceEveryDriveHasIt() {
         let plan = ExportPartTransferPlanner.plan(
             replication: replicationPlan([archive(part: 1, drive: driveA), archive(part: 1, drive: driveB)]),

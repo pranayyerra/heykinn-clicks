@@ -1,6 +1,6 @@
 import Foundation
 
-/// Everything `AppStore` needs from the machine it runs on.
+/// Everything `AppStore` needs from the device it runs on.
 ///
 /// The store used to have one initialiser, and it opened
 /// `~/Library/Application Support/HeykinnClicks/catalog.sqlite` — so no test
@@ -29,7 +29,7 @@ struct AppEnvironment {
     /// Redirecting `HOME` does not work: Application Support resolves through
     /// the user domain, not the environment. This is the seam that was missing.
     static let archiveDirectoryOverrideKey = "HEYKINN_ARCHIVE_DIRECTORY"
-    /// Set alongside the override to keep an inspection copy off the machine's
+    /// Set alongside the override to keep an inspection copy off the device's
     /// real volumes: no volume scan, no snapshots written to the user's drives.
     static let offlineKey = "HEYKINN_NO_BACKGROUND_WORK"
 

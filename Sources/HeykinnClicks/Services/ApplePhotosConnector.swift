@@ -5,7 +5,7 @@ import AppKit
 
 /// The Apple Photos connector — the first real `CloudDomainVerifier`.
 ///
-/// It reads the Photos library on this Mac. **Whether that library is
+/// It reads the Photos library on this device. **Whether that library is
 /// AppleCloud depends on iCloud Photos being enabled, and PhotoKit exposes no
 /// API to check** — so the app asks once, at connect time, and treats the
 /// answer as topology rather than as evidence about any photo. With sync off,
@@ -320,7 +320,7 @@ final class ApplePhotosVerifier: CloudDomainVerifier {
                         break
                     }
                 } catch {
-                    // The original is not on this machine and could not be
+                    // The original is not on this device and could not be
                     // fetched — the ordinary state of an optimised library
                     // once iCloud Photos is switched off. There are no bytes
                     // to compare, so this asset was not checked. Saying

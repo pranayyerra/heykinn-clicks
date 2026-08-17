@@ -161,7 +161,7 @@ final class TargetTests: XCTestCase {
         let folder = try makeTempDirectory()
         let storage = try XCTUnwrap(TargetStorage.of(folder))
 
-        XCTAssertTrue(storage.isHostDevice, "A folder on the machine's own disk is the host device")
+        XCTAssertTrue(storage.isHostDevice, "A folder on the device's own disk is the host device")
     }
 
     func testDifferentVolumesAreDifferentPlaces() {

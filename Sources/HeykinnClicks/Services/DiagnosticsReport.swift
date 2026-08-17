@@ -1,7 +1,7 @@
 import Foundation
 
 /// A plain-text account of what the app currently believes, for somebody
-/// helping with a problem on a Mac they cannot see.
+/// helping with a problem on a device they cannot see.
 ///
 /// The material has always existed — protection counts, backlogs, target state,
 /// the audit log — and none of it was reachable without opening the SQLite file
@@ -99,7 +99,7 @@ extension AppStore {
 
         heading("Targets")
         if targets.isEmpty {
-            out.append("None registered. Everything imported is staged on this Mac only.")
+            out.append("None registered. Everything imported is staged on this device only.")
         }
         for target in targets {
             let label = names[target.id] ?? "Target ?"
@@ -228,7 +228,7 @@ extension AppStore {
     }
 
     /// Target names, in registration order, so the same drive is the same
-    /// letter throughout the report and between two reports from the same Mac.
+    /// letter throughout the report and between two reports from the same device.
     private func redactionMap() -> [UUID: String] {
         let letters = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ")
         let ordered = targets.sorted { $0.registeredAt < $1.registeredAt }

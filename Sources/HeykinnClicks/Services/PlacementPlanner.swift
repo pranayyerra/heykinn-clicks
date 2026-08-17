@@ -110,7 +110,7 @@ enum PlacementPlanner {
                 // measured" is not "full". Reading its nil as zero free bytes
                 // made every named-but-absent device report `.noRoom`, so the
                 // archive never owed an unplugged drive anything — which is
-                // exactly the case the Mac's holding area exists to serve, and
+                // exactly the case the device's holding area exists to serve, and
                 // it left a drive that is only occasionally connected receiving
                 // nothing at all. It also made registering a drive a no-op
                 // until something else happened to re-run the audit, because a

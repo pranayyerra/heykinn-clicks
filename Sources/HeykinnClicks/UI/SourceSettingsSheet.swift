@@ -140,19 +140,19 @@ struct SourceSettingsPicker: View {
                 ? "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) drives, and there \(store.automaticEligibleDeviceIDs.count == 1 ? "is" : "are") \(store.automaticEligibleDeviceIDs.count). Add another and this fills itself in."
                 : "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) devices, and \(destinationTargetIDs.count) is chosen. Photos will stop short until another is picked."
         }
-        // A warning that this Mac "is not a second drive" was here, on the
-        // reasoning that the host is the machine the drives exist to survive.
+        // A warning that this device "is not a second drive" was here, on the
+        // reasoning that the host is the device the drives exist to survive.
         // Checked against the code, that was wrong: a copy on a registered host
         // target is written to the same replica root, read back and verified
         // the same way, and removed only when a group stops naming it —
         // `reclaimStaging` frees the *staging* area and never a target's
-        // replicas. If this Mac dies, a photo on it and on a drive still has
+        // replicas. If this device dies, a photo on it and on a drive still has
         // the drive, which is the entire job of a second place.
         //
         // Automatic placement still prefers drives, for the honest reason: a
         // boot disk rarely has room for a whole archive. That is a sensible
         // default, and it is not grounds for second-guessing somebody who
-        // deliberately picked this Mac. The device rows already say how much
+        // deliberately picked this device. The device rows already say how much
         // room each one has.
         return nil
     }

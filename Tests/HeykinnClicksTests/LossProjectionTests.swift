@@ -10,7 +10,7 @@ import XCTest
 /// The fixture holds one photo of each shape the model has to tell apart.
 final class LossProjectionTests: XCTestCase {
 
-    private let driveA = UUID(), driveB = UUID(), mac = UUID()
+    private let driveA = UUID(), driveB = UUID(), host = UUID()
     private let groupOne = UUID(), groupTwo = UUID()
 
     private func photo(_ name: String, staged: Bool = false) -> Asset {
@@ -40,7 +40,7 @@ final class LossProjectionTests: XCTestCase {
     private func awkwardArchive() -> (LossProjection.Input, [String: Asset]) {
         let safe = photo("safe.jpg")             // A and B, real files
         let onlyA = photo("only-a.jpg")          // A alone
-        let onlyMac = photo("only-mac.jpg")      // this Mac alone
+        let onlyMac = photo("only-host.jpg")      // this device alone
         let zipped = photo("zipped.jpg")         // inside the download on A and B
         let halfOut = photo("half-out.jpg")      // in the download on A, a real file on B
         let arriving = photo("arriving.jpg", staged: true)   // staging only, no drive yet
@@ -54,7 +54,7 @@ final class LossProjectionTests: XCTestCase {
         var replicas: [TargetReplicaState] = [
             replica(safe, on: driveA), replica(safe, on: driveB),
             replica(onlyA, on: driveA),
-            replica(onlyMac, on: mac),
+            replica(onlyMac, on: host),
             replica(zipped, on: driveA, path: inDownload),
             replica(zipped, on: driveB, path: inDownload),
             replica(halfOut, on: driveA, path: inDownload),
@@ -74,7 +74,7 @@ final class LossProjectionTests: XCTestCase {
             rotten.id: groupTwo, orphan.id: groupTwo,
         ]
         let input = LossProjection.Input(
-            assets: assets, replicas: replicas, groupOfAsset: groups, hostTargetID: mac
+            assets: assets, replicas: replicas, groupOfAsset: groups, hostTargetID: host
         )
         let named = Dictionary(uniqueKeysWithValues: [
             ("safe", safe), ("onlyA", onlyA), ("onlyMac", onlyMac), ("zipped", zipped),
@@ -97,15 +97,15 @@ final class LossProjectionTests: XCTestCase {
     }
 
     /// The one a replica-shaped model gets wrong. A photo waiting in staging has
-    /// no replica row at all, so the naive answer to "what does losing this Mac
+    /// no replica row at all, so the naive answer to "what does losing this device
     /// cost" is zero — wrong by exactly the photos with the least protection.
     func testLosingThisMacTakesTheStagingAreaWithIt() {
         let (input, _) = awkwardArchive()
-        let projection = LossProjection.project(.device(mac), in: input)
+        let projection = LossProjection.project(.device(host), in: input)
         XCTAssertEqual(
             projection.lost, 3,
             """
-            only-mac.jpg; arriving.jpg, which exists nowhere but staging; and \
+            only-host.jpg; arriving.jpg, which exists nowhere but staging; and \
             queued.jpg, whose one replica on driveA is still pending — a promise, \
             not a copy. All three are invisible to a model built from replicas alone.
             """
@@ -124,11 +124,11 @@ final class LossProjectionTests: XCTestCase {
         input2.replicas.removeAll { $0.assetID == names["queued"]!.id }
         XCTAssertEqual(
             LossProjection.project(.device(driveA), in: input2).lost, 2,
-            "queued.jpg survives on this Mac when a drive dies"
+            "queued.jpg survives on this device when a drive dies"
         )
         XCTAssertEqual(
-            LossProjection.project(.device(mac), in: input2).lost, 3,
-            "and goes when this Mac does"
+            LossProjection.project(.device(host), in: input2).lost, 3,
+            "and goes when this device does"
         )
     }
 

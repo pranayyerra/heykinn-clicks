@@ -9,7 +9,7 @@ import XCTest
 /// the marker sweep finds drives regardless. Sandboxed it is total: reading the
 /// root of every mounted volume is exactly what is not allowed, so a drive with
 /// no bookmark is invisible rather than slow — somebody upgrading would find
-/// every one of their drives reading as away while plugged into the machine.
+/// every one of their drives reading as away while plugged into the device.
 @MainActor
 final class LocateTargetTests: XCTestCase {
 

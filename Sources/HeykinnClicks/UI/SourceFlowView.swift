@@ -176,7 +176,7 @@ struct SourceFlowView<Detail: View>: View {
                     }
                     // A `ProgressView` sat here showing how much of this
                     // source was in the archive. Every import on a settled
-                    // machine finished long ago, so it was a bar pinned at
+                    // device finished long ago, so it was a bar pinned at
                     // 100% for ever — chrome that reads as live status. The
                     // status line below already says the same thing in words.
                     Text(source.status)

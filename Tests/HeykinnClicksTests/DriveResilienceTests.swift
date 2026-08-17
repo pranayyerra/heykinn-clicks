@@ -61,7 +61,7 @@ final class DriveResilienceTests: XCTestCase {
 
     func testVolumeStillEnumeratedWhenMarkerUnreadable() throws {
         guard ProcessInfo.processInfo.environment["HEYKINN_VOLUME_TESTS"] == "1" else {
-            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a machine whose mounted volumes are safe to inspect")
+            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a device whose mounted volumes are safe to inspect")
         }
         // A volume with no marker file must still produce a VolumeInfo (so
         // UUID fallback matching can run) rather than vanishing entirely.

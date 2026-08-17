@@ -69,7 +69,7 @@ struct Asset: Identifiable, Hashable {
     var residency: ResidencyDomain
     var residencySource: ResidencyAssignmentSource
     var presence: DomainPresence
-    /// Path relative to the Mac staging root, when a staged copy exists.
+    /// Path relative to the local staging root, when a staged copy exists.
     var stagingRelativePath: String?
     var importBatchID: UUID?
     var exifSummary: [String: String]

@@ -35,7 +35,7 @@ enum RevealInFinder {
     /// Derived from the path rather than looked up, because the whole point is
     /// to say something useful about a volume that is *not* mounted — at which
     /// point there is nothing to look it up in. `/Volumes/Field Drive/Photos`
-    /// is on "Field Drive"; anything else is on this Mac.
+    /// is on "Field Drive"; anything else is on this device.
     static func volumeName(for path: String) -> String? {
         let prefix = "/Volumes/"
         guard path.hasPrefix(prefix) else { return nil }
@@ -52,7 +52,7 @@ enum RevealInFinder {
         if let volume = volumeName(for: path) {
             return "\(volume) is not connected"
         }
-        return "No longer on this Mac"
+        return "No longer on this device"
     }
 }
 

@@ -1,6 +1,6 @@
 import Foundation
 
-/// Pure state-machine transitions for migration jobs. The AppStore applies the
+/// Pure state-device transitions for migration jobs. The AppStore applies the
 /// returned effects (asset mutations, replication tasks) and persists them, so
 /// every transition is explicit, auditable, and interruptible.
 enum MigrationService {

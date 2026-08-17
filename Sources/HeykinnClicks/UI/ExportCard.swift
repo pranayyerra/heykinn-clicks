@@ -26,7 +26,7 @@ struct ExportSummary: Identifiable {
 
     var parts: [ExportPart] { plan.parts.filter { $0.setID == setID } }
     /// How many copies this export asks for. Per set, so two exports on one
-    /// machine can be kept differently.
+    /// device can be kept differently.
     var copiesRequired: Int { plan.copiesRequired(forSet: setID) }
     var partCount: Int {
         parts.isEmpty ? Set(archives.compactMap(\.partNumber)).count : parts.count
@@ -236,11 +236,11 @@ struct ExportCard: View {
         }
         if let park = transfers.first(where: { if case .driveToHoldingArea = $0.route { return true } else { return false } }),
            case .driveToHoldingArea(let from, let intendedFor) = park.route {
-            phrases.append("\(name(from)) → this Mac, to hand on to \(name(intendedFor))")
+            phrases.append("\(name(from)) → this device, to hand on to \(name(intendedFor))")
         }
         if let deliver = transfers.first(where: { if case .holdingAreaToDrive = $0.route { return true } else { return false } }),
            case .holdingAreaToDrive(let to) = deliver.route {
-            phrases.append("this Mac → \(name(to))")
+            phrases.append("this device → \(name(to))")
         }
         return phrases.joined(separator: ", ")
     }
@@ -282,7 +282,7 @@ struct ExportCard: View {
         }
         if !deferred.isEmpty {
             Label(
-                "\(Formatters.count(deferred.count, "file")) would have to wait on this Mac while the other drive is away, and there is not enough free space. Plug both drives in together, or free up space on the Mac.",
+                "\(Formatters.count(deferred.count, "file")) would have to wait on this device while the other drive is away, and there is not enough free space. Plug both drives in together, or free up space on the device.",
                 systemImage: "internaldrive"
             )
             .font(.caption)

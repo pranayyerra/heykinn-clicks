@@ -511,22 +511,22 @@ extension CopyCoverageTests {
     }
 }
 
-/// This Mac is a place like any other, and the count says so.
+/// This device is a place like any other, and the count says so.
 extension CopyCoverageTests {
 
     /// Briefly it did not. Coverage was split — drives counted, the host
-    /// discounted — on the reasoning that the host is "the machine the drives
+    /// discounted — on the reasoning that the host is "the device the drives
     /// exist to survive". That did not survive checking: a copy on a
     /// registered host target is written to the same replica root, verified
     /// the same way, and removed only when a group stops naming it.
     /// `reclaimStaging` frees the staging area, never a target's replicas. If
-    /// this Mac dies, a photo on it and on a drive still has the drive.
+    /// this device dies, a photo on it and on a drive still has the drive.
     func testTheHostCountsAsAPlace() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(
             databasePath: directory.appendingPathComponent("catalog.sqlite").path
         )
-        let drive = UUID(), mac = UUID()
+        let drive = UUID(), host = UUID()
         try catalog.upsertTarget(ReplicationTarget(
             id: drive, name: "Drive", kind: .externalVolume, volumeUUID: nil,
             markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
@@ -534,41 +534,41 @@ extension CopyCoverageTests {
             replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         ))
         try catalog.upsertTarget(ReplicationTarget(
-            id: mac, name: "This Mac", kind: .hostDevice, volumeUUID: nil,
+            id: host, name: "This device", kind: .hostDevice, volumeUUID: nil,
             markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
             lastKnownPath: directory.path, configuredPath: directory.path,
             replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         ))
-        let leaning = asset("on-a-drive-and-the-mac.jpg")
+        let leaning = asset("on-a-drive-and-the-host.jpg")
         try catalog.upsertAsset(leaning)
         try hold(catalog, leaning.id, on: drive, path: "aa/x.jpg")
-        try hold(catalog, leaning.id, on: mac, path: "aa/x.jpg")
+        try hold(catalog, leaning.id, on: host, path: "aa/x.jpg")
 
         let store = makeStore(in: directory)
         XCTAssertEqual(
             store.copyCoverage, [2: 1],
-            "a drive and this Mac are two places, because they are two machines"
+            "a drive and this device are two places, because they are two devices"
         )
     }
 
     /// A photo the host alone holds is in exactly one place — which is a real
     /// place, and also the thing the app should be uneasy about, since one
-    /// place is one place whichever machine it is.
+    /// place is one place whichever device it is.
     func testAPhotoOnlyOnThisMacIsInOnePlace() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(
             databasePath: directory.appendingPathComponent("catalog.sqlite").path
         )
-        let mac = UUID()
+        let host = UUID()
         try catalog.upsertTarget(ReplicationTarget(
-            id: mac, name: "This Mac", kind: .hostDevice, volumeUUID: nil,
+            id: host, name: "This device", kind: .hostDevice, volumeUUID: nil,
             markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
             lastKnownPath: directory.path, configuredPath: directory.path,
             replicaRootComponent: ReplicationTarget.defaultReplicaRoot
         ))
-        let stranded = asset("only-on-the-mac.jpg")
+        let stranded = asset("only-on-the-host.jpg")
         try catalog.upsertAsset(stranded)
-        try hold(catalog, stranded.id, on: mac, path: "aa/x.jpg")
+        try hold(catalog, stranded.id, on: host, path: "aa/x.jpg")
 
         let store = makeStore(in: directory)
         XCTAssertEqual(store.copyCoverage, [1: 1])

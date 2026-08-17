@@ -150,7 +150,7 @@ final class StagingReclaimIntegrationTests: XCTestCase {
     }
 
     /// The whole point, end to end: content imported from somewhere unmanaged
-    /// costs a copy on the Mac until a drive holds it, and then stops costing
+    /// costs a copy on the device until a drive holds it, and then stops costing
     /// one.
     func testTheStagedCopyGoesOnceADriveHoldsItAndHasBeenChecked() async throws {
         let store = try makeStore()
@@ -196,7 +196,7 @@ final class StagingReclaimIntegrationTests: XCTestCase {
     /// each other. Whichever one is present, the one holding the bytes is the
     /// other — so the work stays queued and nothing can ever run it.
     ///
-    /// Export parts already went via a holding area on the Mac when they could
+    /// Export parts already went via a holding area on the device when they could
     /// not go straight across. This is the same route for ordinary photos, and
     /// the holding area is staging, which is what staging is for.
     func testATargetThatIsNeverPresentAtTheSameTimeIsBridgedThroughTheMac() async throws {
@@ -247,7 +247,7 @@ final class StagingReclaimIntegrationTests: XCTestCase {
         let bridged = try XCTUnwrap(store.assets.first)
         let relative = try XCTUnwrap(
             bridged.stagingRelativePath,
-            "The photo the away drive is owed is held on the Mac for it"
+            "The photo the away drive is owed is held on the device for it"
         )
         XCTAssertTrue(store.staging.exists(relativePath: relative))
         XCTAssertGreaterThan(store.staging.totalBytes, 0)

@@ -68,7 +68,7 @@ enum Formatters {
     /// viewer's timezone moves the day: an album titled "Wednesday night in
     /// Northgate" came out as Thursday 16 July, because 8:29 PM UTC is already
     /// the small hours anywhere far enough east. Worse, the same album would
-    /// read differently on two machines.
+    /// read differently on two devices.
     ///
     /// So a provider's day is shown as the provider's day, in step with the
     /// timeline's promise to show dates where the files claim, unchanged.

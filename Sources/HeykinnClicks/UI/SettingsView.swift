@@ -50,7 +50,7 @@ private struct AutomationSettings: View {
                 ExplainedToggle(
                     "Free up space once your drives hold a photo",
                     isOn: $store.reclaimStagingWhenSafe,
-                    help: "Photos added from anywhere the app does not manage are copied onto this Mac first, so they are safe before any drive is plugged in. With this on, that working copy is released once your own drives hold the photo and have read it back to confirm it — the same standard the app uses to call a photo safe anywhere else. Your originals are never touched, and nothing is released while a photo is short of the copies you asked for."
+                    help: "Photos added from anywhere the app does not manage are copied onto this device first, so they are safe before any drive is plugged in. With this on, that working copy is released once your own drives hold the photo and have read it back to confirm it — the same standard the app uses to call a photo safe anywhere else. Your originals are never touched, and nothing is released while a photo is short of the copies you asked for."
                 )
             }
         }
@@ -197,7 +197,7 @@ private struct SafetySettings: View {
                 )
             }
             Section("Catalog backup") {
-                Text("The photos survive on the drives, but everything this app knows about them lives only in the catalog: which drives hold what, how copies were verified, how duplicates were grouped, and the descriptions, albums and people read out of your exports — that last part only exists here now. Verified snapshots ride along on each connected drive, so losing the Mac does not lose any of it. The newest \(CatalogBackupService.retainCount) are kept on each drive.")
+                Text("The photos survive on the drives, but everything this app knows about them lives only in the catalog: which drives hold what, how copies were verified, how duplicates were grouped, and the descriptions, albums and people read out of your exports — that last part only exists here now. Verified snapshots ride along on each connected drive, so losing the device does not lose any of it. The newest \(CatalogBackupService.retainCount) are kept on each drive.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 HStack {
@@ -222,7 +222,7 @@ private struct SafetySettings: View {
                 // and copying it over the catalog by hand. A backup nobody can
                 // restore is a promise, not a safeguard.
                 HStack {
-                    Text("If this Mac's catalog is lost or goes wrong, restore it from one of these.")
+                    Text("If this device's catalog is lost or goes wrong, restore it from one of these.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)

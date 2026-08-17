@@ -51,7 +51,7 @@ struct SourcesView: View {
         case .denied:
             state = .blocked("macOS is blocking access")
         case .unavailable:
-            state = .blocked("Not available on this Mac")
+            state = .blocked("Not available on this device")
         case .connected:
             if library == 0 {
                 state = .nothingFound
@@ -66,7 +66,7 @@ struct SourcesView: View {
             name: "Photos app",
             symbol: "photo.on.rectangle.angled",
             state: state,
-            detail: "The Photos library on this Mac",
+            detail: "The Photos library on this device",
             help: Self.explanation(for: "apple")
         )
     }
@@ -355,13 +355,13 @@ struct SourcesView: View {
                     Text("One question first: is iCloud Photos turned on for this library?")
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
-                    Text("macOS does not let the app find this out for itself, and the answer changes what a photo found here means — a copy in Apple's cloud, or a copy on this Mac. It is safer to ask you than to guess. You can check in Photos → Settings → iCloud.")
+                    Text("macOS does not let the app find this out for itself, and the answer changes what a photo found here means — a copy in Apple's cloud, or a copy on this device. It is safer to ask you than to guess. You can check in Photos → Settings → iCloud.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     HStack {
                         Button("Yes, it syncs to iCloud") { store.iCloudPhotosEnabled = true }
-                        Button("No, these stay on this Mac") { store.iCloudPhotosEnabled = false }
+                        Button("No, these stay on this device") { store.iCloudPhotosEnabled = false }
                     }
                 }
             } else if indexed == 0 {
@@ -403,7 +403,7 @@ struct SourcesView: View {
     /// copies of photos you already own outright.
     private func appleHeadline(indexed: Int, awaiting: Int) -> String {
         if store.applePhotosLibraryCount == 0 {
-            return "The library is empty, or its photos are not stored on this Mac."
+            return "The library is empty, or its photos are not stored on this device."
         }
         if store.iCloudPhotosEnabled == nil {
             return "\(store.applePhotosLibraryCount.formatted()) photos in the library."
@@ -433,7 +433,7 @@ struct SourcesView: View {
                 VStack(alignment: .leading, spacing: 8) {
                     Text("None found yet.")
                         .font(.callout)
-                    Text("Google calls this a Takeout: you ask for a copy of your photos at takeout.google.com and it emails you a set of large .zip files, usually about 10 GB each. Put them on one of your drives, or anywhere on this Mac, and use Find a download. The app unpacks and reads them on its own from there.")
+                    Text("Google calls this a Takeout: you ask for a copy of your photos at takeout.google.com and it emails you a set of large .zip files, usually about 10 GB each. Put them on one of your drives, or anywhere on this device, and use Find a download. The app unpacks and reads them on its own from there.")
                         .font(.callout)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -459,7 +459,7 @@ struct SourcesView: View {
     static func explanation(for sourceID: String) -> String {
         switch sourceID {
         case "apple":
-            return "The Photos library on this Mac. Connecting lets the app look through it, spot the photos this archive already has, and copy in the ones it is missing. It reads the library and never changes it."
+            return "The Photos library on this device. Connecting lets the app look through it, spot the photos this archive already has, and copy in the ones it is missing. It reads the library and never changes it."
         case "google":
             return "Google splits one download into several large .zip files. Each block is one of them — click one to see which drive holds it, as the .zip or unpacked into a folder."
         default:

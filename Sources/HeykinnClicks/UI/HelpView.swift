@@ -31,7 +31,7 @@ struct HelpView: View {
             symbol: "externaldrive.connected.to.line.below",
             title: "A device is a disk, not a folder",
             body: """
-            A target is somewhere a whole copy of your archive lives: either this Mac, \
+            A target is somewhere a whole copy of your archive lives: either this device, \
             holding its copy in a folder you pick, or an external drive. Two folders on \
             the same disk are one target, not two, and the app refuses to register them \
             as two — a copy in each does not survive that disk failing, so counting them \
@@ -76,7 +76,7 @@ struct HelpView: View {
             it finds into the archive and leaves the original exactly as it was. Nothing is \
             moved, renamed or deleted where it came from, ever.
 
-            Photos arriving from anywhere the app does not manage land on this Mac first, so \
+            Photos arriving from anywhere the app does not manage land on this device first, so \
             they are safe before any drive is plugged in. That working copy is released only \
             once your own drives hold the photo and have read it back.
             """
@@ -89,9 +89,9 @@ struct HelpView: View {
             forgets somebody's photographs. A wrong capture date is left where the file \
             claims rather than corrected to a guess. Duplicates are listed, not merged.
 
-            The catalog on this Mac is the authority for all of it — metadata, residency, \
+            The catalog on this device is the authority for all of it — metadata, residency, \
             history — and verified snapshots of it are written to your drives, so losing the \
-            Mac does not lose the record.
+            device does not lose the record.
             """
         )
     ]

@@ -17,11 +17,11 @@ import Foundation
 /// confirms what it opened.
 ///
 /// **Deliberately not stored in the catalog.** Snapshots are written to the
-/// drives and can be restored onto a different Mac, and a bookmark is meaningful
-/// only to the machine — and the code identity — that made it. Carrying one
+/// drives and can be restored onto a different device, and a bookmark is meaningful
+/// only to the device — and the code identity — that made it. Carrying one
 /// across would be a pointer to nothing, presented as a way to reach a drive.
-/// This is per-machine state and lives in preferences with the other
-/// per-machine state.
+/// This is per-device state and lives in preferences with the other
+/// per-device state.
 @MainActor
 final class TargetBookmarks: ObservableObject {
 

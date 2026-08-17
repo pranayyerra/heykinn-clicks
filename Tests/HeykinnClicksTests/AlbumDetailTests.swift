@@ -145,7 +145,7 @@ extension AlbumDetailTests {
     /// printed as "Jul 15". Rendered anywhere east of UTC+3:31 that instant is
     /// already the 16th — 2 AM at UTC+5:30 — so the header called a Wednesday
     /// album Thursday, and would have said something different again on a
-    /// machine in another timezone.
+    /// device in another timezone.
     ///
     /// A provider's day is shown as the provider's day.
     func testProviderDaysAreShownInTheProvidersOwnTimezone() {

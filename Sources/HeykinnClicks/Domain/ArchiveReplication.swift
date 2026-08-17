@@ -147,7 +147,7 @@ struct ExportPart: Identifiable, Hashable {
     ///
     /// The set passed in is the export's **named destinations**, not every
     /// device registered. Passing every device was the first wrong model
-    /// surviving in the export path: a Mac that is registered and holds none of
+    /// surviving in the export path: a device that is registered and holds none of
     /// the zips was reported as owing a copy of all of them for ever, and no
     /// change to the export's settings could clear it, because its settings
     /// were never consulted.
@@ -174,7 +174,7 @@ struct ArchiveReplicationPlan {
     /// How many copies each export set asks for, keyed by set id.
     ///
     /// Per set, because one Google export is one source and carries its own
-    /// copy count — two exports on one machine are entitled to different
+    /// copy count — two exports on one device are entitled to different
     /// answers. A set with no entry falls back below; that is the state before
     /// an export has been given a source of its own, not a second policy.
     var copiesRequiredBySetID: [String: Int] = [:]
@@ -329,7 +329,7 @@ enum ExportSetLayout {
     }
 }
 
-/// An export part parked on the Mac while it travels between targets.
+/// An export part parked on the device while it travels between targets.
 ///
 /// Named after the part it holds, so the directory listing *is* the state:
 /// a catalog restored from backup, a crash mid-copy, or someone emptying the
@@ -352,7 +352,7 @@ struct ExportPartTransfer: Identifiable, Hashable {
     enum Route: Hashable {
         /// Both targets are connected — copy straight across, no detour.
         case driveToDrive(from: UUID, to: UUID)
-        /// Only the drive that has the part is connected. Park it on the Mac
+        /// Only the drive that has the part is connected. Park it on the device
         /// so the transfer can finish later, when the other drive appears.
         case driveToHoldingArea(from: UUID, intendedFor: UUID)
         /// The drive that needs the part is connected and the part is already
@@ -386,7 +386,7 @@ struct ExportPartTransferPlan {
     /// Parts short of copies that nothing can be done about at the moment,
     /// because no drive holding one is connected.
     var stranded: [ExportPart] = []
-    /// Parts that would be parked on the Mac if there were room for them.
+    /// Parts that would be parked on the device if there were room for them.
     var deferredForSpace: [ExportPart] = []
 
     var bytesToMove: Int64 { transfers.reduce(0) { $0 + $1.sizeBytes } }
@@ -395,7 +395,7 @@ struct ExportPartTransferPlan {
 
 enum ExportPartTransferPlanner {
 
-    /// Bytes left free on the Mac after parking parts. The holding area is a
+    /// Bytes left free on the device after parking parts. The holding area is a
     /// corridor on the boot disk; filling it is a worse failure than a
     /// transfer taking two sessions instead of one.
     static let holdingAreaReserveBytes: Int64 = 20 * 1024 * 1024 * 1024
@@ -406,7 +406,7 @@ enum ExportPartTransferPlanner {
     /// The order matters: deliveries first, because they are the steps that
     /// complete a transfer already half-done and are the only way the holding
     /// area empties. Direct drive-to-drive copies come next — they need no
-    /// space on the Mac at all. Parking a part on the Mac is the last resort,
+    /// space on the device at all. Parking a part on the device is the last resort,
     /// taken only when the drive that needs the part is not here to receive it.
     static func plan(
         replication: ArchiveReplicationPlan,

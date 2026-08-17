@@ -22,7 +22,7 @@ final class TargetMonitorThreadingTests: XCTestCase {
     /// from it.
     func testBothScansAgreeOnWhatIsReachable() async throws {
         guard ProcessInfo.processInfo.environment["HEYKINN_VOLUME_TESTS"] == "1" else {
-            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a machine whose mounted volumes are safe to inspect")
+            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a device whose mounted volumes are safe to inspect")
         }
         let targets = [makeTarget(name: "Nowhere", path: "/Volumes/Definitely Not Mounted")]
 
@@ -46,7 +46,7 @@ final class TargetMonitorThreadingTests: XCTestCase {
     /// cable (invariant 12).
     func testAnUnmountedTargetIsReachableFromNeither() async throws {
         guard ProcessInfo.processInfo.environment["HEYKINN_VOLUME_TESTS"] == "1" else {
-            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a machine whose mounted volumes are safe to inspect")
+            throw XCTSkip("Set HEYKINN_VOLUME_TESTS=1 on a device whose mounted volumes are safe to inspect")
         }
         let targets = [makeTarget(name: "Away", path: "/Volumes/Definitely Not Mounted")]
 

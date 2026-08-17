@@ -11,7 +11,7 @@ import XCTest
 /// The two facts it conflated are genuinely different. "Something has been
 /// pointed at this archive" and "this archive holds photographs" come apart
 /// exactly when a connected library is empty — which is every first run of the
-/// app on a new Mac, and was the case being tested.
+/// app on a new device, and was the case being tested.
 @MainActor
 final class FirstRunStateTests: XCTestCase {
 

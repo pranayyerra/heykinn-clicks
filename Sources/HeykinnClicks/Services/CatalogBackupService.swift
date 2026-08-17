@@ -17,7 +17,7 @@ struct CatalogSnapshot: Identifiable, Hashable {
 /// The catalog is the one thing in the system that cannot be re-derived
 /// cheaply: the media survives on the targets, but residency, replica state,
 /// duplicate grouping, and import history exist only in SQLite. Snapshots ride
-/// along with the archive they describe, so losing the Mac does not lose the
+/// along with the archive they describe, so losing the device does not lose the
 /// metadata.
 enum CatalogBackupService {
 
@@ -33,7 +33,7 @@ enum CatalogBackupService {
     /// On a real archive the five held spanned a day and a half.
     ///
     /// What retention buys is a way back from a catalog that went wrong without
-    /// anyone noticing. It does not buy safety from losing the Mac: any one
+    /// anyone noticing. It does not buy safety from losing the device: any one
     /// good snapshot does that, and there is a copy on every drive.
     static let retainCount = 3
 

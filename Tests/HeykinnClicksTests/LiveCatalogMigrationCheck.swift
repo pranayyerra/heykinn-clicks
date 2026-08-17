@@ -5,7 +5,7 @@ import XCTest
 /// claims on data that actually exists.
 ///
 /// Skipped unless `HEYKINN_LIVE_CATALOG` names a copy — the suite must never
-/// depend on one machine's archive, and must never touch the original.
+/// depend on one device's archive, and must never touch the original.
 final class LiveCatalogMigrationCheck: XCTestCase {
 
     func testTheSchemaStepMigratesARealCatalogWithoutLosingRows() throws {

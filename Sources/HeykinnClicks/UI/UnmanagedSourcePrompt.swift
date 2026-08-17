@@ -5,7 +5,7 @@ import SwiftUI
 /// Not a warning — both answers are reasonable, and the drive may genuinely be
 /// something they are about to give back. It exists because the two answers
 /// cost wildly different amounts and the difference is invisible: one copies
-/// every file onto the Mac and keeps it there, the other copies nothing. And
+/// every file onto the device and keeps it there, the other copies nothing. And
 /// the choice is only available now. Once the import has run, the app has
 /// decided where those bytes live and re-deciding means reading all of them
 /// again.
@@ -21,7 +21,7 @@ struct UnmanagedSourcePrompt: View {
                 .font(.title3)
                 .bold()
 
-            Text("This drive is not one of the places the app keeps your archive, so it will copy everything you import onto this Mac and keep it there.")
+            Text("This drive is not one of the places the app keeps your archive, so it will copy everything you import onto this device and keep it there.")
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
 

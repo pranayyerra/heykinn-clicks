@@ -64,7 +64,7 @@ final class ExportSourceTests: XCTestCase {
         XCTAssertEqual(first.source.kind, .takeoutExport)
     }
 
-    /// Two exports on one machine are entitled to different answers — the thing
+    /// Two exports on one device are entitled to different answers — the thing
     /// a single archive-wide number could never express.
     func testTwoExportsCanBeKeptDifferently() throws {
         let store = try makeStore()
@@ -150,22 +150,22 @@ final class ExportSourceTests: XCTestCase {
 
     /// The bug behind "Not yet on the MacBook Pro" that no change to the
     /// export's settings could clear: parts were graded against every
-    /// registered device, so a Mac that holds none of the zips — and was never
+    /// registered device, so a device that holds none of the zips — and was never
     /// asked to — owed a copy of all of them for ever.
     func testADeviceTheExportDoesNotNameIsNotOwedACopy() {
-        let driveA = UUID(), driveB = UUID(), mac = UUID()
+        let driveA = UUID(), driveB = UUID(), host = UUID()
         let plan = ArchiveReplicationPlanner.plan(
             archives: [
                 archive(setID: "set", part: 1, drive: driveA),
                 archive(setID: "set", part: 1, drive: driveB),
             ],
-            managedTargetIDs: [driveA, driveB, mac],
+            managedTargetIDs: [driveA, driveB, host],
             destinationsBySetID: ["set": [driveA, driveB]],
             copiesRequiredBySetID: ["set": 2]
         )
         let part = plan.parts[0]
 
-        XCTAssertEqual(plan.targetsNeedingACopy(of: part), [], "the Mac was never named")
+        XCTAssertEqual(plan.targetsNeedingACopy(of: part), [], "the device was never named")
         XCTAssertTrue(plan.redundancy(of: part).meetsPolicy)
         XCTAssertTrue(plan.partsNeedingWork.isEmpty)
         XCTAssertEqual(plan.bytesOutstanding, 0)
@@ -174,10 +174,10 @@ final class ExportSourceTests: XCTestCase {
     /// And a device the export *does* name is still owed one, so the fix does
     /// not simply silence the report.
     func testANamedDeviceIsStillOwedACopy() {
-        let driveA = UUID(), driveB = UUID(), mac = UUID()
+        let driveA = UUID(), driveB = UUID(), host = UUID()
         let plan = ArchiveReplicationPlanner.plan(
             archives: [archive(setID: "set", part: 1, drive: driveA)],
-            managedTargetIDs: [driveA, driveB, mac],
+            managedTargetIDs: [driveA, driveB, host],
             destinationsBySetID: ["set": [driveA, driveB]],
             copiesRequiredBySetID: ["set": 2]
         )
@@ -187,16 +187,16 @@ final class ExportSourceTests: XCTestCase {
 
     /// Nothing is transported to a device the export does not name either.
     func testNothingIsTransportedToADeviceTheExportDoesNotName() {
-        let driveA = UUID(), mac = UUID()
+        let driveA = UUID(), host = UUID()
         let replication = ArchiveReplicationPlanner.plan(
             archives: [archive(setID: "set", part: 1, drive: driveA)],
-            managedTargetIDs: [driveA, mac],
+            managedTargetIDs: [driveA, host],
             destinationsBySetID: ["set": [driveA]],
             copiesRequiredBySetID: ["set": 1]
         )
         let transfers = ExportPartTransferPlanner.plan(
             replication: replication,
-            connectedDriveIDs: [driveA, mac],
+            connectedDriveIDs: [driveA, host],
             heldParts: [],
             availableHoldingBytes: 500 * 1024 * 1024 * 1024
         )

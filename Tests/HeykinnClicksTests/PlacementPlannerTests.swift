@@ -179,7 +179,7 @@ final class PlacementPlannerTests: XCTestCase {
     /// reports **nil**, deliberately, because its free space when it was last
     /// seen is not evidence about its free space now. Reading that nil as zero
     /// made every absent destination come back `.noRoom`, so nothing was ever
-    /// owed to a drive that was not plugged in — the exact case the Mac's
+    /// owed to a drive that was not plugged in — the exact case the device's
     /// holding area exists to serve — and registering a device queued nothing
     /// at all, since a device is unreachable until the scan that follows
     /// registering it.

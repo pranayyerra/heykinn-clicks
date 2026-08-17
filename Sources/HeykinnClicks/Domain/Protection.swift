@@ -5,7 +5,7 @@ import Foundation
 /// and deliberately separate from residency: residency says *where the asset
 /// logically lives*, protection says *how safe the local copies are*.
 enum ProtectionState: String, Codable, Hashable {
-    /// Exists only in the Mac staging area; not yet on any managed drive.
+    /// Exists only in the local staging area; not yet on any managed drive.
     case stagedOnly
     /// On exactly one managed drive; pending on the other.
     case replicatedToOneDrive

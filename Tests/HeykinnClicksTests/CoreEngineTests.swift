@@ -374,7 +374,7 @@ final class CoreEngineTests: XCTestCase {
         try FileManager.default.createDirectory(at: mountRoot, withIntermediateDirectories: true)
 
         let sourceFile = try makeTempDirectory().appendingPathComponent("photo.jpg")
-        try Data("imported from the Mac".utf8).write(to: sourceFile)
+        try Data("imported from the device".utf8).write(to: sourceFile)
         let assetID = UUID()
         let stagingPath = try staging.stage(fileAt: sourceFile, assetID: assetID, fileExtension: "jpg")
         let hash = try HashingService.sha256(of: staging.url(forRelativePath: stagingPath))

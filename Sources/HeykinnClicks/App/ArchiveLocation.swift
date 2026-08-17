@@ -4,7 +4,7 @@ import Foundation
 ///
 /// A sandboxed app does not get `~/Library/Application Support` — it gets a
 /// container of its own. Left alone, that means the App Store build and the
-/// Developer ID build would each keep an archive, on the same Mac, with the
+/// Developer ID build would each keep an archive, on the same device, with the
 /// same name, and somebody who installed both would have two: two catalogs,
 /// two sets of drives registered, and every count on every screen quietly
 /// describing half of what they own.

@@ -3,7 +3,7 @@ import XCTest
 
 /// A Takeout search and its import are separate actions. These tests prove
 /// the permission created by the first one is still available to the second,
-/// including in a fresh process using the same per-machine preferences.
+/// including in a fresh process using the same per-device preferences.
 @MainActor
 final class SourceBookmarkTests: XCTestCase {
 

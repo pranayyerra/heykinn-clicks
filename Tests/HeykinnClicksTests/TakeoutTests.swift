@@ -524,13 +524,13 @@ final class TakeoutTests: XCTestCase {
         XCTAssertEqual(result.importedAssets.count, 2)
         XCTAssertEqual(result.archiveBackedReplicas.count, 2)
         for asset in result.importedAssets {
-            XCTAssertNil(asset.stagingRelativePath, "Drive-resident media must not be copied to Mac staging")
+            XCTAssertNil(asset.stagingRelativePath, "Drive-resident media must not be copied to local staging")
         }
         XCTAssertEqual(staging.totalBytes, 0, "Staging must stay empty when the drive already holds the bytes")
     }
 
     func testImportWithoutDriveContextStillStages() async throws {
-        // Content with no drive-resident copy (e.g. a zip extracted to a Mac
+        // Content with no drive-resident copy (e.g. a zip extracted to a device
         // workspace) must still be staged — it is the only local copy.
         let workspaceRoot = try makeTempDirectory()
         let takeoutFolder = try makeFakeTakeoutTree(in: workspaceRoot)

@@ -10,7 +10,7 @@ import XCTest
 /// is which of them may be saved.
 final class StoragePlacementDraftTests: XCTestCase {
 
-    private let driveA = UUID(), driveB = UUID(), mac = UUID()
+    private let driveA = UUID(), driveB = UUID(), host = UUID()
 
     private func group(
         copies: Int = 2,
@@ -25,9 +25,9 @@ final class StoragePlacementDraftTests: XCTestCase {
 
     func testMovingAPlacementKeepsTheOrderOfTheOtherDevices() {
         var draft = StoragePlacementDraft(group: group(on: [driveA, driveB]))
-        XCTAssertTrue(draft.move(from: driveA, to: mac))
+        XCTAssertTrue(draft.move(from: driveA, to: host))
         XCTAssertEqual(
-            draft.destinations, [mac, driveB],
+            draft.destinations, [host, driveB],
             "replaced in place — a move must not reshuffle the devices it did not touch"
         )
     }
@@ -37,14 +37,14 @@ final class StoragePlacementDraftTests: XCTestCase {
     func testMovingFixesAGroupToTheDevicesNamed() {
         var draft = StoragePlacementDraft(group: group(on: [driveA, driveB], mode: .automatic))
         XCTAssertEqual(draft.mode, .automatic)
-        XCTAssertTrue(draft.move(from: driveB, to: mac))
+        XCTAssertTrue(draft.move(from: driveB, to: host))
         XCTAssertEqual(draft.mode, .chosen)
     }
 
     func testMovesThatSayNothingChangeNothing() {
         var draft = StoragePlacementDraft(group: group(on: [driveA, driveB]))
         let before = draft
-        XCTAssertFalse(draft.move(from: mac, to: driveA), "the group does not use that device")
+        XCTAssertFalse(draft.move(from: host, to: driveA), "the group does not use that device")
         XCTAssertFalse(draft.move(from: driveA, to: driveB), "it is already kept there")
         XCTAssertFalse(draft.move(from: driveA, to: driveA))
         XCTAssertEqual(draft, before, "a refused move leaves the draft exactly as it was")
@@ -106,10 +106,10 @@ final class StoragePlacementDraftTests: XCTestCase {
         let existing = group(on: [driveA, driveB])
         var draft = StoragePlacementDraft(group: existing)
         XCTAssertFalse(draft.differs(from: existing))
-        XCTAssertTrue(draft.move(from: driveA, to: mac))
+        XCTAssertTrue(draft.move(from: driveA, to: host))
         XCTAssertTrue(draft.differs(from: existing))
         // And back again, which is a real thing to do with a drag.
-        XCTAssertTrue(draft.move(from: mac, to: driveA))
+        XCTAssertTrue(draft.move(from: host, to: driveA))
         XCTAssertFalse(
             draft.differs(from: existing),
             "dragging something out and back is not a change, and must not offer to be saved"
@@ -122,8 +122,8 @@ final class StoragePlacementDraftTests: XCTestCase {
 /// about it.
 final class StoragePlacementIntentTests: XCTestCase {
 
-    private let driveA = UUID(), driveB = UUID(), mac = UUID()
-    private lazy var names: [UUID: String] = [driveA: "Owner's Back", driveB: "My Passport", mac: "this Mac"]
+    private let driveA = UUID(), driveB = UUID(), host = UUID()
+    private lazy var names: [UUID: String] = [driveA: "Owner's Back", driveB: "My Passport", host: "this device"]
 
     private func group(copies: Int, on destinations: [UUID]) -> StorageGroup {
         StorageGroup(
@@ -141,14 +141,14 @@ final class StoragePlacementIntentTests: XCTestCase {
     func testAddingADeviceKeepsEveryDeviceHoldingACopy() {
         var draft = StoragePlacementDraft(group: group(copies: 2, on: [driveA, driveB]))
         XCTAssertTrue(draft.keepsACopyEverywhere)
-        draft.add(mac)
+        draft.add(host)
         XCTAssertEqual(draft.copies, 3, "all three hold a copy, which is what ticking a third means")
         XCTAssertTrue(rule(draft).contains("all 3"), rule(draft))
     }
 
     /// Unless spares were already in use — then another device is another spare.
     func testAddingADeviceToAGroupUsingSparesAddsASpare() {
-        var draft = StoragePlacementDraft(group: group(copies: 2, on: [driveA, driveB, mac]))
+        var draft = StoragePlacementDraft(group: group(copies: 2, on: [driveA, driveB, host]))
         draft.copies = 2
         XCTAssertFalse(draft.keepsACopyEverywhere)
         let fourth = UUID()
@@ -159,20 +159,20 @@ final class StoragePlacementIntentTests: XCTestCase {
     /// Removing a device while "on all of them" was true must not produce an
     /// error about an arrangement nobody asked for.
     func testRemovingADeviceDoesNotStrandTheCount() {
-        var draft = StoragePlacementDraft(group: group(copies: 3, on: [driveA, driveB, mac]))
-        draft.remove(mac)
+        var draft = StoragePlacementDraft(group: group(copies: 3, on: [driveA, driveB, host]))
+        draft.remove(host)
         XCTAssertEqual(draft.copies, 2)
         XCTAssertNil(draft.problem, "and it is saveable, rather than complaining about itself")
     }
 
     /// The sentence that explains why a count and a tick list are both needed.
     func testTheRuleSaysWhichDevicesAreSpares() {
-        var draft = StoragePlacementDraft(group: group(copies: 3, on: [driveA, driveB, mac]))
+        var draft = StoragePlacementDraft(group: group(copies: 3, on: [driveA, driveB, host]))
         draft.copies = 2
         let sentence = rule(draft)
         XCTAssertTrue(sentence.contains("two copies"), sentence)
         XCTAssertTrue(sentence.contains("Owner's Back and My Passport first"), sentence)
-        XCTAssertTrue(sentence.contains("this Mac when one of those is full"), sentence)
+        XCTAssertTrue(sentence.contains("this device when one of those is full"), sentence)
     }
 
     func testOneDeviceReadsAsOneDevice() {

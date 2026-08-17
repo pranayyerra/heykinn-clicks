@@ -163,19 +163,19 @@ final class DestinationModeTests: XCTestCase {
         XCTAssertEqual(store.storageGroups.first?.destinationTargetIDs, [a, b], "and nothing moved")
     }
 
-    /// The host is the machine the drives exist to survive, so a worked-out
+    /// The host is the device the drives exist to survive, so a worked-out
     /// group never spreads onto it. Counting it would let "2 copies" be
-    /// satisfied by this Mac plus one drive and call that safe.
+    /// satisfied by this device plus one drive and call that safe.
     func testThisMacIsNeverPickedAutomatically() throws {
         let (store, directory) = try makeStore()
-        store.registerHostDeviceTarget(at: try makeDirectory("mac"), name: "This Mac")
+        store.registerHostDeviceTarget(at: try makeDirectory("host"), name: "This device")
         try addDrive("Drive A", to: directory, at: Date(timeIntervalSince1970: 1))
         store.loadAll()
         let group = try XCTUnwrap(store.createStorageGroup(label: "Everything"))
         store.resolveAutomaticDestinations()
 
         let resolved = try XCTUnwrap(store.storageGroups.first)
-        XCTAssertEqual(resolved.destinationTargetIDs.count, 1, "one drive, not the Mac as a second")
+        XCTAssertEqual(resolved.destinationTargetIDs.count, 1, "one drive, not the device as a second")
         XCTAssertFalse(resolved.isSatisfiable, "so it says it is short, rather than claiming safety")
     }
 }
@@ -187,41 +187,41 @@ extension DestinationModeTests {
     ///
     /// Naming devices in one of these is an explicit act. A default of
     /// `automatic` throws the list away and works the devices out — which, on
-    /// a setup whose only device is this Mac, works out to nothing at all,
+    /// a setup whose only device is this device, works out to nothing at all,
     /// because the host is never picked automatically. A test that named a
     /// host device and got an empty group is how this was found, twice: once
     /// in `StorageGroup.Defaults` and again in `PendingSourceSetup`.
     func testNamingDevicesInSettingsMeansThem() throws {
         let (store, directory) = try makeStore()
-        store.registerHostDeviceTarget(at: try makeDirectory("mac"), name: "This Mac")
-        let mac = try XCTUnwrap(store.targets.first).id
+        store.registerHostDeviceTarget(at: try makeDirectory("host"), name: "This device")
+        let host = try XCTUnwrap(store.targets.first).id
 
         let fromDefaults = try XCTUnwrap(store.createStorageGroup(
             label: "Named",
-            from: StorageGroup.Defaults(desiredCopies: 1, destinationTargetIDs: [mac])
+            from: StorageGroup.Defaults(desiredCopies: 1, destinationTargetIDs: [host])
         ))
-        XCTAssertEqual(fromDefaults.destinationTargetIDs, [mac])
+        XCTAssertEqual(fromDefaults.destinationTargetIDs, [host])
         XCTAssertEqual(fromDefaults.destinationMode, .chosen)
 
         let setup = AppStore.PendingSourceSetup(
             urls: [directory], label: "Also named",
-            desiredCopies: 1, destinationTargetIDs: [mac]
+            desiredCopies: 1, destinationTargetIDs: [host]
         )
         XCTAssertEqual(setup.destinationMode, .chosen)
     }
 
     /// And the path that means `automatic` says so for itself — working the
     /// devices out from the drives rather than from every registered target,
-    /// which would have opened the add sheet proposing this Mac.
+    /// which would have opened the add sheet proposing this device.
     func testTheAddSheetWorksItsDevicesOutFromDrivesOnly() throws {
         let (store, directory) = try makeStore()
-        store.registerHostDeviceTarget(at: try makeDirectory("mac"), name: "This Mac")
+        store.registerHostDeviceTarget(at: try makeDirectory("host"), name: "This device")
         let driveA = try addDrive("Drive A", to: directory, at: Date(timeIntervalSince1970: 1))
         store.loadAll()
 
         store.beginAddingSource([directory])
         let setup = try XCTUnwrap(store.pendingSourceSetup)
         XCTAssertEqual(setup.destinationMode, .automatic)
-        XCTAssertEqual(setup.destinationTargetIDs, [driveA], "the drive, not the Mac")
+        XCTAssertEqual(setup.destinationTargetIDs, [driveA], "the drive, not the device")
     }
 }

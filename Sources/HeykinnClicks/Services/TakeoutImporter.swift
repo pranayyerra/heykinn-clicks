@@ -79,7 +79,7 @@ enum TakeoutImporter {
 
     /// `batchID` lets a multi-part export set share one import batch across
     /// all its parts. When `placement` is non-empty (the workspace lives on a
-    /// managed drive, i.e. an extracted folder — never a Mac temp workspace),
+    /// managed drive, i.e. an extracted folder — never a local temp workspace),
     /// each imported file is recorded as that drive's replica in place: the
     /// drive already holds the bytes, so no duplicate copy is queued for it.
     /// `fileURLs` imports an explicit subset (a chunk); omit it to import
@@ -176,7 +176,7 @@ enum TakeoutImporter {
 
                 // When the source file already lives on a managed drive, that
                 // file IS the drive's replica: staging a second copy on the
-                // Mac would duplicate the whole archive onto the boot disk for
+                // device would duplicate the whole archive onto the boot disk for
                 // no benefit. Only content with no drive-resident copy is
                 // staged.
                 var stagingPath: String?

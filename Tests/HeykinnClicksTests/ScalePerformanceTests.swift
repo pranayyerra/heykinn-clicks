@@ -62,7 +62,7 @@ final class ScalePerformanceTests: XCTestCase {
         let growth = large / small
 
         // 8x the data must not cost anything like 64x the time. Generous
-        // bound so the test is not flaky on a busy machine, but a return of
+        // bound so the test is not flaky on a busy device, but a return of
         // the quadratic scan would blow straight past it.
         XCTAssertLessThan(
             growth, 24,

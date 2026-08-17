@@ -115,7 +115,7 @@ struct ExportPartGrid: View {
             }
             .map { (name: driveNames[$0.targetID!] ?? "a drive", archive: $0) }
             .sorted { ($0.name, $0.archive.kind == .zip ? 0 : 1) < ($1.name, $1.archive.kind == .zip ? 0 : 1) }
-        // The devices this export names, not every device registered — a Mac
+        // The devices this export names, not every device registered — a device
         // that was never asked to hold the zips does not owe a copy of them.
         let missing = managedTargetIDs.subtracting(part.targetIDs)
             .compactMap { driveNames[$0] }

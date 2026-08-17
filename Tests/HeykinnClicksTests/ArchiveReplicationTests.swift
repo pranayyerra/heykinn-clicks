@@ -244,7 +244,7 @@ final class ArchiveReplicationTests: XCTestCase {
     }
 
     /// The consequence the user actually sees: a single-target install has no
-    /// transfers to run, nothing stranded, and nothing parked on the Mac
+    /// transfers to run, nothing stranded, and nothing parked on the device
     /// waiting for a drive that the policy never asked for.
     func testASingleTargetInstallHasNoTransfersToRun() {
         let a = UUID()

@@ -292,7 +292,7 @@ enum ImportService {
 
                 // A file already sitting on a managed drive is that drive's
                 // replica; staging a second copy would duplicate the source
-                // onto the Mac for no benefit.
+                // onto the device for no benefit.
                 var stagingPath: String?
                 if let replica = placement.archiveBackedReplica(for: assetID, at: fileURL, now: now) {
                     archiveBacked[assetID] = replica

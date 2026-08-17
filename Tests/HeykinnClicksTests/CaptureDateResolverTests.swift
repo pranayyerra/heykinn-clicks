@@ -165,7 +165,7 @@ final class CaptureDateResolverTests: XCTestCase {
         XCTAssertTrue(try! XCTUnwrap(source).isExact, "This is what stops the UI saying 'approximate'")
     }
 
-    /// EXIF carries no timezone, so a Mac that has changed zones since the
+    /// EXIF carries no timezone, so a device that has changed zones since the
     /// import reparses the same string to a different instant. On the real
     /// catalog that is 2,091 rows, all at half-hour offsets. Asserting
     /// `fileMetadata` there would attach the camera's authority to a date the
