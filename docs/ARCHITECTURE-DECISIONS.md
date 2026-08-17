@@ -435,8 +435,11 @@ and both are what makes the deletion arrive complete on the other device.
 tombstone arriving. It resolves on the next sync, and nothing reads a copy record
 whose photograph is absent.
 
-**Status:** decided and built. The inert `PRAGMA` should be removed or given real
-constraints on the device-local tables, where ordering is not a concern.
+**Status:** decided and built. The inert `PRAGMA foreign_keys = ON` has been
+removed rather than given constraints: left on, it claimed an integrity that did
+not exist, and the first foreign key anybody added to a shared table would have
+started being enforced and dropping merged rows. `CatalogScopeTests` now checks
+that no travelling table declares one.
 
 ---
 

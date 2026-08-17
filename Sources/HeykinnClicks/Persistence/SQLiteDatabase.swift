@@ -65,7 +65,23 @@ final class SQLiteDatabase {
         }
         guard !readOnly else { return }
         try exec("PRAGMA journal_mode = WAL;")
-        try exec("PRAGMA foreign_keys = ON;")
+        // `PRAGMA foreign_keys = ON` was here and enforced nothing, because the
+        // schema declares no foreign keys. It is gone rather than kept, and
+        // that is a decision rather than a tidy-up.
+        //
+        // **A merge must accept a child before its parent.** Records arrive in
+        // whatever order a drive is read, so a device routinely learns about a
+        // copy before the photograph it belongs to. A foreign key would reject
+        // that record, and the reader has no way to ask for the missing parent —
+        // order-independence and referential integrity cannot both hold, and
+        // order-independence is the one the whole sync model rests on.
+        //
+        // Left switched on, the pragma was a trap in waiting: it told a reader
+        // there was integrity here when there was none, and it meant that the
+        // first foreign key anybody added to a shared table would quietly start
+        // being enforced and start dropping merged rows. Cascades travel as
+        // explicit changes instead — see `ARCHITECTURE-DECISIONS.md` D14 and
+        // `CatalogScopeTests.testNoSharedTableDeclaresAForeignKey`.
     }
 
     deinit {

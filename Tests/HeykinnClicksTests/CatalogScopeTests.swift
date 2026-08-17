@@ -86,4 +86,30 @@ final class CatalogScopeTests: XCTestCase {
             )
         }
     }
+
+    /// A merge has to accept a child before its parent — records arrive in
+    /// whatever order a drive is read, so a device routinely learns about a copy
+    /// before the photograph it belongs to. A foreign key would reject that
+    /// record and the reader has no way to ask for the missing parent, so
+    /// order-independence and referential integrity cannot both hold on a table
+    /// that travels.
+    ///
+    /// The database enforces nothing either way — `PRAGMA foreign_keys` is
+    /// deliberately not switched on — so a constraint added here would be inert
+    /// today and start dropping merged rows the moment somebody turned it on
+    /// while tidying up. This is the check that makes that unlikely to survive
+    /// review. See `ARCHITECTURE-DECISIONS.md` D14.
+    func testNoSharedTableDeclaresAForeignKey() throws {
+        let catalog = try makeCatalog()
+        for table in CatalogScope.shared.union(CatalogScope.appendOnly).sorted() {
+            let keys = try catalog.database.query("PRAGMA foreign_key_list(\"\(table)\");") {
+                $0.text(2)
+            }
+            XCTAssertTrue(
+                keys.isEmpty,
+                "\(table) travels between devices and declares a foreign key to \(keys.joined(separator: ", ")) "
+                + "— a merge that receives the child first could never apply it"
+            )
+        }
+    }
 }
