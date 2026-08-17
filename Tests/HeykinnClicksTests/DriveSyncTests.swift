@@ -181,6 +181,19 @@ final class DriveSyncTests: XCTestCase {
     /// the records that were being written and nothing else — and they must
     /// arrive on the next sync, because the sender's watermark never moved past
     /// them.
+    ///
+    /// **One row is held back beyond the damage, deliberately.** Everything a
+    /// single write produces carries one stamp, so a tear cuts into at most one
+    /// stamp — and from the file alone there is no way to tell whether the last
+    /// stamp still readable was whole or was where the cut landed. Its surviving
+    /// records look identical either way. So both sides treat the last stamp of
+    /// a damaged segment as suspect: the reader does not apply it and the writer
+    /// does not count it as sent.
+    ///
+    /// The cost is that a row which *did* survive is delayed by one sync. The
+    /// alternative was measured on a real volume and is worse: a row arriving
+    /// with columns missing, both sides believing it delivered, and no sync ever
+    /// asking for the rest.
     func testADriveYankedMidWriteLosesOnlyTheTornTail() throws {
         let deviceA = try makeCatalog("a")
         let deviceB = try makeCatalog("b")
@@ -188,34 +201,45 @@ final class DriveSyncTests: XCTestCase {
 
         let segment = DriveSync.segmentPath(deviceA.journal.device.id, index: 1)
 
+        // Three separate writes, so the segment holds three stamps and the one
+        // held back as suspect is not the whole file.
         try deviceA.upsertStorageGroup(makeGroup(label: "First"))
         try DriveSync.publish(from: deviceA, to: drive)
-        let intact = try XCTUnwrap(try drive.read(segment)).count
 
         try deviceA.upsertStorageGroup(makeGroup(label: "Second"))
         try DriveSync.publish(from: deviceA, to: drive)
+        let intact = try XCTUnwrap(try drive.read(segment)).count
 
-        // Cut a little way into the second batch, the way an interrupted append
+        try deviceA.upsertStorageGroup(makeGroup(label: "Third"))
+        try DriveSync.publish(from: deviceA, to: drive)
+
+        // Cut a little way into the third batch, the way an interrupted append
         // leaves a file: everything before it whole, one line half-written.
         //
         // Cutting merely a few bytes off the end is not this test. One storage
         // group is several records — one per column — so clipping the tail only
-        // loses one of them, and the row still arrives from its siblings. The
-        // cut has to land inside the batch to be a torn write at all.
+        // loses one of them. The cut has to land inside the batch to be a torn
+        // write at all.
         let whole = try XCTUnwrap(try drive.read(segment))
         try drive.writeAtomically(whole.prefix(intact + 20), to: segment)
 
         let damaged = try DriveSync.merge(into: deviceB, from: drive)
 
         XCTAssertEqual(damaged.truncatedPeers, [deviceA.journal.device.id], "Damage went unreported")
-        XCTAssertEqual(try labels(deviceB), ["First"], "The intact part should still have arrived")
+        XCTAssertEqual(
+            try labels(deviceB), ["First"],
+            "Everything before the suspect stamp should still have arrived"
+        )
 
         // Plugged in again, with the drive now writable: the lost work is
         // re-published because A never recorded it as sent.
         try DriveSync.publish(from: deviceA, to: drive)
         try DriveSync.merge(into: deviceB, from: drive)
 
-        XCTAssertEqual(try labels(deviceB), ["First", "Second"], "The torn records never came back")
+        XCTAssertEqual(
+            try labels(deviceB), ["First", "Second", "Third"],
+            "The torn records never came back"
+        )
     }
 
     /// A drive nobody has ever synced to is not an error.

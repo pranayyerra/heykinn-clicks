@@ -492,10 +492,33 @@ enum DriveSync {
             let result = SegmentCodec.decode(
                 try store.read("\(deviceDirectory(deviceID))/\(name)") ?? Data()
             )
-            raise(result.records.map(\.stamp).max())
+            raise(fullyReadableStamp(result))
             if result.stoppedAt != nil { break }
         }
         return highest
+    }
+
+    /// The highest stamp a segment can be trusted to hold *in full*.
+    ///
+    /// **A tear splits one row, and its surviving records look like a whole
+    /// one.** Everything a single write produces carries one stamp and is
+    /// written contiguously, so a truncation can cut into at most one stamp —
+    /// the last one still readable. Take that stamp at face value and the writer
+    /// records the row as published while some of its columns are still sitting
+    /// in the part that was lost; it is never offered again, and the row arrives
+    /// short and stays short for ever.
+    ///
+    /// Found on a real volume, not by reasoning: cutting a segment at four
+    /// different depths lost a photograph permanently at all four. It had
+    /// survived every directory-backed test because those tear at a line
+    /// boundary, where the last stamp happens to be whole.
+    ///
+    /// Dropping the last stamp of a damaged segment can only be conservative —
+    /// at worst it re-sends a row that did survive, and a merge discards that.
+    private static func fullyReadableStamp(_ result: SegmentCodec.DecodeResult) -> HLCTimestamp? {
+        let stamps = Set(result.records.map(\.stamp)).sorted()
+        guard result.stoppedAt != nil else { return stamps.last }
+        return stamps.dropLast().last
     }
 
     /// This device's segments, by index and size, without reading any of them.
@@ -607,6 +630,22 @@ enum DriveSync {
                     // segments — they were written after the damage.
                     break
                 }
+            }
+
+            // The other half of the same problem `fullyReadableStamp` solves.
+            //
+            // A tear cuts into one stamp, and what survives of it looks like a
+            // whole row. Applying that would build a row short of columns *and*
+            // move the watermark past it — so when the writer repairs its tail
+            // and offers the row again, at the same stamp, this device would
+            // filter it straight back out as already seen. The row would be
+            // wrong on this device permanently, with both sides believing they
+            // had done their job.
+            //
+            // Dropped rather than applied: the writer re-sends it, and until
+            // then a row absent is honest where a row half-built is not.
+            if peer.truncated, let highest = fresh.map(\.stamp).max() {
+                fresh.removeAll { $0.stamp == highest }
             }
 
             // The checkpoint's horizon counts as read once it is applied, so

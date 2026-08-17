@@ -325,8 +325,8 @@ torn tail), a checksum mismatch, or JSON that is not a record.
 
 ### 3.4 Torn writes, and recovering from them
 
-An interrupted append can only damage the tail. Three rules make that survivable,
-and all three are needed — the first two alone are not enough:
+An interrupted append can only damage the tail. Four rules make that survivable,
+and all four are needed — no three of them are:
 
 1. **A writer records what it published only after the segment is written.** If
    it dies between the two, the records are simply written again, and a merge
@@ -338,7 +338,25 @@ and all three are needed — the first two alone are not enough:
    segment and takes the lower of what it believes it sent and what is actually
    still readable. The cheap check first: if the newest segment decodes whole,
    nothing earlier can have been damaged by an append.
-3. **A writer truncates its own damaged tail back to the last complete line
+3. **Both sides treat the last stamp of a damaged segment as suspect.**
+   Everything a single write produces carries one stamp and is written
+   contiguously, so a tear cuts into at most one stamp — and from the file
+   alone the last stamp still readable is indistinguishable from one that was
+   cut. Its surviving records look like a whole row and are not one. So a
+   reader does not apply that stamp, and a writer does not count it as
+   published.
+
+   Without this, a row arrives with columns missing, both sides record it as
+   delivered, and no later sync ever asks for the rest. Found on a real
+   volume, where four cuts at four depths each lost a photograph permanently;
+   it survived every directory-backed test because those tear at a line
+   boundary, where the last stamp happens to be whole.
+
+   The cost is that a row which *did* survive is delayed by one sync. That is
+   the right direction to err: re-sending is idempotent, and a row half-built
+   is not recoverable.
+
+4. **A writer truncates its own damaged tail back to the last complete line
    before appending.** Without this, the new record is spliced onto the
    half-written one and the file stays corrupt from that point — and because
    readers stop at the first bad line, that would block every record written
