@@ -145,26 +145,14 @@ enum TakeoutScanner {
         return tail.isEmpty || tail.allSatisfy(\.isNumber)
     }
 
-    /// Peeks at the zip's file listing (via `unzip -Z1`) and checks whether its
-    /// entries are rooted at `Takeout/` — catches renamed Takeout downloads.
+    /// Peeks at the zip's own listing and checks whether its entries are rooted
+    /// at `Takeout/` — catches renamed Takeout downloads.
+    ///
+    /// This one was never affected by `unzip`'s name mangling, since it only
+    /// compares an ASCII prefix. It reads the archive directly anyway: one less
+    /// subprocess, and one less thing that only works on macOS.
     static func zipListingLooksLikeTakeout(_ url: URL) -> Bool {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = ["-Z1", url.path]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-        } catch {
-            return false
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0, let listing = String(data: data, encoding: .utf8) else {
-            return false
-        }
-        let entries = listing.split(separator: "\n").prefix(20)
+        let entries = ZipTools.listEntries(inZip: url).prefix(20)
         return !entries.isEmpty && entries.allSatisfy { $0.lowercased().hasPrefix("takeout/") }
     }
 

@@ -4,7 +4,7 @@ import Foundation
 /// folder named zip-name-minus-.zip (`takeout-<session>-<part>`) — the
 /// convention the scanner groups into export sets. The zip is never modified:
 /// it remains the pristine original; the folder exists to make imports fast
-/// (no per-import extraction to Mac scratch space) and is safe to delete
+/// (no per-import extraction to local scratch space) and is safe to delete
 /// after replication.
 enum TakeoutExtractor {
 
@@ -28,6 +28,16 @@ enum TakeoutExtractor {
     static func destinationURL(forZip zipURL: URL) -> URL {
         zipURL.deletingPathExtension()
     }
+
+    /// Why the in-process reader last gave up and `ditto` finished the job, or
+    /// nil if that has not happened.
+    ///
+    /// `ditto` is macOS-only, so on any other platform there is no fallback and
+    /// this is the whole story of a failed extraction. Kept as a plain property
+    /// rather than plumbed through a result type because nothing decides
+    /// anything on it — it exists to be read when somebody asks why an import
+    /// was slow, or when the reader turns out to have a gap.
+    private(set) nonisolated(unsafe) static var lastFallbackReason: String?
 
     /// Best available free-space reading, or nil when the volume can't say.
     /// `volumeAvailableCapacityForImportantUsage` is APFS-oriented and reports
@@ -78,8 +88,16 @@ enum TakeoutExtractor {
             let workers = ParallelZipExtraction.recommendedWorkerCount(destination: temporary)
             try ParallelZipExtraction.extract(zipURL: zipURL, into: temporary, workers: workers)
         } catch {
-            // Parallel path failed (unreadable listing, worker error): fall
-            // back to single-process ditto before giving up.
+            // The reader failed (unreadable listing, an entry that would not
+            // come out): fall back to `ditto` before giving up, because an
+            // import that works is worth more to somebody than a tidy
+            // dependency graph.
+            //
+            // **Recorded, not swallowed.** This is now the app's own extractor
+            // failing rather than a foreign program, so a fallback that fired
+            // silently would hide exactly the bug worth knowing about. The
+            // reason is kept for the caller to surface.
+            lastFallbackReason = error.localizedDescription
             try? FileManager.default.removeItem(at: temporary)
             try FileManager.default.createDirectory(at: temporary, withIntermediateDirectories: true)
             try dittoExtract(zipURL: zipURL, into: temporary)

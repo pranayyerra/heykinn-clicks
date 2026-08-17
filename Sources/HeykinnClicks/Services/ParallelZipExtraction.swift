@@ -1,7 +1,7 @@
 import Foundation
 
 /// Extracts a zip with multiple concurrent unzip workers, each owning a
-/// disjoint slice of the entry tree. Worker count adapts to the Mac's core
+/// disjoint slice of the entry tree. Worker count adapts to the device's core
 /// count AND the destination disk: SSDs benefit from many parallel workers,
 /// while spinning/USB targets are kept at low concurrency because parallel
 /// writes there cause seek-thrashing that is slower than serial extraction.
@@ -55,8 +55,17 @@ enum ParallelZipExtraction {
     }
 
     /// Extracts every entry of the zip into `destination` using up to
-    /// `workers` concurrent unzip processes. Throws on any worker failure;
-    /// the caller owns cleanup of the destination.
+    /// `workers` concurrent readers. Throws on any worker failure; the caller
+    /// owns cleanup of the destination.
+    ///
+    /// **No subprocess.** This used to run `unzip` once per bucket, which is why
+    /// buckets used to be *patterns* rather than names: an argument list has a
+    /// length limit and 6,660 names do not fit in one. Reading the archive in
+    /// process removes both the limit and the pattern language, so a worker is
+    /// handed the exact entries it owns and nothing has to be escaped, quoted or
+    /// matched. It also removes the reason a name could ever be misunderstood
+    /// between listing and extracting: there is only one listing now, and it is
+    /// the archive's own.
     static func extract(zipURL: URL, into destination: URL, workers: Int) throws {
         let entries = ZipTools.listEntries(inZip: zipURL)
         guard !entries.isEmpty else {
@@ -65,78 +74,82 @@ enum ParallelZipExtraction {
         let buckets = partition(entries: entries, workers: max(1, workers))
         try FileManager.default.createDirectory(at: destination, withIntermediateDirectories: true)
 
-        var processes: [(Process, Pipe)] = []
-        for bucket in buckets {
-            let process = Process()
-            process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-            process.arguments = ["-qq", "-o", zipURL.path] + bucket + ["-d", destination.path]
-            let errorPipe = Pipe()
-            process.standardError = errorPipe
-            process.standardOutput = Pipe()
-            try process.run()
-            processes.append((process, errorPipe))
-        }
+        // Each worker opens its own reader, so each has its own file handle and
+        // its own position in the archive. Sharing one would serialise them on
+        // every seek, which is the opposite of the point.
+        let failures = Mutex<[String: String]>([:])
+        let thrown = Mutex<Error?>(nil)
 
-        var failureMessages: [String] = []
-        for (process, errorPipe) in processes {
-            let errorData = errorPipe.fileHandleForReading.readDataToEndOfFile()
-            process.waitUntilExit()
-            if process.terminationStatus != 0 {
-                let message = String(data: errorData, encoding: .utf8) ?? "exit \(process.terminationStatus)"
-                failureMessages.append(message.trimmingCharacters(in: .whitespacesAndNewlines))
+        DispatchQueue.concurrentPerform(iterations: buckets.count) { index in
+            do {
+                let outcome = try ZipExtractor.extract(
+                    entries: buckets[index], from: zipURL, into: destination
+                )
+                if !outcome.failures.isEmpty {
+                    failures.withLock { $0.merge(outcome.failures) { first, _ in first } }
+                }
+            } catch {
+                thrown.withLock { $0 = $0 ?? error }
             }
         }
-        guard failureMessages.isEmpty else {
-            throw ExtractionError.workerFailed(failureMessages.joined(separator: "; "))
+
+        if let error = thrown.withLock({ $0 }) { throw error }
+        let unwritten = failures.withLock { $0 }
+        guard unwritten.isEmpty else {
+            // Named, up to a point — a listing of 4,000 lines is not a message.
+            let sample = unwritten.sorted { $0.key < $1.key }.prefix(3)
+                .map { "\($0.key): \($0.value)" }
+                .joined(separator: "; ")
+            throw ExtractionError.workerFailed(
+                unwritten.count <= 3 ? sample : "\(sample); and \(unwritten.count - 3) more"
+            )
         }
     }
 
-    /// Splits entries into ≤ `workers` buckets of unzip include-patterns.
+    /// Splits entries into ≤ `workers` buckets, each owning whole directories.
+    ///
     /// Entries are grouped by their first three path components (Takeout /
-    /// product / album-or-year) — sibling prefixes, so the resulting
-    /// `<prefix>/*` patterns are mutually disjoint and no two workers ever
-    /// touch the same file. Shallow entries are passed by exact (escaped)
-    /// name. Groups are balanced across buckets largest-first.
+    /// product / album-or-year), so buckets are disjoint *directories* and no
+    /// two workers ever create the same intermediate folder — which is the one
+    /// thing concurrent extraction can race on. Shallow entries are kept
+    /// together as one group. Groups are balanced across buckets largest-first.
     static func partition(entries: [String], workers: Int) -> [[String]] {
-        struct Group {
-            var pattern: String
-            var entryCount: Int
-        }
-        var groupCounts: [String: Int] = [:]
-        var exactNames: [String] = []
+        var groups: [String: [String]] = [:]
 
         for entry in entries {
             let components = entry.split(separator: "/", omittingEmptySubsequences: false)
-            if components.count > 3 {
-                let prefix = components[0...2].joined(separator: "/")
-                groupCounts[prefix, default: 0] += 1
-            } else {
-                exactNames.append(entry)
-            }
+            // "" collects the shallow ones; no real prefix is empty.
+            let key = components.count > 3 ? components[0...2].joined(separator: "/") : ""
+            groups[key, default: []].append(entry)
         }
 
-        var groups = groupCounts.map { Group(pattern: ZipTools.escapePattern($0.key) + "/*", entryCount: $0.value) }
-        if !exactNames.isEmpty {
-            // Shallow files are few; keep them together as one group.
-            groups.append(Group(
-                pattern: "",
-                entryCount: exactNames.count
-            ))
-        }
-
-        let bucketCount = min(workers, max(1, groups.count))
+        let bucketCount = min(max(1, workers), max(1, groups.count))
         var buckets: [[String]] = Array(repeating: [], count: bucketCount)
         var bucketLoads = Array(repeating: 0, count: bucketCount)
 
-        for group in groups.sorted(by: { $0.entryCount > $1.entryCount }) {
+        for group in groups.values.sorted(by: { $0.count > $1.count }) {
             let lightest = bucketLoads.enumerated().min(by: { $0.element < $1.element })!.offset
-            if group.pattern.isEmpty {
-                buckets[lightest].append(contentsOf: exactNames.map(ZipTools.escapePattern))
-            } else {
-                buckets[lightest].append(group.pattern)
-            }
-            bucketLoads[lightest] += group.entryCount
+            buckets[lightest].append(contentsOf: group)
+            bucketLoads[lightest] += group.count
         }
         return buckets.filter { !$0.isEmpty }
+    }
+}
+
+/// The smallest possible lock around a value.
+///
+/// Here because `concurrentPerform` hands back results from several threads and
+/// there is nothing else in this codebase that needs one — the rest of the app
+/// is actor-isolated. Deliberately not a general utility.
+private final class Mutex<Value>: @unchecked Sendable {
+    private var value: Value
+    private let lock = NSLock()
+
+    init(_ value: Value) { self.value = value }
+
+    func withLock<T>(_ body: (inout Value) -> T) -> T {
+        lock.lock()
+        defer { lock.unlock() }
+        return body(&value)
     }
 }

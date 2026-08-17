@@ -2,84 +2,107 @@ import Foundation
 
 enum ZipTools {
     /// All file entry paths in a zip (directories excluded).
+    ///
+    /// **Read from the archive's own central directory, not from `unzip -Z1`.**
+    ///
+    /// This listing is the source every other zip operation draws from: the
+    /// reconciler hashes each name to claim it as a copy, and the parallel
+    /// extractor turns names into patterns. `unzip` replaces every non-ASCII
+    /// byte in a name it prints with a literal `?` — and `?` is its own
+    /// single-character wildcard, so asking for the entry back matched nothing.
+    /// Measured on a real Google export: `unzip -p` with the correct name exits
+    /// 0 and returns the bytes; with the name as `unzip -Z1` printed it, exit 11
+    /// and no output.
+    ///
+    /// What that cost is not theoretical. A photograph whose name carries a
+    /// narrow no-break space — every Mac screenshot Google exports — could not
+    /// be claimed as a copy on the drive holding it, and the caller recorded it
+    /// as `.missing`: the app reporting a photograph absent from a drive it was
+    /// sitting on.
     static func listEntries(inZip zipURL: URL) -> [String] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/unzip")
-        process.arguments = ["-Z1", zipURL.path]
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = Pipe()
-        do {
-            try process.run()
-        } catch {
-            return []
-        }
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        process.waitUntilExit()
-        guard process.terminationStatus == 0, let listing = String(data: data, encoding: .utf8) else {
-            return []
-        }
-        return listing.split(separator: "\n").map(String.init).filter { !$0.hasSuffix("/") }
+        guard let reader = try? ZipReader(url: zipURL) else { return [] }
+        defer { reader.close() }
+        return reader.names
     }
 
-    /// Extracts the entries matching a pattern into a directory.
+    /// Extracts the entries whose names match a glob into a directory.
     ///
-    /// Uses `tar` — libarchive — rather than `unzip`, which cannot do this
-    /// correctly on a real Google export.
+    /// **The pattern is matched here, against the archive's own names**, rather
+    /// than handed to a program that has its own idea of what a name is. That
+    /// removes the class of bug this whole file exists because of: there is one
+    /// listing, it comes from the central directory, and the same string is used
+    /// to match and to write.
     ///
-    /// A Mac screenshot exported by Google carries a narrow no-break space in
-    /// its name: `Image 10-10-24 at 4.54 PM.jpg`. `unzip` mangles every
-    /// non-ASCII byte to a literal `?` — in its *listing* as well as on disk —
-    /// and then aborts mid-archive with a "disk full" error that has nothing
-    /// to do with the disk, taking every entry after it. On one real part that
-    /// was 4,673 of 6,660 sidecars lost, silently, with a zero exit path that
-    /// looked like success.
-    ///
-    /// Reading each entry to stdout instead does not help: the only name to
-    /// ask for comes from that same mangled listing, and the `?` it contains
-    /// is unzip's own single-character wildcard, so the round trip either
-    /// matches by luck or not at all.
-    ///
-    /// `tar` handles the name, extracts it, and exits 0. Names then come from
-    /// the filesystem, which is the one place they are certainly right.
-    ///
-    /// Returns the extracted file paths relative to `destination`, so the
-    /// caller can reconstruct where each sat inside the archive.
+    /// Returns the extracted file paths relative to `destination`, so the caller
+    /// can reconstruct where each sat inside the archive. Whatever landed is
+    /// worth having — an entry that fails is skipped and the rest still arrive,
+    /// because a Takeout part with one unreadable entry is still worth the other
+    /// 6,659.
     @discardableResult
     static func extractEntries(
         matching pattern: String, inZip zipURL: URL, to destination: URL
     ) -> [String] {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        process.arguments = ["-xf", zipURL.path, "-C", destination.path, "--include", pattern]
-        process.standardOutput = Pipe()
-        process.standardError = Pipe()
-        do {
-            try process.run()
-        } catch {
-            return []
-        }
-        process.waitUntilExit()
-
-        // Whatever landed is worth having. A part-way failure used to discard
-        // everything it had already written, which turned a partial read into
-        // no read at all — so the listing below is the answer, not the status.
-        guard let walker = FileManager.default.enumerator(
-            at: destination, includingPropertiesForKeys: [.isRegularFileKey]
-        ) else { return [] }
-        var found: [String] = []
-        let prefix = destination.standardizedFileURL.path + "/"
-        for case let url as URL in walker {
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
-            else { continue }
-            let path = url.standardizedFileURL.path
-            found.append(path.hasPrefix(prefix) ? String(path.dropFirst(prefix.count)) : path)
-        }
-        return found
+        let wanted = listEntries(inZip: zipURL).filter { matches(pattern, $0) }
+        guard !wanted.isEmpty else { return [] }
+        return (try? ZipExtractor.extract(
+            entries: wanted, from: zipURL, into: destination
+        ))?.written ?? []
     }
 
-    /// Escapes unzip's wildcard characters so a literal path can be passed as
-    /// an include pattern.
+    /// Glob matching: `*` spans any run of characters, `?` is exactly one, and
+    /// `\` escapes either so it can be matched literally.
+    ///
+    /// **`*` crosses `/` on purpose.** That is what the callers already relied
+    /// on from `unzip` and `tar`: a bucket pattern of `<prefix>/*` has to take
+    /// everything beneath the prefix, and `*.json` has to reach a sidecar
+    /// nested three directories down. A shell's rule — where `*` stops at a
+    /// separator — would quietly extract nothing.
+    ///
+    /// **Character classes are not supported**, and that is not an omission.
+    /// Nothing here builds one: patterns are either `escapePattern(prefix) +
+    /// "/*"` or a literal like `*.json`, and `escapePattern` escapes brackets
+    /// precisely so a name containing `[` is matched as itself. An unescaped
+    /// bracket is therefore just a bracket, which is predictable and has no
+    /// branch that real input never reaches.
+    ///
+    /// Compared over Unicode characters rather than bytes: patterns are built
+    /// from names that came out of the same archive, so both sides are already
+    /// in the archive's own normalisation.
+    static func matches(_ pattern: String, _ name: String) -> Bool {
+        let p = Array(pattern), n = Array(name)
+        // Iterative, remembering the last `*` to fall back to, rather than
+        // recursive: a recursive matcher against a 6,000-entry listing is a
+        // stack depth nobody measured.
+        var pi = 0, ni = 0
+        var starAt = -1, resumeAt = 0
+
+        while ni < n.count {
+            if pi < p.count, p[pi] == "\\", pi + 1 < p.count, p[pi + 1] == n[ni] {
+                pi += 2
+                ni += 1
+            } else if pi < p.count, p[pi] == "?" || p[pi] == n[ni] {
+                pi += 1
+                ni += 1
+            } else if pi < p.count, p[pi] == "*" {
+                starAt = pi
+                resumeAt = ni
+                pi += 1
+            } else if starAt >= 0 {
+                // Back to the last `*` and let it swallow one more character.
+                resumeAt += 1
+                ni = resumeAt
+                pi = starAt + 1
+            } else {
+                return false
+            }
+        }
+        // Trailing `*`s may match nothing at all.
+        while pi < p.count, p[pi] == "*" { pi += 1 }
+        return pi == p.count
+    }
+
+    /// Escapes the wildcard characters, so a literal path can be passed where a
+    /// pattern is expected.
     static func escapePattern(_ path: String) -> String {
         var escaped = ""
         for character in path {
