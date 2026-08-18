@@ -365,6 +365,61 @@ final class RealVolumeSyncTests: XCTestCase {
         }
     }
 
+    /// The damage a yank leaves that truncation does not: the file keeps its
+    /// length and the tail never reached the disk.
+    ///
+    /// **Neither simulation available here can produce this, which is why it is
+    /// made by hand.** Detaching a disk image discards the buffer cache, so the
+    /// append is all-or-nothing — measured, byte-identical before and after.
+    /// Killing the writing process does not tear one either: the app appends a
+    /// whole batch in a single write, so a dying process leaves the file at a
+    /// line boundary — measured too, 11,600 lines and every checksum good after
+    /// a SIGKILL mid-publish.
+    ///
+    /// A real disconnect can still do it, because the size can be recorded
+    /// while the data is still in flight. What lands then is not a short file
+    /// but a full-length one ending in bytes nobody wrote.
+    func testATailThatNeverReachedTheDiskIsCaught() throws {
+        for rubbish in [Data(repeating: 0, count: 1_200), Data(repeating: 0xFF, count: 1_200)] {
+            let deviceA = try makeCatalog("a-\(rubbish.first!)")
+            let deviceB = try makeCatalog("b-\(rubbish.first!)")
+            let drive = try makeStore()
+
+            for index in 0..<400 { try deviceA.upsertAsset(makeAsset("IMG_\(index).jpg")) }
+            try DriveSync.publish(from: deviceA, to: drive, checkpointing: .never)
+
+            let device = try XCTUnwrap(deviceA.journal).device.id
+            let segment = drive.root.appendingPathComponent(DriveSync.segmentPath(device, index: 1))
+            var bytes = try Data(contentsOf: segment)
+            let length = bytes.count
+            bytes.replaceSubrange((bytes.count - rubbish.count)..<bytes.count, with: rubbish)
+            try bytes.write(to: segment)
+            XCTAssertEqual(
+                try Data(contentsOf: segment).count, length,
+                "the point of this case is that the file did not get shorter"
+            )
+
+            // Read it: the checksums have to catch bytes nobody wrote, and the
+            // reader must stop rather than trust what follows.
+            let torn = try DriveSync.merge(into: deviceB, from: drive)
+            XCTAssertFalse(
+                torn.truncatedPeers.isEmpty,
+                "a tail of \(rubbish.first! == 0 ? "zeroes" : "0xFF") was read as though it were records"
+            )
+            let whileDamaged = try deviceB.fetchAssets().count
+            XCTAssertLessThan(whileDamaged, 400)
+
+            // And the writer repairs its own tail, so nothing is lost for good.
+            try DriveSync.publish(from: deviceA, to: drive, checkpointing: .never)
+            let after = try DriveSync.merge(into: deviceB, from: drive)
+            XCTAssertTrue(after.truncatedPeers.isEmpty, "still damaged after a repair")
+            XCTAssertEqual(
+                try deviceB.fetchAssets().count, 400,
+                "photographs lost to a tail that never landed did not come back"
+            )
+        }
+    }
+
     private func detach(_ image: String) {
         run("/usr/bin/hdiutil", ["detach", "-force", volume.path])
     }

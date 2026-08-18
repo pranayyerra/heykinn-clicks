@@ -364,6 +364,20 @@ and all four are needed — no three of them are:
 
 A device repairs only its own directory, so this never breaks rule 3.1.
 
+**What a disconnect can actually leave.** Three shapes were tried against a real
+exFAT volume, and only the third is a real hazard:
+
+| Tried | What landed |
+|---|---|
+| Detaching the volume mid-append | Nothing. The buffer cache goes with it, so the append is all-or-nothing — the segment was byte-identical before and after. |
+| `SIGKILL` on the writing process mid-publish | A whole file. A batch is appended in a single write, so a dying process cannot split one: 11,600 lines, every checksum good, ending on a newline. |
+| A full-length file whose tail never reached the disk | **The real one.** The size is recorded while the data is still in flight, so what remains is not a short file but a complete-looking one ending in bytes nobody wrote. |
+
+The third is why every line carries its own checksum rather than the file
+carrying one at the end: a tail of zeroes is indistinguishable from a tail of
+records until something checks. Covered for both zeroes and `0xFF` in
+`RealVolumeSyncTests`.
+
 ### 3.5 `manifest.json`
 
 ```json
