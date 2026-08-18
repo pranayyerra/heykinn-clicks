@@ -9,9 +9,11 @@ recorded at the bottom rather than quietly dropped — a checklist that invents
 work is worse than no checklist, because the invented work crowds out the real
 work.
 
-**State of play:** 900 tests pass (22 environment-dependent tests skipped in the
-ordinary run). Author's archive: 24,627 assets, 98.2 GB logical, across two
-external drives. No linked dependencies outside the standard library and
+**State of play:** the suite passes; the tests that need hardware or a benchmark
+flag skip themselves and say so. Run against the author's own archive — a little
+under 25,000 assets and about 100 GB across two external drives, as it stood in
+August 2026, which is a measurement of one archive on one day and not a claim
+about the app. No linked dependencies outside the standard library and
 system frameworks. The App Store package has uploaded; the current review is
 waiting for the seven-part reviewer information package and physical-device
 recording in `docs/APP_REVIEW_2_1_RESPONSE.md`, not for a code change.
@@ -109,8 +111,8 @@ import proceeds; this is a guard rail, not an accounting system.
 `AppStore.restoreCatalog(from:)` is the read half, reachable from Settings →
 Safety → Restore. Snapshots on every connected drive are listed with their date,
 asset count and how many kinds of record they hold — the count being the figure
-that matters, since a snapshot holding 900 assets where the archive has 24,000
-is what a catalog going wrong looks like from outside.
+that matters, since a snapshot holding a fraction of the assets the
+archive has is what a catalog going wrong looks like from outside.
 
 - [x] List snapshots found on connected targets, with date and asset count
 - [x] Restore with the current catalog kept first, and verify the restored file
@@ -261,9 +263,13 @@ Kept so the same mistakes do not return.
   (holding its copy in a folder you choose) or an external drive. Mac plus one
   drive is a perfectly ordinary setup. `TargetKind`'s own comment says it — "a
   target *is* a device".
-- **"248 GB / 24,626 photos."** 98.2 GB logical, 24,627 assets.
-- **"Core engine tests + one DMG integration test."** 900 tests pass in the
-  ordinary run, with 22 environment-dependent tests skipped unless their
+- **"248 GB / 24,626 photos."** Two different measurements used as one. 248 GB
+  is the size of the downloaded Google export — twelve zips — and the archive
+  built from it is smaller. Whichever number appears, say which of the two it
+  is; they are not interchangeable and the copy treated them as though they
+  were.
+- **"Core engine tests + one DMG integration test."** The suite passes in the
+  ordinary run, with the environment-dependent tests skipped unless their
   prerequisites are enabled.
 - **"Choose staging location on Mac (default ~/Pictures/HeykinnClicks)."**
   Staging is the `Staging` folder inside the resolved archive directory

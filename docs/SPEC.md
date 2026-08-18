@@ -453,6 +453,14 @@ to a platform that has never heard of Apple.
    relative to a target's root, so recording an arbitrary device path in it would
    name a file that does not exist. Honouring this for the host device needs
    an absolute-path replica form first.
+6. No destructive cleanup without explicit job state and confirmation — or,
+   for future reclamation, the listed proof, which is stronger than a prompt.
+7. Interrupted work resumes; a crash or an unplug never corrupts the catalog.
+8. Defects are fixed in the code path that produces them — the import path,
+   the scan, startup reconciliation — so every install benefits, and so the
+   fix runs before the wrong answer is shown rather than a launch after it.
+   Never by hand against one catalog.
+
 9. A grant is remembered until it is taken back, and everything remembered is
    listed somewhere it can be taken back from. Re-asking a question the user
    has already answered is a defect, not caution — and a decision with no way
@@ -479,14 +487,6 @@ to a platform that has never heard of Apple.
     meets the other reading in a later session — which is a fact about drives,
     not a weakening of the evidence (invariant 2 still applies: two readings
     are still two readings, whenever they were taken).
-6. No destructive cleanup without explicit job state and confirmation — or,
-   for future reclamation, the listed proof, which is stronger than a prompt.
-7. Interrupted work resumes; a crash or an unplug never corrupts the catalog.
-8. Defects are fixed in the code path that produces them — the import path,
-   the scan, startup reconciliation — so every install benefits, and so the
-   fix runs before the wrong answer is shown rather than a launch after it.
-   Never by hand against one catalog.
-
 13. **A marker naming another archive is never overwritten silently.**
     Registering a drive writes a marker file at its root, and registration will
     currently overwrite one that is already there. Two archives on one device is

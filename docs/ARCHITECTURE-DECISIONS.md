@@ -557,18 +557,18 @@ speed hint rather than a recorded fact.
 
 Three tiers, not two. A **status reader** — what exists, where the copies are,
 what is at risk — needs SQLite and the schema and **none** of the kernel. A
-**browser** adds zip reading, because 21,380 of 21,401 photographs are inside
-zips and thumbnails never leave the device that made them — and zip is a
+**browser** adds zip reading, because nearly every photograph in a Google
+export is inside a zip and thumbnails never leave the device that made them — and zip is a
 published format with a library on every platform, so this is not kernel work. A
-**writer** adds **3,011 lines** of clock, journal, merge, segment codec and
-checkpoint, reimplemented where a mistake is silent and corrupts the shared
+**writer** adds the whole kernel — clock, journal, merge, segment codec,
+checkpoint — reimplemented where a mistake is silent and corrupts the shared
 archive for every device.
 
-*Measured 18 August 2026 over `Domain/Portability/` minus `ZipContainer.swift`
-(that one is the browser tier), plus `Persistence/ChangeJournal.swift` and
-`Services/Sync/`. The basis is written down because the figure this replaces —
-3,534 — could not be reproduced from any file list, which makes a number that
-looks precise impossible to check.*
+*No line count here on purpose. Two different figures have appeared in this
+paragraph, neither reproducible from any file list, and both read as precision
+that was never measured. What decides the tier is that the kernel has a
+specification (`SPEC-format.md`, `SPEC-hashing.md`) and conformance vectors —
+whether that is two thousand lines or four changes nothing about the risk.*
 
 The tiers are cumulative rather than alternatives: each strictly contains the one
 before, so the only real question is how far to go, and the last step can be

@@ -16,7 +16,7 @@ not the moment to find that out.
 swift test
 ```
 
-900 tests, as of 18 August 2026. The sync ones cover: two archives converging, the same thing edited on
+The sync tests cover: two archives converging, the same thing edited on
 both, deletions not coming back, a drive read twice doing nothing the second
 time, a drive pulled out mid-write, a drive written by a newer build being
 refused, and the conditions a real volume adds — macOS's hidden files, a

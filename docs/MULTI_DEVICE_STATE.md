@@ -72,11 +72,16 @@ a format only `NSKeyedArchiver` can read. Those turn "we used the platform" into
 I checked what the existing code actually depends on, rather than assuming.
 **The result is much better than expected:**
 
-- **Every file in `Domain/` imports only `Foundation`** — 23 of 23, as of
-  18 August 2026. The domain model — assets, targets, storage groups, policy,
-  replication, residency, takeout — is portable. It was written that way without
-  the goal being stated, and the last two exceptions went when CryptoKit was
-  moved out to a `Digest256` seam (hazard 4 below).
+- **`Domain/` imports nothing another platform would not have.** `Foundation`
+  unconditionally; anything else only behind `#if canImport(...)` with a
+  fallback that compiles without it — `Digest256` over `SHA256Reference` is the
+  worked example, and is what CryptoKit became (hazard 4 below). The domain
+  model — assets, targets, storage groups, policy, replication, residency,
+  takeout — is portable. It was written that way before the goal was stated.
+
+  Enforced by `DocumentedRulesTests`, not counted here: a tally of how many
+  files comply is wrong the next time somebody adds one, and no reader can tell
+  a stale tally from a true one.
 - The Apple coupling is concentrated where it belongs: all of `UI/`, plus
   `Services/ApplePhotosConnector.swift` (`ApplePhotosVerifier`,
   `ApplePhotosConnectionState`), `TargetMonitor`, `ThumbnailCache`.
@@ -104,9 +109,11 @@ unwritten rule. That is why these were done first rather than at porting time.
 
 ### H3, and why it turned out to be smaller than it looked
 
-It was load-bearing rather than a corner: 21,380 of the 21,401 photographs in
-this archive live inside Takeout zips on the drives, so a client that cannot
-read them sees almost nothing. And it could not be a shim — what a second
+It was load-bearing rather than a corner: all but a couple of dozen photographs
+in this archive live inside Takeout zips on the drives, so a client that cannot
+read them sees almost nothing. (21,380 of 21,401, when it was counted in
+August 2026 — a reading of one archive on one day, which is what the benchmark
+tables below extrapolate from and the only reason a figure appears at all.) And it could not be a shim — what a second
 platform needs is entry contents that are **byte-identical**, because the hash of
 those bytes is a recorded fact.
 
@@ -760,9 +767,9 @@ writes and physical latency join the debugging surface.
 | **4a** | ~~Hybrid logical clock~~ | **Done.** [`SPEC-format.md`](SPEC-format.md) §1, `HybridLogicalClock`, 16 vectors. Self-contained; nothing existing changed. |
 | **4b** | ~~`device_id` + per-field LWW + tombstones + the merge engine~~ | **Done.** [`SPEC-format.md`](SPEC-format.md) §2, `DeviceIdentity`, `ChangeJournal`, 13 property tests. Two catalogs merged in a test; no drive involved. |
 | ~~**4c**~~ | ~~Take the remaining shared tables through `recordingWrite`~~ | **Done.** All 14, composite keys included, with a coverage test that fails when a new table is not wired. |
-| ~~**5**~~ | ~~Segment codec + `SPEC-format.md` §3~~ | **Done.** JSON Lines with per-line checksums; `SegmentStore`, `DriveSync`, 13 tests including a torn write. |
+| ~~**5**~~ | ~~Segment codec + `SPEC-format.md` §3~~ | **Done.** JSON Lines with per-line checksums; `SegmentStore`, `DriveSync`, and a torn write among the tests. |
 | ~~**6**~~ | ~~Merge on connect~~ | **Done.** Runs from the existing connect handler, in slices so the window keeps drawing, with a line on the drive's card saying what travelled. |
-| ~~**7**~~ | ~~Checkpoints, pruning, device retirement~~ | **Done, and smaller than it looked.** [`SPEC-format.md`](SPEC-format.md) §4. Making the checkpoint the base rather than an optimisation removed the low-mark arithmetic and device retirement entirely — segments below a checkpoint are unreachable by anybody, so pruning consults no reader. 11 tests. |
+| ~~**7**~~ | ~~Checkpoints, pruning, device retirement~~ | **Done, and smaller than it looked.** [`SPEC-format.md`](SPEC-format.md) §4. Making the checkpoint the base rather than an optimisation removed the low-mark arithmetic and device retirement entirely — segments below a checkpoint are unreachable by anybody, so pruning consults no reader. `CheckpointSyncTests`. |
 | **8** | Extract adapters behind ports; resolve H3 | Makes the portable layer actually portable. Worth doing before a second platform, not during. |
 | **9** | Read-only client on another platform | The vectors are what make this safe. |
 
@@ -781,15 +788,16 @@ to implement.
 - **`cr-sqlite` or hand-rolled** for §6.3. It implements the model directly.
   Costs the project's first dependency and must build for every target platform
   — a heavier constraint under a cross-platform plan than a device-only one.
-- **How much of `AppStore`'s 8,400 lines assumes it is the only writer?** Step 4
+- **How much of `AppStore` — much the largest file in the app — assumes it is
+  the only writer?** Step 4
   is scoped as "every upsert in `Persistence/`", which may be optimistic.
 - **Does the zip-as-replica feature survive cross-platform?** H3 is not just
   `/usr/bin/unzip` — it implies every client needs a zip reader that agrees
-  byte-for-byte on entry extraction. Given 21,380 photos currently live inside
-  Takeout zips on these drives, this is load-bearing, not a corner.
+  byte-for-byte on entry extraction. Given that all but a handful of the photos
+  on these drives live inside Takeout zips, this is load-bearing, not a corner.
 - **Segment size cap and checkpoint cadence.** Both want measuring against a real
-  archive — the one in front of us, ~21,400 assets and ~43,000 replica rows, is
-  a reasonable yardstick.
+  archive — the one in front of us, roughly 21,400 assets and 43,000 replica
+  rows when the tables above were measured, is a reasonable yardstick.
 - **What does the UI say about staleness?** "Last synced from Nina's Back, three
   days ago" is honest and useful. Less clear what to say when devices are known
   to have diverged and no drive has bridged them yet.
