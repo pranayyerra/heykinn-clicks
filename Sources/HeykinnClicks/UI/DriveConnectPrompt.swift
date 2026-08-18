@@ -1,129 +1,127 @@
 import SwiftUI
 
-/// Shown when an unmanaged external volume mounts: offer to adopt it as
-/// managed local storage, or just sweep it for Takeout archives.
+/// Shown when a drive nobody has claimed is plugged in.
 ///
-/// Every answer here can be remembered against the disk's identity, so the
-/// question is asked once rather than at every mount. The previous version
-/// could only remember one answer — "never ask again" — which meant somebody
-/// who chose "scan it" answered the same prompt forever, and somebody who
-/// chose "never" had no way back: the key went into preferences and no screen
-/// could remove it. Remembering and revoking are one feature, and the other
-/// half of it is Settings → Access.
+/// **One question, one button.** This used to offer three answers, a "remember
+/// this" toggle and a "not now" — five things, for a drive somebody had just
+/// plugged in. Most of them were not the same kind of thing as each other:
+/// keeping photos on a drive is a lasting fact about whose it is, while looking
+/// for a Google download on it is something you do once. Mixing an action into
+/// a question about ownership is what made the list long.
+///
+/// So the action left. Getting photos off any drive already lives under Add
+/// photos, works on a drive this app has never seen, and needs no registration
+/// — checked, not assumed.
+///
+/// **Closing means no, and it is remembered.** There is no toggle because the
+/// question does not come back: whose a drive is does not change on Tuesday.
+/// Being asked the same thing at every mount is worse than having to turn it on
+/// later, and later is one screen away.
+///
+/// This never appears for a drive that already belongs to somebody else. The
+/// app can see that from the ID file, so there is nothing to ask — see
+/// `AppStore.driveBelongsToSomebodyElse`.
 struct DriveConnectPrompt: View {
     let volume: VolumeInfo
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    @State private var pendingDecision: VolumeDecision?
     @State private var isDrivePickerPresented = false
+    /// Whether the one button was pressed, so closing can mean what it says.
+    @State private var accepted = false
 
-    /// On by default, because being asked twice about the same disk is the
-    /// complaint this exists to answer. Unchecking is the escape, and it means
-    /// exactly what it says: the choice happens and is not written down.
-    @AppStorage("rememberVolumeChoiceDefault") private var remember = true
-
-    /// There is no cap. `desiredCopies` says how many devices hold each photo,
-    /// not how many devices may exist — a sixth drive is another place copies
-    /// can land, and refusing it because the policy asks for two copies was
-    /// the two ideas being confused.
-    private func choose(_ decision: VolumeDecision) {
-        if TargetBookmarks.isSandboxed, decision != .ignore {
-            pendingDecision = decision
+    private func useIt() {
+        // Sandboxed, the app cannot reach a volume nobody handed it. The panel
+        // is how somebody hands it over, and it has to be the same disk.
+        if TargetBookmarks.isSandboxed {
             isDrivePickerPresented = true
             return
         }
-        if store.decide(decision, for: volume, remember: remember) {
-            dismiss()
-        }
+        accepted = true
+        _ = store.decide(.manage, for: volume, remember: true)
+        dismiss()
+    }
+
+    /// Closing the window is the other answer, and it is a real one.
+    private func declineIfUnanswered() {
+        guard !accepted else { return }
+        _ = store.decide(.ignore, for: volume, remember: true)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label(volume.name, systemImage: "externaldrive.badge.plus")
-                .font(.title3)
-                .bold()
-            Text("A drive was connected (\(volume.url.path)). What should it be?")
-                .font(.callout)
-
-            VStack(alignment: .leading, spacing: 10) {
+            HStack(alignment: .firstTextBaseline) {
+                Label(volume.name, systemImage: "externaldrive.badge.plus")
+                    .font(.title3)
+                    .bold()
+                Spacer()
+                // Closing is the other answer, so there has to be a way to
+                // close. Written as a close control rather than a second
+                // button on purpose: this is one decision with one action, and
+                // a matching pair would put "no" on the same footing as "yes"
+                // when the whole point is that most drives plugged in are ones
+                // somebody means to use.
+                //
+                // It carries the escape key, which is what somebody reaches
+                // for. Without it the panel had no way out at all — found by
+                // opening it, not by reading it.
                 Button {
-                    choose(.manage)
+                    dismiss()
                 } label: {
-                    Label("Use as storage for the archive", systemImage: "externaldrive.fill.badge.checkmark")
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    Image(systemName: "xmark")
+                        .imageScale(.medium)
+                        .foregroundStyle(.secondary)
                 }
-                .buttonStyle(.borderedProminent)
-                // Says what actually happens now: it becomes another place
-                // copies can land, and it takes a share rather than a
-                // duplicate of the whole archive.
-                Text("Makes it one of the devices your photos can be kept on. The app leaves a small ID file on it, so it is recognised wherever you plug it in, whatever the computer calls it. Nothing is copied to it yet: a group that works out its own drives will use this one as soon as it asks for more copies than it has drives.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Button {
-                    choose(.scan)
-                } label: {
-                    Label("Search it for Google downloads", systemImage: "shippingbox")
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
+                .buttonStyle(.plain)
+                .help("Do not use this drive")
+                .accessibilityLabel("Do not use this drive")
             }
 
-            Divider()
-
-            Toggle("Remember this for \(volume.name)", isOn: $remember)
+            Text("Use \(volume.name) for your photos?")
                 .font(.callout)
-            Text(remember
-                 ? "This drive will not be asked about again. You can change or undo it in Settings → Access."
-                 : "You will be asked again the next time this drive is connected.")
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Copies of your photos will be kept on it, and read back to check they arrived. Nothing on it is changed, and nothing is copied yet.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("Close this and it will not be used, and you will not be asked again. You can turn it on later under Keep safe.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
-                Button("Leave it alone") { choose(.ignore) }
                 Spacer()
-                Button("Not now") {
-                    // Deliberately not a decision: nothing is recorded even
-                    // with the box ticked, because "not now" is the answer
-                    // "ask me later" and remembering it would be the opposite.
-                    store.connectPrompt = nil
-                    dismiss()
-                }
-                .keyboardShortcut(.cancelAction)
+                Button("Yes, use it") { useIt() }
+                    .buttonStyle(.borderedProminent)
+                    .keyboardShortcut(.defaultAction)
             }
         }
         .padding(24)
-        .frame(width: 460)
+        .frame(width: 420)
+        // Escape closes it. `.keyboardShortcut(.cancelAction)` on the close
+        // control did not take — tried, and the key did nothing — because a
+        // plain-styled button is not what that modifier is looking for. This is
+        // the macOS way of saying the same thing, and it works on the panel
+        // rather than on any button in it.
+        .onExitCommand { dismiss() }
+        .onDisappear { declineIfUnanswered() }
         .fileImporter(
             isPresented: $isDrivePickerPresented,
             allowedContentTypes: [.folder],
             allowsMultipleSelection: false
         ) { result in
-            guard case .success(let urls) = result, let url = urls.first else {
-                pendingDecision = nil
-                return
-            }
-            guard let decision = pendingDecision else { return }
+            guard case .success(let urls) = result, let url = urls.first else { return }
             guard let access = SecurityScopedAccess(url: url) else {
                 store.lastError = "macOS did not grant access to \(url.lastPathComponent). Choose \(volume.name) itself and try again."
-                pendingDecision = nil
                 return
             }
-            guard let chosen = store.userSelectedVolume(at: url, matching: volume) else {
-                pendingDecision = nil
-                return
+            guard let chosen = store.userSelectedVolume(at: url, matching: volume) else { return }
+            accepted = true
+            _ = withExtendedLifetime(access) {
+                store.decide(.manage, for: chosen, remember: true, retaining: access)
             }
-            let succeeded = withExtendedLifetime(access) {
-                store.decide(
-                    decision,
-                    for: chosen,
-                    remember: remember,
-                    retaining: access
-                )
-            }
-            pendingDecision = nil
-            if succeeded { dismiss() }
+            dismiss()
         }
     }
 }

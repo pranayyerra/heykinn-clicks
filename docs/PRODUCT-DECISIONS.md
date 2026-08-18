@@ -164,6 +164,46 @@ true, and is exactly why it was tempting.
 
 ---
 
+## P5 · What a person is asked when a drive is plugged in
+
+**The question.** Three answers, a "remember this" toggle and a "not now" — five
+things, for a drive somebody had just plugged in.
+
+**What was wrong with it.** The list mixed two kinds of thing. *Keep my photos
+on it* is a lasting fact about whose drive it is. *Look for Google downloads on
+it* is something you do once. Putting an action inside a question about
+ownership is what made the list long — and the action already had a home under
+Add photos, which works on any drive without registering it.
+
+**And two of the three cases need no question at all.** A drive already in use
+asks nothing, and always did. A drive belonging to somebody else asks nothing
+either, because the app can see whose it is from the ID file on it: the answer
+it would be asking for is one it already has.
+
+That leaves one case the app genuinely cannot decide — a drive nobody has
+claimed. It cannot tell a new backup drive from a friend's stick, and guessing
+either way is bad: claim every drive and it writes onto things it should not;
+claim none and the drive somebody bought for this does nothing.
+
+> **Use Field Drive for your photos?**
+> `Yes, use it`
+
+**Closing means no, and is remembered**, so there is no toggle — the question
+does not come back, because whose a drive is does not change on Tuesday. Being
+asked at every mount is worse than turning it on later, and later is one screen
+away.
+
+**Taking somebody else's drive** is not on this path at all. It is done from
+Keep safe, deliberately, and confirms before anything is written.
+
+**What it costs.** You can no longer say "always search this drive for downloads
+when I plug it in". Anyone who already set that keeps it; it cannot be set from
+here any more.
+
+**Status:** decided and built.
+
+---
+
 ## P3 · Whether "where this should be kept" is a control or an observation
 
 **The question.** A photograph carries a residency — local, Apple's cloud,

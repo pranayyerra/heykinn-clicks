@@ -19,20 +19,20 @@ struct DriveMarkerConflictPrompt: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Label("\(conflict.name) already belongs to an archive", systemImage: "externaldrive.badge.exclamationmark")
+            Label("Make \(conflict.name) yours?", systemImage: "externaldrive.badge.exclamationmark")
                 .font(.title3)
                 .bold()
 
-            Text("This drive is already being used by another Heykinn Clicks archive — one this app does not recognise. Each archive leaves a small ID file on its drives so it knows which ones are its own.")
+            Text("This drive is somebody else's. The app leaves a small ID file on every drive it uses, and this one carries an ID it does not recognise.")
                 .font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("If you use it here, that ID is replaced. Nothing on the drive is deleted and no photo is moved — but the other archive will stop recognising this drive, and will no longer be able to tell you which of its copies are on it.")
+            Text("Making it yours replaces that ID. Nothing on the drive is deleted and no photo is moved — but the other one stops recognising this drive, and can no longer tell you which of its photos are on it.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("This is expected if you forgot this drive here earlier, or if the other archive is one you no longer use — a test archive, or one on a device you have replaced.")
+            Text("Expected if this was your drive and you forgot it here earlier, or if the other one is something you no longer use.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -46,7 +46,7 @@ struct DriveMarkerConflictPrompt: View {
 
                 Spacer()
 
-                Button("Use this drive here") {
+                Button("Make it mine") {
                     store.takeOverDrive(conflict)
                     dismiss()
                 }

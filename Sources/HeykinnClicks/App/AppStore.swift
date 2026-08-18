@@ -2911,6 +2911,19 @@ final class AppStore: ObservableObject {
 
             guard !promptedVolumeKeys.contains(key) else { continue }
             promptedVolumeKeys.insert(key)
+
+            // A drive that already belongs to somebody else is not a question.
+            // The app can see whose it is from the ID file on it, and the
+            // answer it would be asking for is one it already has: this is not
+            // yours, so your photographs are not kept on it. Interrupting to
+            // say so is noise.
+            //
+            // Nothing is recorded either. The judgement is derived from the
+            // drive every time it is seen, so it cannot go stale — and if it
+            // ever *should* be yours, adding it from Keep safe walks through
+            // the confirmation that taking somebody's drive deserves.
+            guard !driveBelongsToSomebodyElse(volume) else { continue }
+
             if connectPrompt == nil {
                 connectPrompt = volume
             }
@@ -5588,6 +5601,21 @@ final class AppStore: ObservableObject {
             isReadOnly: values?.volumeIsReadOnly ?? expected?.isReadOnly ?? false,
             marker: TargetMonitor.readMarker(at: chosen)
         )
+    }
+
+    /// Whether this drive already belongs to somebody else.
+    ///
+    /// It carries an ID file naming a drive this archive has never registered.
+    /// The app has always been able to see this and has never said so: at the
+    /// moment a drive is plugged in, somebody else's looked exactly like an
+    /// unclaimed one, and the difference only surfaced a step later when
+    /// registering it was refused.
+    ///
+    /// A drive forgotten here reads the same way, which is the honest limit of
+    /// what an ID file alone can tell us — see `DriveMarkerConflict`.
+    func driveBelongsToSomebodyElse(_ volume: VolumeInfo) -> Bool {
+        guard let marker = volume.marker else { return false }
+        return !targets.contains { $0.id == marker.targetID }
     }
 
     /// Registers a mounted external volume as a target.

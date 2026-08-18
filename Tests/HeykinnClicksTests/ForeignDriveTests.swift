@@ -99,4 +99,111 @@ final class ForeignDriveTests: XCTestCase {
         XCTAssertFalse(registered)
         XCTAssertNotNil(store.markerConflict)
     }
+
+    // MARK: - Telling whose it is
+
+    func testTheAppCanSayWhoseDriveItIs() throws {
+        let store = try makeStore()
+
+        let blank = try makeDirectory("blank")
+        let foreign = try makeDirectory("foreign")
+        try TargetMonitor.writeMarker(
+            TargetMarker(targetID: UUID(), markerToken: UUID().uuidString, appName: "heykinn-clicks"),
+            to: foreign
+        )
+        let mine = try makeDirectory("mine")
+
+        XCTAssertFalse(
+            store.driveBelongsToSomebodyElse(volume(blank, name: "Blank")),
+            "an unclaimed drive is nobody's, not somebody else's"
+        )
+        XCTAssertTrue(store.driveBelongsToSomebodyElse(volume(foreign, name: "Theirs")))
+
+        // Register one properly, and it stops reading as somebody else's.
+        XCTAssertTrue(
+            store.registerVolumeTarget(volume: volume(mine, name: "Mine"), name: "Mine"),
+            "\(store.lastError ?? "no error reported")"
+        )
+        XCTAssertFalse(
+            store.driveBelongsToSomebodyElse(volume(mine, name: "Mine")),
+            "a drive this archive registered is its own"
+        )
+    }
+
+    /// Taking somebody else's drive is the one thing here that changes what is
+    /// on it, so it never happens on a single click.
+    func testMakingItMineAlwaysAsksFirst() throws {
+        let store = try makeStore()
+        let foreign = try makeDirectory("foreign")
+        let theirs = TargetMarker(
+            targetID: UUID(), markerToken: UUID().uuidString, appName: "heykinn-clicks"
+        )
+        try TargetMonitor.writeMarker(theirs, to: foreign)
+        let info = volume(foreign, name: "Their Drive")
+
+        // Choosing it from the connect prompt goes through the same
+        // confirmation as choosing it anywhere else. It reports *not* done,
+        // because nothing has been registered yet — the question has been
+        // handed to the confirmation rather than answered.
+        XCTAssertFalse(store.decide(.manage, for: info, remember: false))
+        XCTAssertNotNil(store.markerConflict, "it was taken without asking")
+        XCTAssertEqual(TargetMonitor.readMarker(at: foreign), theirs, "their ID was replaced without asking")
+        XCTAssertTrue(store.targets.isEmpty)
+
+        // And confirming does what it says.
+        let conflict = try XCTUnwrap(store.markerConflict)
+        XCTAssertTrue(store.takeOverDrive(conflict))
+        XCTAssertEqual(store.targets.count, 1)
+        XCTAssertNotEqual(TargetMonitor.readMarker(at: foreign), theirs)
+    }
+
+    /// The words on these two screens are the only ones a person sees about
+    /// this, and they may not be ours.
+    func testNeitherScreenUsesAWordTheAppInvented() throws {
+        let ui = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appendingPathComponent("Sources/HeykinnClicks/UI", isDirectory: true)
+
+        for name in ["DriveConnectPrompt.swift", "DriveMarkerConflictPrompt.swift"] {
+            let text = try String(contentsOf: ui.appendingPathComponent(name), encoding: .utf8)
+            for line in text.split(separator: "\n", omittingEmptySubsequences: false) {
+                // Comments carry our vocabulary on purpose; the screen may not.
+                guard !line.trimmingCharacters(in: .whitespaces).hasPrefix("//"),
+                      !line.trimmingCharacters(in: .whitespaces).hasPrefix("///") else { continue }
+                for quoted in line.split(separator: "\"").enumerated()
+                    .filter({ $0.offset % 2 == 1 }).map(\.element) where quoted.count > 12 {
+                    for invented in ["archive", "target", "replica", "marker", "registered", "managed"] {
+                        XCTAssertFalse(
+                            quoted.lowercased().contains(invented),
+                            "\(name) says \"\(invented)\" to the reader: \(quoted)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: - What a person is actually asked
+
+    /// Closing the prompt is a real answer and is remembered, which is why
+    /// there is no longer a "remember this" toggle: the question does not come
+    /// back, so there is nothing to opt into.
+    ///
+    /// The wiring above this — skipping the prompt entirely for somebody
+    /// else's drive — reads real mounted volumes and is checked by running the
+    /// app rather than here.
+    func testClosingThePromptIsRememberedAsNo() throws {
+        let store = try makeStore()
+        let blank = try makeDirectory("blank")
+        let info = volume(blank, name: "New Drive")
+
+        XCTAssertTrue(store.decide(.ignore, for: info, remember: true))
+
+        let key = AccessGrants.key(forVolumeUUID: info.volumeUUID, path: info.url.path)
+        XCTAssertEqual(
+            store.accessGrantList.first(where: { $0.volumeKey == key })?.decision, .ignore,
+            "closing did not record an answer, so the drive would be asked about again"
+        )
+        XCTAssertTrue(store.targets.isEmpty)
+    }
 }
