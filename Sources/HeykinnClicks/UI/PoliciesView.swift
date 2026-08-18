@@ -143,7 +143,7 @@ struct PolicyRuleEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(existing == nil ? "New residency rule" : "Edit rule")
+            Text(existing == nil ? "New rule" : "Edit rule")
                 .font(.title3)
                 .bold()
             Form {
@@ -162,7 +162,7 @@ struct PolicyRuleEditor: View {
                     }
                 }
                 Stepper("Minimum size: \(minSizeMB) MB", value: $minSizeMB, in: 0...10_000, step: 50)
-                Picker("Assign residency", selection: $target) {
+                Picker("Keep them in", selection: $target) {
                     ForEach(ResidencyDomain.allCases) { domain in
                         Text(domain.displayName).tag(domain)
                     }
@@ -172,7 +172,7 @@ struct PolicyRuleEditor: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             if target != .local {
-                Text("A rule cannot put content in \(target.displayName) — matching assets stay Local and are queued as a pending migration, which runs when you (or a future connector) carry it out.")
+                Text("A rule cannot put photos into \(target.displayName) — the ones it matches stay on your drives and are queued as a move, which happens when you carry it out.")
                     .font(.caption)
                     .foregroundStyle(.orange)
                     .fixedSize(horizontal: false, vertical: true)

@@ -10,11 +10,21 @@ enum ResidencyDomain: String, Codable, CaseIterable, Identifiable, Hashable {
 
     var id: String { rawValue }
 
+    /// What a person calls these places.
+    ///
+    /// **"Local", "Apple Cloud" and "Google Cloud" were the app's names for
+    /// them, not anybody else's** — and they reached the screen, in a filter
+    /// headed "All domains", which is a word this app invented and invariant 19
+    /// forbids. Somebody with photographs says "my drives" and "iCloud".
+    ///
+    /// Chosen to read as a noun in a sentence as well as on its own, because
+    /// these appear both ways: "Release the iCloud copies" and "Kept on:
+    /// My drives".
     var displayName: String {
         switch self {
-        case .local: return "Local"
-        case .appleCloud: return "Apple Cloud"
-        case .googleCloud: return "Google Cloud"
+        case .local: return "My drives"
+        case .appleCloud: return "iCloud"
+        case .googleCloud: return "Google Photos"
         }
     }
 }

@@ -188,7 +188,7 @@ struct AssetDetailView: View {
                         VStack(alignment: .leading, spacing: 4) {
                             let events = store.auditEvents.filter { $0.assetID == asset.id }
                             if events.isEmpty {
-                                Text("No recorded events for this asset.")
+                                Text("Nothing has happened to this photo yet.")
                                     .font(.callout)
                                     .foregroundStyle(.secondary)
                             }

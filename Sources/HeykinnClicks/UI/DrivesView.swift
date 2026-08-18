@@ -478,26 +478,32 @@ struct DrivesView: View {
         }
     }
 
-    /// Staging is transit, not a place the archive lives, so it gets a line
-    /// rather than a panel — and only mentions waiting assets when there are
-    /// any to wait for.
+    /// Transit, not a place the archive lives, so it gets a line rather than a
+    /// panel — and only mentions waiting photos when there are any to wait for.
+    ///
+    /// **Absent entirely when it is empty.** It used to sit at the foot of the
+    /// screen reading "Staging · Zero KB", which is the app's own bookkeeping
+    /// shown to somebody who has nothing waiting and nothing to do about it.
+    /// A holding area with nothing in it is not news.
+    @ViewBuilder
     private var stagingFooter: some View {
         let stagedOnly = store.protectionStates.values.filter { $0 == .stagedOnly }.count
         let reclaimable = store.stagingReclaimPlan
-        return VStack(alignment: .leading, spacing: 4) {
+        if store.staging.totalBytes > 0 || stagedOnly > 0 {
+        VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 // The one path on this screen that named a real folder and gave
                 // no way to it — it was a tooltip, which is somewhere to read a
                 // path from, not somewhere to go.
                 FolderLink(
                     path: store.staging.rootURL.path,
-                    display: "Staging",
+                    display: "Waiting to be copied",
                     symbol: "tray"
                 )
                 Text("· \(Formatters.bytes.string(fromByteCount: store.staging.totalBytes))")
                     .foregroundStyle(.secondary)
                 if stagedOnly > 0 {
-                    Text("· \(stagedOnly.formatted()) waiting for a target")
+                    Text("· \(stagedOnly.formatted()) waiting for a drive")
                         .foregroundStyle(.orange)
                 }
                 Spacer()
@@ -524,14 +530,15 @@ struct DrivesView: View {
         // into the link and paints it grey, so the one thing here that goes
         // somewhere stops looking like it does. Each piece of text says what
         // colour it is.
+        }
     }
 
     private func registrationSheet(_ volume: VolumeInfo) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text("Register managed drive")
+            Text("Use this drive for your photos")
                 .font(.title3)
                 .bold()
-            Text("A marker file (\(ReplicationTarget.markerFileName)) will be written to \(volume.url.path) so the drive is recognized by identity, not mount path. All existing Local assets will be queued for replication to it.")
+            Text("A small ID file (\(ReplicationTarget.markerFileName)) is written to \(volume.url.path), so the app still knows this drive after it is renamed or plugged into a different port. Every photo you already have is then queued to copy onto it.")
                 .font(.callout)
                 .foregroundStyle(.secondary)
             TextField("Drive name", text: $registrationName)

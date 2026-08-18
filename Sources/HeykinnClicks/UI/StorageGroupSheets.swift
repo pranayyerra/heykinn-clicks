@@ -116,7 +116,7 @@ struct MoveToStorageGroupSheet: View {
                             .tag(UUID?.some(group.id))
                     }
                 }
-                Button("New group instead…") {
+                Button("Somewhere new instead…") {
                     makingNew = true
                     newGroupName = ""
                 }

@@ -193,11 +193,11 @@ private struct SafetySettings: View {
                 ExplainedToggle(
                     "Read a few files in the background",
                     isOn: $store.backgroundRotPatrol,
-                    help: "Every half hour, on an idle drive, the app re-reads up to forty files — the ones longest unread, and only those nothing has read in the last month, so a small archive is checked once and then left alone. Reading is the only thing that finds bit rot — comparing what the catalog recorded can never see a file decay on disk. Photos counted inside a Google export are left to the export's own checks: they have no file of their own to read, and confirming the export is still on the disk is not reading anything. It yields to imports and syncs, and skips a target that has work waiting."
+                    help: "Every half hour, on an idle drive, the app re-reads up to forty files — the ones longest unread, and only those nothing has read in the last month, so a small archive is checked once and then left alone. Reading is the only thing that finds bit rot — comparing what the app recorded can never see a file decay on disk. Photos counted inside a Google export are left to the export's own checks: they have no file of their own to read, and confirming the export is still on the disk is not reading anything. It yields to imports and copying, and skips a drive that has work waiting."
                 )
             }
-            Section("Catalog backup") {
-                Text("The photos survive on the drives, but everything this app knows about them lives only in the catalog: which drives hold what, how copies were verified, how duplicates were grouped, and the descriptions, albums and people read out of your exports — that last part only exists here now. Verified snapshots ride along on each connected drive, so losing the device does not lose any of it. The newest \(CatalogBackupService.retainCount) are kept on each drive.")
+            Section("Backing up what the app knows") {
+                Text("The photos survive on the drives, but everything this app knows about them lives only in the app’s own records: which drives hold what, how copies were verified, how duplicates were grouped, and the descriptions, albums and people read out of your exports — that last part only exists here now. Verified snapshots ride along on each connected drive, so losing the device does not lose any of it. The newest \(CatalogBackupService.retainCount) are kept on each drive.")
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 HStack {

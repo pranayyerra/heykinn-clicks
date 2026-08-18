@@ -154,4 +154,87 @@ final class DocumentedRulesTests: XCTestCase {
             Range(match.range(at: 1), in: text).flatMap { Int(text[$0]) }
         }
     }
+
+    // MARK: - Invariant 19
+
+    /// **Nothing on screen uses a word the app invented.**
+    ///
+    /// The interface had been swept for these once and the sweep was written up
+    /// as finished. It was not: the photo library's filter still read
+    /// *All domains · Local · Apple Cloud · Google Cloud*, registering a drive
+    /// still promised to queue "all existing Local assets for replication", and
+    /// "catalog" survived in four places. Every one of them was found by
+    /// grepping, which is what a person does once and a test does for ever.
+    ///
+    /// Only literals a person can read are checked. Interpolations are cut out
+    /// first — `\(target.name)` puts a drive's name on screen, not the word
+    /// "target" — and so are strings with no space in them, which are symbol
+    /// names and dictionary keys rather than prose.
+    func testNoScreenUsesAWordTheAppInvented() throws {
+        let invented = [
+            "domain", "residency", "replica", "replication",
+            "catalog", "marker", "target", "asset",
+        ]
+        let ui = repositoryRoot.appendingPathComponent("Sources/HeykinnClicks/UI", isDirectory: true)
+        var offences: [String] = []
+
+        for file in try swiftFiles(under: ui) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            for (offset, raw) in text.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                if line.hasPrefix("//") { continue }
+                for literal in visibleStringLiterals(in: String(raw)) {
+                    guard literal.contains(" ") else { continue }
+                    let words = literal.lowercased().split { !$0.isLetter }
+                    for word in invented
+                    where words.contains(Substring(word)) || words.contains(Substring(word + "s")) {
+                        offences.append("\(file.lastPathComponent):\(offset + 1) says \"\(word)\"")
+                        break
+                    }
+                }
+            }
+        }
+        XCTAssertEqual(
+            offences.sorted(), [],
+            """
+            Invariant 19: a person who is not technical can use this without             learning our vocabulary. Say what the thing is to them — a drive,             a photo, a copy, what the app knows — not what it is called in here.
+            """
+        )
+    }
+
+    /// String literals with the `\(…)` interpolations removed, so what remains
+    /// is only what somebody actually reads.
+    ///
+    /// An interpolation is skipped whole, parentheses balanced, which also
+    /// steps over any quotes inside it — `\(names.joined(separator: " and "))`
+    /// would otherwise look like the end of the string and the start of another.
+    private func visibleStringLiterals(in line: String) -> [String] {
+        let characters = Array(line)
+        var literals: [String] = []
+        var index = 0
+        while index < characters.count {
+            guard characters[index] == "\"" else { index += 1; continue }
+            index += 1
+            var visible = ""
+            while index < characters.count, characters[index] != "\"" {
+                guard characters[index] == "\\", index + 1 < characters.count else {
+                    visible.append(characters[index]); index += 1; continue
+                }
+                guard characters[index + 1] == "(" else {
+                    index += 2; visible.append(" "); continue
+                }
+                index += 2
+                var depth = 1
+                while index < characters.count, depth > 0 {
+                    if characters[index] == "(" { depth += 1 }
+                    if characters[index] == ")" { depth -= 1 }
+                    index += 1
+                }
+                visible.append(" ")
+            }
+            index += 1
+            literals.append(visible)
+        }
+        return literals
+    }
 }

@@ -294,7 +294,7 @@ struct StorageMatrix: View {
                 .max { $0.createdAt < $1.createdAt }
             notes.append(
                 snapshot.map {
-                    "Everything the app knows — where copies are, what was verified, the albums and people read out of your exports — comes back from the catalog snapshot written \(Formatters.relative($0.createdAt)) on \($0.targetID.flatMap { store.targetsByID[$0]?.name } ?? "a drive")."
+                    "Everything the app knows — where copies are, what was verified, the albums and people read out of your exports — comes back from the backup written \(Formatters.relative($0.createdAt)) on \($0.targetID.flatMap { store.targetsByID[$0]?.name } ?? "a drive")."
                 } ?? "Nothing on another device holds a backup of this yet, so everything the app knows about these photos would have to be rebuilt by importing them again."
             )
         default:
@@ -1095,7 +1095,7 @@ struct StorageMatrix: View {
                 RoundedRectangle(cornerRadius: 3)
                     .strokeBorder(Color.secondary.opacity(0.35), style: StrokeStyle(lineWidth: 1, dash: [3, 2]))
                     .frame(width: 11, height: 11)
-                Text("not used by that group")
+                Text("not used for these photos")
             }
             Spacer(minLength: 0)
         }
@@ -1188,7 +1188,7 @@ struct StorageMatrix: View {
             // has chosen keeps nothing.
             if let made = store.createStorageGroup(label: "New group") { beginEditing(made) }
         } label: {
-            Label("New group", systemImage: "plus")
+            Label("Keep some photos separately…", systemImage: "plus")
                 .font(.callout)
         }
         .buttonStyle(.link)

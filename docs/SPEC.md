@@ -559,7 +559,11 @@ to a platform that has never heard of Apple.
     failure is made loud instead: refusing costs somebody a sync, and the
     alternative costs them data they will not notice losing.
 
-19. **Nothing on screen uses a word the app invented.** The person using this is
+19. **Nothing on screen uses a word the app invented.** Enforced by
+    `DocumentedRulesTests`, because it had been swept by hand once and declared
+    finished while the photo library's filter still read *All domains* and
+    registering a drive still promised to queue "all existing Local assets for
+    replication". The person using this is
     not technical and should never have to become so. They own *drives*,
     *photos*, *copies*, and the question *are my photos safe* — and every screen,
     prompt, error and log line answers in those terms.

@@ -83,7 +83,7 @@ struct ExportSummary: Identifiable {
                 .map { $0.part.partNumber }
                 .sorted()
                 .map(String.init)
-            let targets = Set(outstanding.flatMap(\.destinations))
+            let owed = Set(outstanding.flatMap(\.destinations))
                 .map { driveNames[$0] ?? "another drive" }
                 .sorted()
             // Which files, not just how many: "2 of 12 are missing" leaves the
@@ -92,7 +92,7 @@ struct ExportSummary: Identifiable {
                 ? "File \(numbers[0]) of this download is"
                 : "Files \(Formatters.list(numbers)) of this download are"
             return (
-                "\(subject) not on \(targets.joined(separator: " and ")) yet — \(Formatters.bytes.string(fromByteCount: bytesOutstanding)) still to copy",
+                "\(subject) not on \(owed.joined(separator: " and ")) yet — \(Formatters.bytes.string(fromByteCount: bytesOutstanding)) still to copy",
                 "exclamationmark.triangle.fill",
                 .orange
             )

@@ -207,7 +207,7 @@ struct LibraryView: View {
                 }
                 ToolbarItem {
                     Picker("Residency", selection: $residencyFilter) {
-                        Text("All domains").tag(ResidencyDomain?.none)
+                        Text("All photos").tag(ResidencyDomain?.none)
                         ForEach(ResidencyDomain.allCases) { domain in
                             Text(domain.displayName).tag(ResidencyDomain?.some(domain))
                         }

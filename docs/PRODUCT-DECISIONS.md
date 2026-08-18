@@ -7,9 +7,11 @@ what is true today, what the options are, what each costs, and a recommendation.
 three steps of what replaced it are built. Nothing on this page is open.
 
 Companion to invariant 19 and requirement R8: *a person who is not technical can
-use this without learning our vocabulary.* That invariant has been satisfied for
-words — the interface no longer says target, replica, catalog, marker or
-residency domain. These are the decisions it does **not** settle, because
+use this without learning our vocabulary.* That invariant is now enforced rather
+than asserted — `DocumentedRulesTests` reads every string a person can see and
+fails on target, replica, catalog, marker, residency, domain or asset. It was
+written up as satisfied once before, while the photo library's filter still
+said *All domains*. These are the decisions it does **not** settle, because
 renaming a concept and removing it are different acts.
 
 The frame for all four:

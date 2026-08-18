@@ -117,9 +117,9 @@ struct DriveCard: View {
         // reports none — which is not the same as having none. Say nothing
         // rather than claim a backup is missing when we simply cannot look.
         if let newest = (store.catalogSnapshots[drive.id] ?? []).first {
-            parts.append("catalog backup \(Formatters.relative(newest.createdAt))")
+            parts.append("app records backed up \(Formatters.relative(newest.createdAt))")
         } else if isConnected {
-            parts.append("no catalog backup yet")
+            parts.append("no backup of the app records yet")
         }
         return parts.joined(separator: " · ")
     }
