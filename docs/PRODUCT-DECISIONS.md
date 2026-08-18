@@ -3,9 +3,8 @@
 *Five decisions about the interface, in the shape of `ARCHITECTURE-DECISIONS.md`:
 what is true today, what the options are, what each costs, and a recommendation.*
 
-**P1, P3, P4 and P5 are built. P2 has been withdrawn and replaced**, and steps 1
-and 2 of its replacement are built, leaving step 3 — the only thing on this page
-still to do.
+**All five are settled.** P1, P3, P4 and P5 are built; P2 was withdrawn, and all
+three steps of what replaced it are built. Nothing on this page is open.
 
 Companion to invariant 19 and requirement R8: *a person who is not technical can
 use this without learning our vocabulary.* That invariant has been satisfied for
@@ -189,8 +188,26 @@ The sequence matters, and it is the reverse of what was written here:
    three drives and two copies takes the two emptiest, and as they fill the
    choice moves on its own. `PlacementRulesTests`.
 3. **Then groups can recede** — because by then something else is doing their
-   job, and hiding them costs nothing. **Now unblocked, and one thing had to be
-   fixed first.**
+   job, and hiding them costs nothing. **Done, and one thing had to be fixed
+   first.**
+
+   A row on the storage screen now earns its place by being *different*. A set
+   of photos exists per import, so six folders meant six rows saying exactly the
+   same thing — six answers to "where did this come from", which is provenance,
+   on a screen that is asked "are my photos safe". While every set is kept the
+   same way there is one line saying so; the device columns and the per-device
+   totals stay, because those answer a real question. `Show each set of photos`
+   brings the table back, unchanged.
+
+   **The offsite case protects itself.** The caveat below was that `.chosen` is
+   how somebody keeps one set off the drive they travel with, and no rule can
+   see a building. It needed no rule: a set kept differently *is* a difference,
+   and a difference is what stops the collapse. Nothing detects the intention —
+   the intention is the trigger. `SharedRuleTests`.
+
+   Mode is deliberately not compared. It says what happens next, not where the
+   photos are now. Register a drive later and only the worked-out sets move;
+   they differ then, and the rows split then.
 
    Looking at what real archives actually contain turned up a defect with a
    year-long fuse: the add-a-source default remembered the *device list* as well
@@ -203,9 +220,9 @@ The sequence matters, and it is the reverse of what was written here:
    recede**, not after: hiding the screen while the default was silently
    freezing would have hidden the only place a person could have noticed.
 
-   Still not free after that: `.chosen` is what somebody uses to keep one drive
-   offsite, and no rule can see a building. Hiding groups has to leave that
-   sayable.
+   *(The caveat this section carried — that `.chosen` is what somebody uses to
+   keep one drive offsite, and no rule can see a building — is answered above.
+   It turned out to need no rule at all.)*
 
 A few honest questions at the moment a drive or an import appears are not the
 problem this document set out to solve. A queue of questions in front of somebody

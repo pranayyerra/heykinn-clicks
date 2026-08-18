@@ -59,6 +59,38 @@ struct StorageGroup: Identifiable, Hashable {
         case chosen
     }
 
+    /// One representative set when every set of photos is kept the same way,
+    /// and nil the moment any of them differs.
+    ///
+    /// **A row on the storage screen earns its place by being different.** A
+    /// set exists per import, so somebody who has added six folders has six
+    /// rows saying exactly the same thing — six answers to "where did this come
+    /// from", which is provenance, on a screen that is asked "are my photos
+    /// safe". When they all agree the row axis carries no information and the
+    /// table is a list of imports wearing a grid.
+    ///
+    /// This is also what keeps the one case that had to stay sayable when
+    /// groups receded: somebody who deliberately keeps one set off the drive
+    /// they travel with has a set that differs, so nothing collapses. No rule
+    /// has to detect that intention — the difference *is* the intention, and
+    /// the difference is the trigger.
+    ///
+    /// **Mode is deliberately not compared.** It says what happens next, not
+    /// where the photos are now, and two sets on the same drives are in the
+    /// same place whatever brought them there. Register a drive later and only
+    /// the worked-out one moves; they differ then, and the rows split then.
+    ///
+    /// Nil for a single set too — there is nothing to collapse, and the one row
+    /// is the archive.
+    static func sharedRule(among groups: [StorageGroup]) -> StorageGroup? {
+        guard groups.count > 1, let first = groups.first else { return nil }
+        let agrees = groups.allSatisfy {
+            $0.desiredCopies == first.desiredCopies
+                && $0.destinationTargetIDs == first.destinationTargetIDs
+        }
+        return agrees ? first : nil
+    }
+
     /// Where copies should go, chosen from the drives themselves.
     ///
     /// **Three rules, in order:**

@@ -81,6 +81,9 @@ struct StorageMatrix: View {
     /// The change being composed. Its rules live in `StoragePlacementDraft`,
     /// which is where they can be tested; this only holds it and draws it.
     @State private var draft: StoragePlacementDraft?
+    /// Opened by hand, and only meaningful while every set agrees — once one
+    /// differs there is nothing collapsed to reveal.
+    @State private var isShowingEachSet = false
     @State private var plan: RetargetPlan?
     @State private var confirmingApply = false
 
@@ -106,11 +109,23 @@ struct StorageMatrix: View {
     }
     private var counts: [UUID: Int] { store.photoCountByStorageGroup }
 
+    private var sharedRule: StorageGroup? { StorageGroup.sharedRule(among: groups) }
+
+    private var sharedRuleSentence: String {
+        guard let shared = sharedRule else { return "" }
+        return StoragePlacementDraft.rule(
+            copies: shared.desiredCopies,
+            destinations: shared.destinationTargetIDs,
+            mode: shared.destinationMode,
+            choseFrom: store.automaticEligibleDevices.count
+        ) { store.targetsByID[$0]?.name ?? "a device" }
+    }
+
     var body: some View {
         CardBox(
             title: "How many copies, and where",
             systemImage: "square.stack.3d.up",
-            help: "Every photo is in exactly one group, and a group says how many copies to keep. Read across a row to see where that group's photos are; read down a column to see what one device holds. A gap in a row is a device that group does not use."
+            help: "Read down a column to see what one device holds. While every set of photos is kept the same way there is one line saying so; a set kept differently gets a row of its own, and then reading across a row shows where that set is. A gap in a row is a device that set does not use."
         ) {
             VStack(alignment: .leading, spacing: 12) {
                 if groups.isEmpty {
@@ -334,7 +349,10 @@ struct StorageMatrix: View {
                         DriveCard(drive: target, drawsContainer: false, onForget: { onForget(target) })
                     }
                 }
-                ForEach(groups) { group in
+                if sharedRule != nil, !isShowingEachSet {
+                    collapsedRow
+                }
+                ForEach(sharedRule != nil && !isShowingEachSet ? [] : groups) { group in
                     HStack(alignment: .center, spacing: 6) {
                         rowHeader(group)
                         ForEach(places) { place in
@@ -361,6 +379,13 @@ struct StorageMatrix: View {
                         }
                     }
                 }
+                if sharedRule != nil, isShowingEachSet {
+                    Button("Show them together") {
+                        withAnimation(.easeInOut(duration: 0.18)) { isShowingEachSet = false }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
                 Divider().frame(width: tableWidth)
                 HStack(alignment: .top, spacing: 6) {
                     Text(archivePhotoCount == 1
@@ -374,6 +399,26 @@ struct StorageMatrix: View {
             }
             .padding(.vertical, 2)
         }
+    }
+
+    /// The one line that replaces a column of identical rows.
+    ///
+    /// No cells: with every set following one rule, a per-set count answers
+    /// which import a photograph arrived in, and the per-device totals directly
+    /// underneath already answer what each device holds.
+    private var collapsedRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(sharedRuleSentence)
+                .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 12)
+            Button("Show each set of photos") {
+                withAnimation(.easeInOut(duration: 0.18)) { isShowingEachSet = true }
+            }
+            .buttonStyle(.link)
+            .font(.caption)
+        }
+        .frame(width: tableWidth, alignment: .leading)
     }
 
     /// Exactly as wide as the table above it, so an opened panel can never

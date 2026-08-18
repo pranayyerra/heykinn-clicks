@@ -361,7 +361,10 @@ to a platform that has never heard of Apple.
    one-time question about their *setup* (does this library sync?) is
    topology, not presence, and may not be stretched into one. An unavailable
    or empty source yields a refusal, never a negative.
-4. **Redundancy is configured per storage group.** Each group carries its own
+4. **Redundancy is configured per storage group**, and a group is only *shown*
+   when it differs from the rest — while every set of photos is kept the same
+   way the screen says so in one line, and a set kept differently gets a row of
+   its own (`StorageGroup.sharedRule`). Each group carries its own
    copy count and a destination mode: let the app work out the required devices
    deterministically, or name specific devices — "this export: 2 copies, on
    Archive Drive and the NAS". Chosen mode places copies only on those devices;
