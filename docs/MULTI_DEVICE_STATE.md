@@ -770,7 +770,7 @@ writes and physical latency join the debugging surface.
 | ~~**5**~~ | ~~Segment codec + `SPEC-format.md` §3~~ | **Done.** JSON Lines with per-line checksums; `SegmentStore`, `DriveSync`, and a torn write among the tests. |
 | ~~**6**~~ | ~~Merge on connect~~ | **Done.** Runs from the existing connect handler, in slices so the window keeps drawing, with a line on the drive's card saying what travelled. |
 | ~~**7**~~ | ~~Checkpoints, pruning, device retirement~~ | **Done, and smaller than it looked.** [`SPEC-format.md`](SPEC-format.md) §4. Making the checkpoint the base rather than an optimisation removed the low-mark arithmetic and device retirement entirely — segments below a checkpoint are unreachable by anybody, so pruning consults no reader. `CheckpointSyncTests`. |
-| **8** | Extract adapters behind ports; resolve H3 | Makes the portable layer actually portable. Worth doing before a second platform, not during. |
+| **8** | Extract adapters behind ports (H3's zip half is done) | Makes the portable layer actually portable. Worth doing before a second platform, not during. |
 | **9** | Read-only client on another platform | The vectors are what make this safe. |
 
 Step 2 was moved up deliberately and is the reason to have done it first: it was

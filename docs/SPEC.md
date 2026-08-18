@@ -692,8 +692,11 @@ somebody reading it and drawing the wrong conclusion.
 - **The pre-split `drives` columns are still written and no longer read.** A
   build that predates the split reads them, so they stay until no such build is
   in use; `fetchTargets` takes all three from `drive_local_state`.
-- **Invariant 13 is still aspirational.** Registering a drive still overwrites
-  another archive's marker without asking.
+- **Invariant 13 is enforced at registration, and nowhere else.** A drive
+  carrying another archive's marker is offered rather than overwritten
+  (`DriveMarkerConflict`, `MarkerConflictTests`). Nothing checks a marker that
+  changes *after* registration, because nothing writes one there — but that is
+  an absence of a path, not a guard.
 
 ---
 
