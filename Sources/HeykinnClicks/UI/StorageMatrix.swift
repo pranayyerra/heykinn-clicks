@@ -938,7 +938,7 @@ struct StorageMatrix: View {
 
                 if draft.mode == .automatic {
                     Label(
-                        "This group works out its own devices. Moving one fixes it to the devices you name.",
+                        "Moving one fixes this group to the devices you name.",
                         systemImage: "wand.and.stars"
                     )
                     .font(.caption)

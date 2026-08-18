@@ -179,4 +179,41 @@ final class StoragePlacementIntentTests: XCTestCase {
         let draft = StoragePlacementDraft(group: group(copies: 1, on: [driveA]))
         XCTAssertEqual(rule(draft), "Every photo on Owner's Back, and nowhere else.")
     }
+
+    // MARK: - What a worked-out group says about itself
+
+    private func automatic(copies: Int, on destinations: [UUID]) -> StoragePlacementDraft {
+        StoragePlacementDraft(group: StorageGroup(
+            id: UUID(), label: "G", desiredCopies: copies,
+            destinationTargetIDs: destinations, destinationMode: .automatic, createdAt: Date()
+        ))
+    }
+
+    /// It used to say "on devices the app works out" — which named nothing and
+    /// gave no reason, and repeated the hint printed directly underneath it.
+    func testAWorkedOutGroupNamesItsDevicesAndSaysWhy() {
+        let sentence = rule(automatic(copies: 2, on: [driveA, driveB]))
+        XCTAssertEqual(sentence, "Every photo on Owner's Back and My Passport — the devices with the most room.")
+        XCTAssertFalse(sentence.contains("works out"), "the sentence still explains itself instead of answering")
+    }
+
+    func testAWorkedOutGroupWithOneDeviceSaysDeviceNotDevices() {
+        XCTAssertEqual(
+            rule(automatic(copies: 1, on: [driveA])),
+            "Every photo on Owner's Back — the device with the most room."
+        )
+    }
+
+    /// Fewer devices than copies. `problem` stays quiet for a worked-out group
+    /// on purpose — a default arrangement should not wear a warning — so this
+    /// sentence is the only thing that says it, and it has to say it plainly
+    /// without calling it a mistake.
+    func testAWorkedOutGroupShortOfDevicesSaysSoWithoutCallingItAnError() {
+        let draft = automatic(copies: 2, on: [driveA])
+        XCTAssertNil(draft.problem, "a worked-out group must not be warned about its own default")
+        let sentence = rule(draft)
+        XCTAssertTrue(sentence.contains("one copy"), sentence)
+        XCTAssertTrue(sentence.contains("two copies"), sentence)
+        XCTAssertTrue(sentence.contains("Owner's Back"), sentence)
+    }
 }

@@ -92,12 +92,30 @@ struct StoragePlacementDraft: Equatable {
     /// The editor showed a tick list and a number with nothing between them, so
     /// "three devices, two copies" looked like a contradiction rather than a
     /// spare. Written out, it is neither surprising nor a thing to work out.
+    ///
+    /// **A worked-out group names its devices and says why.** It used to say
+    /// "on devices the app works out", which repeated the label underneath it
+    /// and answered neither *which* nor *why* — fine when the answer was
+    /// "whichever were registered first", and not something worth admitting.
+    /// Now that placement has a reason a person would accept, the sentence can
+    /// give it.
     func rule(naming names: (UUID) -> String) -> String {
         guard !destinations.isEmpty else { return "Nowhere to keep them yet." }
-        if mode == .automatic {
-            return "Keeping \(Formatters.copies(copies)) of every photo, on devices the app works out."
-        }
         let listed = destinations.map(names)
+        if mode == .automatic {
+            let named = Formatters.list(listed)
+            // Fewer devices than copies, which `problem` deliberately stays
+            // quiet about for a worked-out group — so this is the only place it
+            // is said, and it says it without calling the default an error.
+            guard destinations.count >= copies else {
+                return "Every photo on \(named). That is \(Formatters.copies(destinations.count)), "
+                    + "not the \(Formatters.copies(copies)) you asked for — register another device "
+                    + "and the rest follow."
+            }
+            return destinations.count == 1
+                ? "Every photo on \(named) — the device with the most room."
+                : "Every photo on \(named) — the devices with the most room."
+        }
         if destinations.count == 1 {
             return "Every photo on \(listed[0]), and nowhere else."
         }
