@@ -23,24 +23,21 @@ The frame for all four:
 
 ## What is already true, before deciding anything
 
-Checked rather than assumed, because two of these are better than they look from
-the code:
+**This is the starting point the five decisions below were taken against, not
+a description of the app now.** It is kept because the decisions do not make
+sense without it. Checked rather than assumed at the time, because two of these
+were better than they looked from the code.
 
-- **The device this runs on is adopted as a place for copies on first launch**,
-  automatically, if the disk has more than the reserve free
-  (`adoptHostDeviceIfNeeded`). Nobody has to set that up.
-- **Importing creates the group it needs.** A source brings its own storage
-  group with it, taking the copy count and destinations from whatever was last
-  chosen (`newSourceDefaults`). A person never has to create one first.
-- **The add-source sheet still asks**, prefilled. So the questions are answered
-  in advance but not removed.
-- **Groups are a visible, first-class idea** — the storage matrix is a grid of
-  groups against places.
-- **"Where this should be kept" is an editable control** on a photo, and
-  changing it moves nothing.
+| Then | Now |
+|---|---|
+| The device this runs on is adopted as a place for copies on first launch, if the disk has more than the reserve free (`adoptHostDeviceIfNeeded`). Nobody has to set that up. | Unchanged. |
+| Importing creates the group it needs, taking the copy count **and destinations** from whatever was last chosen. A person never has to create one first. | Still creates it, but only the **count** is inherited. Carrying the destinations pinned every new import to the drives owned on the day somebody first touched the list, so a drive bought later was never used. |
+| The add-source sheet **still asks**, prefilled. The questions are answered in advance but not removed. | It states what it will do in one sentence and offers `Change…`. See P1. |
+| Groups are a visible, first-class idea — the storage matrix is a grid of groups against places. | Unchanged, and P2 is the open question about it. |
+| "Where this should be kept" is an editable control on a photo, and changing it moves nothing. | Gone. See P3. |
 
-So the gap is not that the app is unusable without understanding it. It is that
-the app *shows its reasoning*, and its reasoning is elaborate.
+So the gap was not that the app was unusable without understanding it. It was
+that the app *showed its reasoning*, and its reasoning was elaborate.
 
 ---
 
