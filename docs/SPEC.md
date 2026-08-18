@@ -420,7 +420,11 @@ to a platform that has never heard of Apple.
    **There is no archive-wide copy count.** Not as a policy, and not as a
    default that binds anything: the only surviving global is
    `newSourceDefaults`, which prefills the add-a-source sheet with the last
-   answer given and governs nothing once a source exists. Every protection
+   copy count given and governs nothing once a source exists. **The count
+   only** — the devices are worked out afresh for each import. Remembering the
+   device list froze new groups onto whatever was plugged in the first time
+   anybody touched the list, so a drive bought later was never proposed for
+   anything again. Every protection
    verdict, every placement and every reclamation precondition reads the
    number off the asset's own source, through
    `AppStore.placementPolicy(forAsset:)`. An asset with no source recorded

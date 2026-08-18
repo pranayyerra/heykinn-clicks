@@ -226,6 +226,23 @@ final class StagingReclaimIntegrationTests: XCTestCase {
 
         store.importFolders([source])
         try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+
+        // Said outright rather than inherited. This test needs a photo owed to
+        // both targets; a folder import makes no group, so it was relying on
+        // the no-group fallback proposing every target — which made it a test
+        // of the add-a-source default as well, and it broke the day that
+        // default stopped naming this device alongside the drives.
+        let group = try XCTUnwrap(store.createStorageGroup(
+            label: "Both",
+            from: StorageGroup.Defaults(
+                desiredCopies: 2,
+                destinationTargetIDs: [hereID, awayID],
+                destinationMode: .chosen
+            )
+        ))
+        XCTAssertEqual(store.moveToStorageGroup(group.id, assetIDs: store.assets.map(\.id)), 1)
+        store.loadAll()
+
         store.syncDrive(hereID)
         try await waitUntil("the sync to drain") { !store.isSyncing }
 

@@ -192,10 +192,23 @@ The sequence matters, and it is the reverse of what was written here:
    three drives and two copies takes the two emptiest, and as they fill the
    choice moves on its own. `PlacementRulesTests`.
 3. **Then groups can recede** — because by then something else is doing their
-   job, and hiding them costs nothing. **Now unblocked.** Still not free: an
-   automatic group can now choose sensibly, but `.chosen` is what somebody uses
-   to keep one drive offsite, and no rule can see a building. Hiding groups has
-   to leave that sayable.
+   job, and hiding them costs nothing. **Now unblocked, and one thing had to be
+   fixed first.**
+
+   Looking at what real archives actually contain turned up a defect with a
+   year-long fuse: the add-a-source default remembered the *device list* as well
+   as the copy count, so one click in `Change…` — even just to look — made every
+   later import inherit that list. A drive bought afterwards was never proposed
+   for anything again. All four archives on the machine were in that state, and
+   the placement rule built in step 2 would never have run on any of them.
+
+   Fixed by remembering only the count. **This had to come before groups
+   recede**, not after: hiding the screen while the default was silently
+   freezing would have hidden the only place a person could have noticed.
+
+   Still not free after that: `.chosen` is what somebody uses to keep one drive
+   offsite, and no rule can see a building. Hiding groups has to leave that
+   sayable.
 
 A few honest questions at the moment a drive or an import appears are not the
 problem this document set out to solve. A queue of questions in front of somebody

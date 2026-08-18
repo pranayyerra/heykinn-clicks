@@ -118,4 +118,94 @@ final class SafeByDefaultTests: XCTestCase {
         XCTAssertEqual(setup.desiredCopies, 1, "asked for more copies than there are places to put them")
         XCTAssertEqual(setup.destinationTargetIDs.count, 1)
     }
+
+    // MARK: - What one import teaches the next
+
+    private func registerDrive(
+        _ store: AppStore, _ name: String, freeGB: Int64
+    ) throws -> UUID {
+        let id = UUID()
+        try store.catalog.upsertTarget(ReplicationTarget(
+            id: id, name: name, kind: .externalVolume, volumeUUID: UUID().uuidString,
+            markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: Date(),
+            lastKnownPath: "/Volumes/\(name)", configuredPath: nil,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot,
+            lastKnownFreeBytes: freeGB * 1_000_000_000
+        ))
+        store.loadAll()
+        return id
+    }
+
+    /// **A drive bought later gets used.**
+    ///
+    /// The defect this replaces had a year-long fuse. Opening `Change…` and
+    /// clicking a drive — even to look — made that group `.chosen`, which is
+    /// right; it also saved that drive list as the default for *every* later
+    /// import. A drive registered afterwards was then never proposed for
+    /// anything again, silently, because each new group was born naming the
+    /// drives its owner happened to have on the day they once clicked
+    /// something. Every archive on the machine this was found on had reached
+    /// that state, which is why it was worth a behaviour change rather than a
+    /// note.
+    func testADriveRegisteredAfterAnImportIsUsedByTheNextOne() throws {
+        let store = try makeFreshStore()
+        let small = try registerDrive(store, "Small Drive", freeGB: 50)
+
+        store.beginAddingSource([try makeDirectory("first")])
+        var first = try XCTUnwrap(store.pendingSourceSetup)
+        // Exactly what SourceSettingsPicker.toggle() does.
+        first.destinationMode = .chosen
+        first.destinationTargetIDs = [small]
+        store.confirmAddingSource(first)
+
+        let big = try registerDrive(store, "Big New Drive", freeGB: 4_000)
+
+        store.beginAddingSource([try makeDirectory("second")])
+        let second = try XCTUnwrap(store.pendingSourceSetup)
+        XCTAssertTrue(
+            second.destinationTargetIDs.contains(big),
+            """
+            A drive registered since the last import was not offered to this             one. The previous import's device list is being carried forward,             which freezes the archive onto whatever was plugged in the first             time anybody touched the list.
+            """
+        )
+        XCTAssertEqual(second.destinationMode, .automatic)
+    }
+
+    /// The half that still travels: how safe somebody said they wanted to be.
+    func testTheCopyCountIsStillRememberedFromOneImportToTheNext() throws {
+        let store = try makeFreshStore()
+        _ = try registerDrive(store, "One", freeGB: 500)
+        _ = try registerDrive(store, "Two", freeGB: 400)
+        _ = try registerDrive(store, "Three", freeGB: 300)
+
+        store.beginAddingSource([try makeDirectory("first")])
+        var first = try XCTUnwrap(store.pendingSourceSetup)
+        first.desiredCopies = 3
+        store.confirmAddingSource(first)
+
+        store.beginAddingSource([try makeDirectory("second")])
+        let second = try XCTUnwrap(store.pendingSourceSetup)
+        XCTAssertEqual(second.desiredCopies, 3, "the copy count is a preference and should carry")
+        XCTAssertEqual(second.destinationTargetIDs.count, 3)
+    }
+
+    /// And a group told to use specific drives keeps them. Re-deriving the
+    /// *default* must not re-derive a decision somebody actually made.
+    func testAChosenGroupIsNotDisturbedByTheNewDefault() throws {
+        let store = try makeFreshStore()
+        let small = try registerDrive(store, "Small Drive", freeGB: 50)
+
+        store.beginAddingSource([try makeDirectory("first")])
+        var first = try XCTUnwrap(store.pendingSourceSetup)
+        first.destinationMode = .chosen
+        first.destinationTargetIDs = [small]
+        store.confirmAddingSource(first)
+
+        _ = try registerDrive(store, "Big New Drive", freeGB: 4_000)
+        store.resolveAutomaticDestinations()
+
+        let group = try XCTUnwrap(store.storageGroups.first)
+        XCTAssertEqual(group.destinationMode, .chosen)
+        XCTAssertEqual(group.destinationTargetIDs, [small], "a named list was overruled")
+    }
 }
