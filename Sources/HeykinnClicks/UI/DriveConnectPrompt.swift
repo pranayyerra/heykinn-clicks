@@ -13,10 +13,10 @@ import SwiftUI
 /// photos, works on a drive this app has never seen, and needs no registration
 /// — checked, not assumed.
 ///
-/// **Closing means no, and it is remembered.** There is no toggle because the
-/// question does not come back: whose a drive is does not change on Tuesday.
-/// Being asked the same thing at every mount is worse than having to turn it on
-/// later, and later is one screen away.
+/// **Both answers are remembered**, which is why there is no toggle: the
+/// question does not come back, so there is nothing to opt into. Whose a drive
+/// is does not change on Tuesday, and being asked at every mount is worse than
+/// turning it on later — later being one screen away.
 ///
 /// This never appears for a drive that already belongs to somebody else. The
 /// app can see that from the ID file, so there is nothing to ask — see
@@ -49,32 +49,9 @@ struct DriveConnectPrompt: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack(alignment: .firstTextBaseline) {
-                Label(volume.name, systemImage: "externaldrive.badge.plus")
-                    .font(.title3)
-                    .bold()
-                Spacer()
-                // Closing is the other answer, so there has to be a way to
-                // close. Written as a close control rather than a second
-                // button on purpose: this is one decision with one action, and
-                // a matching pair would put "no" on the same footing as "yes"
-                // when the whole point is that most drives plugged in are ones
-                // somebody means to use.
-                //
-                // It carries the escape key, which is what somebody reaches
-                // for. Without it the panel had no way out at all — found by
-                // opening it, not by reading it.
-                Button {
-                    dismiss()
-                } label: {
-                    Image(systemName: "xmark")
-                        .imageScale(.medium)
-                        .foregroundStyle(.secondary)
-                }
-                .buttonStyle(.plain)
-                .help("Do not use this drive")
-                .accessibilityLabel("Do not use this drive")
-            }
+            Label(volume.name, systemImage: "externaldrive.badge.plus")
+                .font(.title3)
+                .bold()
 
             Text("Use \(volume.name) for your photos?")
                 .font(.callout)
@@ -85,12 +62,18 @@ struct DriveConnectPrompt: View {
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text("Close this and it will not be used, and you will not be asked again. You can turn it on later under Keep safe.")
+            Text("Either way you will not be asked about this drive again. You can change it later under Keep safe.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack {
+                // Said out loud rather than left to an ✕ in the corner. The
+                // close control was the same decision — no, and remembered —
+                // but nothing about a cross says "remembered", and a person
+                // pressing it deserves to know they have answered something.
+                Button("Don't use it") { dismiss() }
+                    .keyboardShortcut(.cancelAction)
                 Spacer()
                 Button("Yes, use it") { useIt() }
                     .buttonStyle(.borderedProminent)
@@ -99,12 +82,6 @@ struct DriveConnectPrompt: View {
         }
         .padding(24)
         .frame(width: 420)
-        // Escape closes it. `.keyboardShortcut(.cancelAction)` on the close
-        // control did not take — tried, and the key did nothing — because a
-        // plain-styled button is not what that modifier is looking for. This is
-        // the macOS way of saying the same thing, and it works on the panel
-        // rather than on any button in it.
-        .onExitCommand { dismiss() }
         .onDisappear { declineIfUnanswered() }
         .fileImporter(
             isPresented: $isDrivePickerPresented,
