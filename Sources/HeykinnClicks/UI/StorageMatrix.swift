@@ -903,7 +903,7 @@ struct StorageMatrix: View {
                 // between them, so three devices and two copies read as a
                 // contradiction rather than as a spare. It is the one thing
                 // here somebody cannot work out by looking.
-                Text(draft.rule { store.targetsByID[$0]?.name ?? "a device" })
+                Text(draft.rule(choseFrom: store.automaticEligibleDevices.count) { store.targetsByID[$0]?.name ?? "a device" })
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
 

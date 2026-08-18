@@ -201,13 +201,44 @@ struct SourceSettingsPicker: View {
 }
 
 /// Shown when a folder is picked, before anything is read.
+///
+/// **It says what it is about to do rather than asking.** This was a form —
+/// a copy count, a device list, a link to pick the devices by hand — with every
+/// answer already filled in correctly, in front of somebody who had not yet
+/// seen a single photograph in the app. Each control was individually
+/// defensible and together they were a queue.
+///
+/// What made the form removable was not a decision about forms. It was that
+/// placement acquired a *reason*: it takes the drives with the most room, so
+/// the sentence can say which and why, and a person can tell at a glance
+/// whether it is what they wanted. While the answer was "whichever drives were
+/// registered first", there was nothing worth saying and the controls were the
+/// only honest way to show the arrangement.
+///
+/// The form is one click away and unchanged. Removing a question is only
+/// tolerable if the answer stays editable — otherwise it is not a default, it
+/// is a decision taken on somebody's behalf and hidden.
 struct AddSourceSheet: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
     @State private var setup: AppStore.PendingSourceSetup
+    /// Closed until asked for. Opens on its own for a set that already names
+    /// its own devices, because hiding a choice somebody made is worse than
+    /// showing a control they will not use.
+    @State private var isEditingPlacement = false
 
     init(setup: AppStore.PendingSourceSetup) {
         _setup = State(initialValue: setup)
+        _isEditingPlacement = State(initialValue: setup.destinationMode == .chosen)
+    }
+
+    private var plan: String {
+        StoragePlacementDraft.rule(
+            copies: setup.desiredCopies,
+            destinations: setup.destinationTargetIDs,
+            mode: setup.destinationMode,
+            choseFrom: store.automaticEligibleDevices.count
+        ) { store.targetsByID[$0]?.name ?? "a device" }
     }
 
     var body: some View {
@@ -225,11 +256,24 @@ struct AddSourceSheet: View {
                     .truncationMode(.head)
             }
 
-            SourceSettingsPicker(
-                desiredCopies: $setup.desiredCopies,
-                destinationTargetIDs: $setup.destinationTargetIDs,
-                destinationMode: $setup.destinationMode
-            )
+            if isEditingPlacement {
+                SourceSettingsPicker(
+                    desiredCopies: $setup.desiredCopies,
+                    destinationTargetIDs: $setup.destinationTargetIDs,
+                    destinationMode: $setup.destinationMode
+                )
+            } else {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(plan)
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button("Change…") {
+                        withAnimation(.easeInOut(duration: 0.18)) { isEditingPlacement = true }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
+            }
 
             Text("The folder is only ever read. Photos already on a device you pick are counted where they are rather than copied again.")
                 .font(.caption)

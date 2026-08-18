@@ -1,12 +1,11 @@
 # Product decisions — what a person should have to understand
 
-*Four decisions about the interface, in the shape of `ARCHITECTURE-DECISIONS.md`:
+*Five decisions about the interface, in the shape of `ARCHITECTURE-DECISIONS.md`:
 what is true today, what the options are, what each costs, and a recommendation.*
 
-**P3 is built, P4 already was, P1 is partly built, and P2 has been withdrawn
-and replaced** — steps 1 and 2 of the replacement are now built, leaving step 3.
-See below. The rest are settled questions waiting for a turn,
-not open ones to be argued again.
+**P1, P3, P4 and P5 are built. P2 has been withdrawn and replaced**, and steps 1
+and 2 of its replacement are built, leaving step 3 — the only thing on this page
+still to do.
 
 Companion to invariant 19 and requirement R8: *a person who is not technical can
 use this without learning our vocabulary.* That invariant has been satisfied for
@@ -94,8 +93,22 @@ different rules and only the first was intended. One copy is reported as one
 copy, in the same words as any other shortfall, and the rest arrive when a drive
 is registered. `SafeByDefaultTests`.
 
-What remains of this section is the softer half: the sheet still asks, prefilled,
-rather than proceeding and saying what it chose.
+**And the softer half is now done too.** The sheet stated the arrangement as a
+form — a copy count, a device list, a link to pick by hand — with every answer
+already correct, in front of somebody who had not yet seen a photograph. It now
+states it as a sentence, with `Change…` revealing the same form unaltered.
+
+What made that possible was not a decision about forms. It was that placement
+acquired a reason: it takes the drives with the most room, so the sentence can
+say which and why. While the answer was "whichever were registered first" there
+was nothing worth saying, and the controls were the only honest way to show the
+arrangement.
+
+**The reason is only given when a choice was actually made.** Two drives and two
+copies took both, so it says "Every photo on New Drive and Old Drive." and
+claims no judgement about room. A fresh install with no drive falls back to this
+device, where "the roomiest" would be flatly untrue. Checked on screen, and
+`StoragePlacementIntentTests` fails if either case starts explaining itself.
 
 ---
 
@@ -322,11 +335,18 @@ archive no longer needs its iCloud copy — see `ReclamationPlanner.Plan.plainSu
 
 ## Taken together
 
-P1 and P4 are the two that change how the app feels on first use, and neither
-removes anything. P2 hides a screen. P3 removes a control, and is the only one
-that takes a capability away — which is why it is the one I would take first, and
-the one worth disagreeing with me about.
+P1 and P4 are the two that changed how the app feels on first use, and neither
+removed anything. P5 turned five things into one question. P3 removed a control
+and was the only one that took a capability away.
 
-None of them touches the machinery. The archive, the merge, the drives and the
-verification are unaffected by all four; this is entirely a question of what
-crosses into the interface.
+None of them touched the machinery — the archive, the merge, the drives and the
+verification are unaffected by all five, and this was entirely a question of
+what crosses into the interface.
+
+**Except P2, which is why it was withdrawn.** Hiding groups was written up as
+another interface question and was not one: it removed the only place "which
+drives hold what" could be said, and nothing underneath was capable of deciding
+in its place. Making it capable meant a new recorded fact on every drive, a
+column in the catalog, and a rule with a reason. That is the one lesson on this
+page worth carrying to the next decision — an interface question that cannot be
+answered by changing the interface is a machinery question wearing a disguise.

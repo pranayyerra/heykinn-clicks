@@ -99,7 +99,36 @@ struct StoragePlacementDraft: Equatable {
     /// "whichever were registered first", and not something worth admitting.
     /// Now that placement has a reason a person would accept, the sentence can
     /// give it.
-    func rule(naming names: (UUID) -> String) -> String {
+    func rule(choseFrom candidates: Int, naming names: (UUID) -> String) -> String {
+        Self.rule(
+            copies: copies, destinations: destinations, mode: mode,
+            choseFrom: candidates, naming: names
+        )
+    }
+
+    /// The same sentence, for callers holding the three values without a draft
+    /// around them — the add-photos sheet, which is describing a group that
+    /// does not exist yet.
+    ///
+    /// **Shared rather than reimplemented.** The sheet and the storage editor
+    /// are saying the same thing about the same arrangement, and two copies of
+    /// a sentence are two sentences that will disagree by the end of the year.
+    /// `candidates` is how many devices the arrangement was picked *from*.
+    ///
+    /// **Only a real choice earns a reason.** "The ones with the most room" is
+    /// true when some drive was passed over and false when none was: taking
+    /// both of two drives is not a judgement about room, and a fresh install
+    /// with no drive at all falls back to this device, where the claim would be
+    /// flatly untrue — it was not the roomiest of anything, it was the only
+    /// place there was. Saying so anyway is the failure R0 names, arrived at
+    /// through a sentence rather than through data.
+    static func rule(
+        copies: Int,
+        destinations: [UUID],
+        mode: StorageGroup.DestinationMode,
+        choseFrom candidates: Int = 0,
+        naming names: (UUID) -> String
+    ) -> String {
         guard !destinations.isEmpty else { return "Nowhere to keep them yet." }
         let listed = destinations.map(names)
         if mode == .automatic {
@@ -112,6 +141,10 @@ struct StoragePlacementDraft: Equatable {
                     + "not the \(Formatters.copies(copies)) you asked for — register another device "
                     + "and the rest follow."
             }
+            guard candidates > destinations.count else {
+                // Nothing was passed over, so there is no reason to give.
+                return "Every photo on \(named)."
+            }
             return destinations.count == 1
                 ? "Every photo on \(named) — the device with the most room."
                 : "Every photo on \(named) — the devices with the most room."
@@ -119,7 +152,7 @@ struct StoragePlacementDraft: Equatable {
         if destinations.count == 1 {
             return "Every photo on \(listed[0]), and nowhere else."
         }
-        if keepsACopyEverywhere {
+        if copies >= destinations.count {
             return "Every photo on all \(destinations.count) — \(Formatters.list(listed))."
         }
         let primary = Array(listed.prefix(copies))

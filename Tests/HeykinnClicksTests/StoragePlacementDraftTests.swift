@@ -132,8 +132,8 @@ final class StoragePlacementIntentTests: XCTestCase {
         )
     }
 
-    private func rule(_ draft: StoragePlacementDraft) -> String {
-        draft.rule { self.names[$0] ?? "?" }
+    private func rule(_ draft: StoragePlacementDraft, choseFrom: Int = 99) -> String {
+        draft.rule(choseFrom: choseFrom) { self.names[$0] ?? "?" }
     }
 
     /// Ticking another device usually means "and this one too". Leaving the
@@ -215,5 +215,33 @@ final class StoragePlacementIntentTests: XCTestCase {
         XCTAssertTrue(sentence.contains("one copy"), sentence)
         XCTAssertTrue(sentence.contains("two copies"), sentence)
         XCTAssertTrue(sentence.contains("Owner's Back"), sentence)
+    }
+
+    /// **A reason is only given when a drive was actually passed over.**
+    ///
+    /// Two drives and two copies is not a judgement about room — it took both.
+    /// Claiming otherwise would have the app explaining a decision it did not
+    /// make, which is the same failure as claiming a copy it did not check.
+    func testTakingEveryDriveThereIsClaimsNoJudgementAboutRoom() {
+        let sentence = rule(automatic(copies: 2, on: [driveA, driveB]), choseFrom: 2)
+        XCTAssertEqual(sentence, "Every photo on Owner's Back and My Passport.")
+        XCTAssertFalse(sentence.contains("most room"), sentence)
+    }
+
+    /// The case that put this parameter here: a fresh install with no drive
+    /// plugged in falls back to this device. It is not the roomiest of
+    /// anything — it is the only place there is.
+    func testTheFallbackToThisDeviceIsNotDescribedAsTheRoomiest() {
+        let sentence = rule(automatic(copies: 1, on: [host]), choseFrom: 0)
+        XCTAssertEqual(sentence, "Every photo on this device.")
+        XCTAssertFalse(sentence.contains("most room"), sentence)
+    }
+
+    /// And with something passed over, the reason is earned and given.
+    func testPassingOverADriveEarnsTheReason() {
+        XCTAssertEqual(
+            rule(automatic(copies: 1, on: [driveA]), choseFrom: 3),
+            "Every photo on Owner's Back — the device with the most room."
+        )
     }
 }
