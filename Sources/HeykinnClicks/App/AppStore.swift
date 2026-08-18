@@ -7132,6 +7132,25 @@ final class AppStore: ObservableObject {
     /// Counts pending and in-flight copies as held, so a sync in progress reads
     /// as on its way rather than as a shortfall — the number is meant to say
     /// "this needs a decision", not "this is busy".
+    /// Everything the one safety answer depends on, gathered once.
+    ///
+    /// Both screens used to work this out for themselves and reached different
+    /// conclusions — see `SafetyAnswer`.
+    var safetyFacts: SafetyAnswer.Facts {
+        let states = protectionStates.values
+        let fewest = leastCopiesAnywhere
+        return SafetyAnswer.Facts(
+            photos: countedPhotoTotal,
+            places: targets.count,
+            damaged: states.filter { $0 == .driftDetected }.count,
+            short: states.filter { $0.verdict == .shortOfPolicy }.count,
+            copiesShort: placementShortfallSummary.copiesShort,
+            fewestPlaces: fewest,
+            photosAtFewest: fewest.flatMap { copyCoverage[$0] } ?? 0,
+            unsatisfiable: storageGroups.filter { !$0.isSatisfiable }.map(\.label)
+        )
+    }
+
     var placementShortfallSummary: (assetsShort: Int, copiesShort: Int) {
         var assetsShort = 0
         var copiesShort = 0

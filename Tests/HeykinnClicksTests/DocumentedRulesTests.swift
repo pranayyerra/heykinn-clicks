@@ -69,6 +69,59 @@ final class DocumentedRulesTests: XCTestCase {
         )
     }
 
+    /// **And `Domain/` names nothing that is declared in `UI/`.**
+    ///
+    /// The import check above is necessary and was not sufficient. `Formatters`
+    /// lived in `UI/Components.swift` — a file importing SwiftUI and AppKit —
+    /// and three Domain files called it. Every one of them imported only
+    /// Foundation, so the rule passed while the layer it protects was already
+    /// broken: a reference is not an import, and one module compiles either
+    /// way. Carrying `Domain/` to another platform would have taken a SwiftUI
+    /// file with it.
+    func testDomainNamesNothingDeclaredInTheInterface() throws {
+        let root = repositoryRoot.appendingPathComponent("Sources/HeykinnClicks", isDirectory: true)
+        let declaration = try! NSRegularExpression(
+            pattern: "^(?:public |internal |private |fileprivate )?(?:final )?(?:struct|enum|class|actor|protocol) ([A-Z][A-Za-z0-9_]*)",
+            options: [.anchorsMatchLines]
+        )
+
+        var interfaceTypes: Set<String> = []
+        for file in try swiftFiles(under: root.appendingPathComponent("UI", isDirectory: true)) {
+            let text = try String(contentsOf: file, encoding: .utf8)
+            let range = NSRange(text.startIndex..<text.endIndex, in: text)
+            for match in declaration.matches(in: text, range: range) {
+                if let r = Range(match.range(at: 1), in: text) { interfaceTypes.insert(String(text[r])) }
+            }
+        }
+        XCTAssertFalse(interfaceTypes.isEmpty, "parsed no interface types — has the layout moved?")
+
+        var offences: [String] = []
+        for file in try swiftFiles(under: root.appendingPathComponent("Domain", isDirectory: true)) {
+            // Comments excluded: a doc comment naming the screen a rule exists
+            // for is describing the layer, not depending on it, and a rule that
+            // cannot be explained without tripping itself is unusable.
+            let code = try String(contentsOf: file, encoding: .utf8)
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .map { line -> Substring in
+                    guard let comment = line.range(of: "//") else { return line }
+                    return line[line.startIndex..<comment.lowerBound]
+                }
+                .joined(separator: "\n")
+            let words = Set(
+                code.split { !$0.isLetter && !$0.isNumber && $0 != "_" }.map(String.init)
+            )
+            for named in interfaceTypes.intersection(words).sorted() {
+                offences.append("\(file.lastPathComponent) names \(named)")
+            }
+        }
+        XCTAssertEqual(
+            offences, [],
+            """
+            Domain/ is the half of the app another platform can carry over.             These name a type declared in UI/, which imports SwiftUI. Move the             type down into Domain/ if it is really model code — Formatters was             — or put the caller in UI/ where it belongs.
+            """
+        )
+    }
+
     // MARK: - The invariant list
 
     /// **Every invariant is numbered once, and they run in order.**

@@ -48,7 +48,7 @@ struct DrivesView: View {
                     .font(.largeTitle)
                     .foregroundStyle(tint)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(verdictHeadline(damaged: damaged, short: short, holders: holders))
+                    Text(SafetyAnswer.headline(store.safetyFacts))
                         .font(.title2.weight(.medium))
                         .fixedSize(horizontal: false, vertical: true)
                     Text(verdictDetail(reachable: reachable, holders: holders))
@@ -96,33 +96,8 @@ struct DrivesView: View {
         }
     }
 
-    private func verdictHeadline(damaged: Int, short: Int, holders: Int) -> String {
-        if store.assets.isEmpty { return "Nothing in the archive yet." }
-        if holders == 0 { return "No drive is holding your photos yet." }
-        if damaged > 0 {
-            return "\(Formatters.count(damaged, "photo")) \(damaged == 1 ? "has" : "have") a copy that no longer matches."
-        }
-        if short > 0 {
-            return "\(short.formatted()) of \(store.protectionStates.count.formatted()) photos are not yet on all the drives they are meant to be on."
-        }
-        // Answers how many *places*, not whether the bookkeeping balances. A
-        // photo alone on one drive satisfies a one-copy group, so "on all the
-        // drives it is meant to be on" reads as reassurance while describing
-        // the least safe arrangement there is.
-        if let fewest = store.leastCopiesAnywhere {
-            switch fewest {
-            case 0: return "Some photos are in no place at all."
-            case 1:
-                let alone = store.copyCoverage[1] ?? 0
-                return "\(Formatters.count(alone, "photo")) \(alone == 1 ? "is" : "are") in one place only."
-            // "Drives" was wrong the moment somebody named this device: it is a
-            // place that holds a copy, which is the thing being counted.
-            default: return "Every photo is in \(Formatters.count(fewest, "place"))."
-            }
-        }
-        return "Yes — every photo is on all the drives it is meant to be on."
-    }
-
+    /// The one answer, worked out in one place — this screen and Overview used
+    /// to write it separately and disagree. See `SafetyAnswer`.
     private func verdictDetail(reachable: Int, holders: Int) -> String {
         guard holders > 0 else {
             return "Register a drive below and the archive starts copying itself onto it."

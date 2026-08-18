@@ -316,7 +316,7 @@ struct OverviewView: View {
     /// drives while measuring policy.
     /// Whether the headline is good news: enough places, and read back.
     private var archiveIsSound: Bool {
-        everythingRead && (store.leastCopiesAnywhere ?? 0) >= 2
+        SafetyAnswer.isSound(store.safetyFacts, everythingRead: everythingRead)
     }
 
     private var theAnswer: some View {
@@ -369,61 +369,10 @@ struct OverviewView: View {
 
 
 
-    private var safetyHeadline: String {
-        if isEmptyArchive {
-            return "Nothing imported yet. Import a folder or a Google export to start the archive."
-        }
-        // Nowhere to put anything is its own answer, and it is not a shortfall
-        // the app can work off.
-        if store.targets.isEmpty {
-            return "\(localCount.formatted()) photos have nowhere to go yet — no drive is registered. Add one and the copies each group asks for start being made."
-        }
-        // A source asking for more copies than it names devices can never be
-        // satisfied by copying, so it is said plainly rather than counted in
-        // with the photos that are merely behind. Named, because "some source"
-        // is not something a person can act on.
-        if !unsatisfiableSources.isEmpty {
-            let named = unsatisfiableSources.prefix(2).map(\.label).joined(separator: " and ")
-            let rest = unsatisfiableSources.count > 2
-                ? " and \(unsatisfiableSources.count - 2) more"
-                : ""
-            return "\(named)\(rest) \(Formatters.pluralise(unsatisfiableSources.count, "asks", "ask")) for more copies than \(Formatters.pluralise(unsatisfiableSources.count, "it names devices", "they name devices")) to hold them. Name another device, or lower what \(Formatters.pluralise(unsatisfiableSources.count, "it asks", "they ask")) for, under Keep safe."
-        }
-        // One answer. What the app has and has not read back is reported under
-        // it, not folded into it — the copies either satisfy what the source
-        // asked for or they do not, and a stale check does not change that.
-        if protectedCount == localCount {
-            // "Safe" was doing two jobs — enough copies exist, and they are
-            // known to be good — and only the first is true here. Say the one
-            // the ring is actually reporting; the line under it says how far
-            // the checking has got.
-            // The same answer Keep safe leads with, in the same words. Both
-            // screens were asked "is my archive safe" and gave different
-            // replies: this one reported policy compliance, which a photo
-            // alone on one drive satisfies. How many places hold it is the
-            // question, and one number cannot be right on one screen only.
-            if let fewest = store.leastCopiesAnywhere, fewest > 1 {
-                return "Every photo is in \(Formatters.count(fewest, "place"))."
-            }
-            // Keep safe says this in the same words; the two screens are asked
-            // the same question and must not answer it differently.
-            if let fewest = store.leastCopiesAnywhere, fewest < 2 {
-                let alone = store.copyCoverage[fewest] ?? 0
-                return "\(Formatters.count(alone, "photo")) \(alone == 1 ? "is" : "are") \(fewest == 0 ? "in no place at all" : "in one place only")."
-            }
-            return "All \(localCount.formatted()) photos are on all the drives they are meant to be on."
-        }
-        let short = localCount - protectedCount
-        // How many copies that is, not only how many photos. Under k-of-n a
-        // photo can be one copy short or three, and "412 photos short" reads
-        // the same either way — the copy count is what tells you whether this
-        // is one drive's worth of work or an evening's.
-        let copiesShort = store.placementShortfallSummary.copiesShort
-        let detail = copiesShort > short
-            ? " That is \(Formatters.count(copiesShort, "copy", "copies")) still to make."
-            : ""
-        return "\(short.formatted()) of \(localCount.formatted()) photos are not yet on all the drives they are meant to be on.\(detail)"
-    }
+    /// The one answer, worked out in one place. This screen used to compute
+    /// its own and disagreed with Keep safe about a damaged copy — see
+    /// `SafetyAnswer`.
+    private var safetyHeadline: String { SafetyAnswer.headline(store.safetyFacts) }
 
     // MARK: - Drives
 
