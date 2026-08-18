@@ -419,14 +419,20 @@ to a platform that has never heard of Apple.
 
    **There is no archive-wide copy count.** Not as a policy, and not as a
    default that binds anything: the only surviving global is
-   `newSourceDefaults`, which carries the last copy count to the next import and
-   governs nothing once a source exists. **The count only** — the devices are
-   worked out afresh, through the one call every new group starts from
-   (`AppStore.startingDestinations`). Remembering the device list froze new
-   groups onto whatever was plugged in the first time anybody touched the list,
-   so a drive bought later was never proposed for anything again; the Google
-   export path had the same defect by a different route, omitting the mode and
-   inheriting `chosen` from `StorageGroup`'s own default. Every protection
+   `newSourceDefaults`, and it is **derived, never stored**: a new set of photos
+   starts from the count most of the archive already keeps, and from devices
+   worked out through the one call every new group starts from
+   (`AppStore.startingDestinations`). It governs nothing once a source exists.
+
+   Both halves used to be remembered and both went stale. The device list froze
+   new groups onto whatever was plugged in the first time anybody touched it, so
+   a drive bought later was never proposed again — and the Google export path
+   reached the same state by another route, omitting the mode and inheriting
+   `chosen` from `StorageGroup`'s own default. The count then drifted on its
+   own: one real archive had a stored answer of one copy while every set of
+   photos in it kept two, so the app stood ready to propose less protection than
+   it was already providing. A remembered answer is a second source of truth
+   about something the archive can be asked directly. Every protection
    verdict, every placement and every reclamation precondition reads the
    number off the asset's own source, through
    `AppStore.placementPolicy(forAsset:)`. An asset with no source recorded

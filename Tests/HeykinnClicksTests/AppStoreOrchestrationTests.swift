@@ -1239,38 +1239,51 @@ final class NewSourceDefaultsTests: XCTestCase {
         XCTAssertEqual(store.newSourceDefaults.desiredCopies, 1)
     }
 
-    /// An answer given once is remembered, and survives a relaunch — that is
-    /// the whole point of it.
-    func testAnAnswerIsRememberedAcrossRelaunch() throws {
+    /// **What a new set starts from is read off the archive, not remembered.**
+    ///
+    /// This replaces two tests that pinned the opposite — that an answer given
+    /// once was stored and survived a relaunch. It was, and that was the
+    /// defect: a stored answer is a second source of truth, and on the archive
+    /// this was found in it had drifted to one copy while every set of photos
+    /// kept two. Nothing is stored now, so nothing can go stale, and a change
+    /// is picked up as soon as the group making it exists.
+    func testANewSetStartsFromWhatTheArchiveAlreadyKeeps() throws {
         let (store, root, _) = try makeStore()
         try makeTarget(store, "One")
-        let deviceID = try XCTUnwrap(store.targets.first?.id)
 
-        store.newSourceDefaults = StorageGroup.Defaults(
-            desiredCopies: 3, destinationTargetIDs: [deviceID]
+        _ = store.createStorageGroup(
+            label: "Everything",
+            from: StorageGroup.Defaults(desiredCopies: 3, destinationTargetIDs: [])
         )
+        XCTAssertEqual(store.newSourceDefaults.desiredCopies, 3)
 
+        // And it is still 3 after a relaunch, because it was never a
+        // preference — it is what the archive says about itself.
         let (reopened, _, _) = try makeStore(root)
         XCTAssertEqual(reopened.newSourceDefaults.desiredCopies, 3)
-        XCTAssertEqual(reopened.newSourceDefaults.destinationTargetIDs, [deviceID])
     }
 
-    /// A device forgotten since the answer was given is dropped rather than
-    /// carried as a destination nothing can satisfy. The copy count is left
-    /// alone: it is what the user asked for, and the sheet says so rather than
-    /// quietly lowering it.
-    func testADeviceForgottenSinceIsDroppedFromTheDefault() throws {
+    /// The majority wins, and a tie goes upward.
+    ///
+    /// Proposing less protection than the archive already provides is the one
+    /// direction this must not fail in.
+    func testTheCommonestCountWinsAndATieGoesToTheLarger() throws {
         let (store, _, _) = try makeStore()
         try makeTarget(store, "One")
-        let live = try XCTUnwrap(store.targets.first?.id)
-        let forgotten = UUID()
 
-        store.newSourceDefaults = StorageGroup.Defaults(
-            desiredCopies: 2, destinationTargetIDs: [live, forgotten]
+        for copies in [2, 2, 5] {
+            _ = store.createStorageGroup(
+                label: "g\(copies)-\(UUID().uuidString)",
+                from: StorageGroup.Defaults(desiredCopies: copies, destinationTargetIDs: [])
+            )
+        }
+        XCTAssertEqual(store.newSourceDefaults.desiredCopies, 2, "the majority")
+
+        _ = store.createStorageGroup(
+            label: "tie",
+            from: StorageGroup.Defaults(desiredCopies: 5, destinationTargetIDs: [])
         )
-
-        XCTAssertEqual(store.newSourceDefaults.destinationTargetIDs, [live])
-        XCTAssertEqual(store.newSourceDefaults.desiredCopies, 2)
+        XCTAssertEqual(store.newSourceDefaults.desiredCopies, 5, "tied, so the safer one")
     }
 
     /// It binds nothing. Changing what the next source starts with must not
@@ -1289,9 +1302,13 @@ final class NewSourceDefaultsTests: XCTestCase {
         ))
         let group = try XCTUnwrap(store.storageGroups.first { $0.label == "Scans" })
 
-        store.newSourceDefaults = StorageGroup.Defaults(
-            desiredCopies: 3, destinationTargetIDs: [deviceID]
+        // Something else in the archive now keeps three, which moves what a
+        // *new* set would start from.
+        _ = store.createStorageGroup(
+            label: "Elsewhere",
+            from: StorageGroup.Defaults(desiredCopies: 3, destinationTargetIDs: [deviceID])
         )
+        XCTAssertEqual(store.newSourceDefaults.desiredCopies, 3)
 
         let unchanged = try XCTUnwrap(store.storageGroupsByID[group.id])
         XCTAssertEqual(unchanged.desiredCopies, 1)

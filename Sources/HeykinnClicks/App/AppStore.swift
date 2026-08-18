@@ -245,53 +245,53 @@ final class AppStore: ObservableObject {
     /// The tenth folder going to the same two devices should cost a click, not
     /// a decision — asking the same question ten times is how a considered
     /// choice becomes a reflex.
-    /// **Only the copy count is remembered. Where the copies go is worked out
-    /// afresh every time.**
+    /// What a new set of photos starts from: what the rest of the archive
+    /// already keeps.
     ///
-    /// It used to remember all three — count, devices and mode — and that was a
-    /// defect with a long fuse. Touching the device list once makes *that*
-    /// group `.chosen`, which is right and deliberate; saving the same list as
-    /// the default made every future import `.chosen` on a frozen list. Buy a
-    /// drive a year later and no new import would ever use it, silently,
-    /// because each new group was born naming the drives you happened to own on
-    /// the day you once clicked something. Every archive on the machine this
-    /// was found on had reached that state.
+    /// **Nothing is remembered here, and that is the fix.** This used to store
+    /// the last answer given — first all three settings, then just the count —
+    /// and a stored answer is a second source of truth that can only drift from
+    /// the first. On the archive this was found in, the stored count said one
+    /// copy while all three sets of photos kept two: a number chosen once, for
+    /// something else, quietly proposing less protection than the archive
+    /// already provides.
     ///
-    /// The count is a standing preference — how safe you want to be — and it
-    /// survives. The device list is not a preference, it is a fact about what
-    /// you own, and a remembered fact goes stale. So the list is re-derived,
-    /// and a new drive is used the moment it exists.
+    /// The copy count is not a form field to be remembered. It is a standing
+    /// promise the app keeps working at — short by one copy is an outstanding
+    /// job, not an error, and registering a drive is when it gets paid off. The
+    /// honest source for what a new set should promise is what the existing
+    /// sets already promise.
     ///
-    /// **A person who wants specific drives still says so, per import.** That
-    /// group stays `.chosen` for ever and nothing here touches it; what stops
-    /// travelling is the choice leaking onto the *next* import, which nobody
-    /// asked for.
+    /// It follows a change immediately rather than lagging behind one: set an
+    /// import to three copies and the group exists, so the next import sees it.
+    /// There is no place for a stale number to hide.
     var newSourceDefaults: StorageGroup.Defaults {
-        get {
-            let wanted = storedDesiredCopies ?? min(
+        let wanted = copiesTheArchiveAlreadyKeeps
+        return StorageGroup.Defaults(
+            desiredCopies: wanted,
+            destinationTargetIDs: automaticDestinationsOrThisDevice(copies: wanted),
+            destinationMode: .automatic
+        )
+    }
+
+    /// The count most of the archive keeps, or — with nothing to go on — two
+    /// where there are two places for them, otherwise as many as there are.
+    ///
+    /// Ties go to the larger number. Proposing less protection than the archive
+    /// already provides is the one direction this must not fail in, and a tie
+    /// means there is no majority to appeal to.
+    var copiesTheArchiveAlreadyKeeps: Int {
+        let counts = storageGroups.map(\.desiredCopies).filter { $0 > 0 }
+        guard !counts.isEmpty else {
+            return min(
                 StorageGroup.Defaults.initial.desiredCopies,
                 max(targets.count, 1)
             )
-            return StorageGroup.Defaults(
-                desiredCopies: wanted,
-                destinationTargetIDs: automaticDestinationsOrThisDevice(copies: wanted),
-                destinationMode: .automatic
-            )
         }
-        set { defaults.set(newValue.desiredCopies, forKey: Self.newSourceCopiesKey) }
-    }
-
-    private static let newSourceCopiesKey = "newSourceCopies"
-
-    /// The remembered count, taking it from the old whole-settings blob when
-    /// that is all there is — an existing archive keeps the number it chose and
-    /// loses only the frozen device list, which is the point.
-    private var storedDesiredCopies: Int? {
-        if let stored = defaults.object(forKey: Self.newSourceCopiesKey) as? Int { return stored }
-        guard let data = defaults.data(forKey: "newSourceDefaults"),
-              let decoded = try? JSONDecoder().decode(StorageGroup.Defaults.self, from: data)
-        else { return nil }
-        return decoded.desiredCopies
+        let tally = Dictionary(counts.map { ($0, 1) }, uniquingKeysWith: +)
+        return tally.max {
+            $0.value != $1.value ? $0.value < $1.value : $0.key < $1.key
+        }!.key
     }
 
     /// The grants, republished through the store.
@@ -3723,14 +3723,6 @@ final class AppStore: ObservableObject {
             lastError = "Could not save the settings for \(setup.label): \(error.localizedDescription)"
             return
         }
-        // The count only. Carrying this import's devices to the next one is
-        // what froze new archives onto the drives their owner happened to have
-        // the first time they clicked anything — see `newSourceDefaults`.
-        newSourceDefaults = StorageGroup.Defaults(
-            desiredCopies: setup.desiredCopies,
-            destinationTargetIDs: [],
-            destinationMode: .automatic
-        )
         sources.append(source)
         storageGroups.append(group)
         audit(

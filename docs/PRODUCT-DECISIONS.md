@@ -31,7 +31,7 @@ were better than they looked from the code.
 | Then | Now |
 |---|---|
 | The device this runs on is adopted as a place for copies on first launch, if the disk has more than the reserve free (`adoptHostDeviceIfNeeded`). Nobody has to set that up. | Unchanged. |
-| Importing creates the group it needs, taking the copy count **and destinations** from whatever was last chosen. A person never has to create one first. | Still creates it, but only the **count** is inherited. Carrying the destinations pinned every new import to the drives owned on the day somebody first touched the list, so a drive bought later was never used. |
+| Importing creates the group it needs, taking the copy count **and destinations** from whatever was last chosen. A person never has to create one first. | Still creates it, but nothing is inherited from a remembered answer — both halves are read off the archive itself. The stored destinations pinned every new import to the drives owned on the day somebody first touched the list; the stored count then drifted too, standing at one copy on an archive whose every set kept two. |
 | The add-source sheet **still asks**, prefilled. The questions are answered in advance but not removed. | It states what it will do in one sentence and offers `Change…`. See P1. |
 | Groups are a visible, first-class idea — the storage matrix is a grid of groups against places. | Unchanged, and P2 is the open question about it. |
 | "Where this should be kept" is an editable control on a photo, and changing it moves nothing. | Gone. See P3. |
