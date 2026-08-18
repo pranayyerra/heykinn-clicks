@@ -5611,8 +5611,18 @@ final class AppStore: ObservableObject {
     /// unclaimed one, and the difference only surfaced a step later when
     /// registering it was refused.
     ///
-    /// A drive forgotten here reads the same way, which is the honest limit of
-    /// what an ID file alone can tell us — see `DriveMarkerConflict`.
+    /// A drive forgotten here reads the same way, and that is right rather
+    /// than a limitation. Forgetting a drive is usually how somebody says it is
+    /// no longer theirs — they gave it away — so treating it as theirs again on
+    /// the next mount would be the wrong answer, not a better one.
+    ///
+    /// The case that would be wrong is a *lost catalog*: the drive genuinely is
+    /// yours and nothing here remembers it. That is covered elsewhere, and by
+    /// something better than a rule — every drive carries catalog snapshots,
+    /// and those hold the drive rows, so restoring one restores who owns what.
+    /// Losing the catalog *and* having no snapshot on any drive means the whole
+    /// record is gone and is being rebuilt from the photographs; which drive is
+    /// whose is not the problem to solve first.
     func driveBelongsToSomebodyElse(_ volume: VolumeInfo) -> Bool {
         guard let marker = volume.marker else { return false }
         return !targets.contains { $0.id == marker.targetID }
