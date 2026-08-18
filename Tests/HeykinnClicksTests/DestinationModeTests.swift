@@ -224,4 +224,41 @@ extension DestinationModeTests {
         XCTAssertEqual(setup.destinationMode, .automatic)
         XCTAssertEqual(setup.destinationTargetIDs, [driveA], "the drive, not the device")
     }
+
+    /// **A Google export adopts a drive registered later, like everything
+    /// else.**
+    ///
+    /// It did not. `makeStorageGroup` — the only path exports take — built its
+    /// group without naming a mode, and `StorageGroup` defaults that to
+    /// `chosen`, so every export was born pinned to whatever was plugged in on
+    /// the day it was imported. That is the same defect the add-a-source
+    /// default had, in the one path the fix for it never reached, and it was
+    /// found by collapsing three near-identical group builders into one rather
+    /// than by anything failing.
+    func testAnExportAdoptsADriveRegisteredLater() throws {
+        let (store, directory) = try makeStore()
+        let first = try addDrive("Drive A", to: directory, at: Date(timeIntervalSince1970: 1))
+        store.loadAll()
+
+        let made = try XCTUnwrap(store.sourceForExportSet("20260710T081521Z", label: "Export"))
+        XCTAssertEqual(
+            made.group.destinationMode, .automatic,
+            "an export nobody has given devices to must work them out"
+        )
+        XCTAssertEqual(made.group.destinationTargetIDs, [first])
+
+        let second = try addDrive("Drive B", to: directory, at: Date(timeIntervalSince1970: 2))
+        store.loadAll()
+        var wider = try XCTUnwrap(store.storageGroupsByID[made.group.id])
+        wider.desiredCopies = 2
+        try store.catalog.upsertStorageGroup(wider)
+        store.loadAll()
+        store.resolveAutomaticDestinations()
+
+        let resolved = try XCTUnwrap(store.storageGroupsByID[made.group.id])
+        XCTAssertTrue(
+            resolved.destinationTargetIDs.contains(second),
+            "the export ignored a drive registered after it was imported"
+        )
+    }
 }

@@ -3666,7 +3666,7 @@ final class AppStore: ObservableObject {
             //
             // Falling back to this device when there is no drive, though,
             // because the alternative is worse than the thing the exclusion
-            // guards against. `automaticEligibleDeviceIDs` is external drives
+            // guards against. `automaticEligibleDevices` is external drives
             // only, so on a fresh install — which is everybody, once — the set
             // came back empty, the sheet's confirm button was disabled on it,
             // and photographs could not be added at all. A person with no drive
@@ -4119,11 +4119,7 @@ final class AppStore: ObservableObject {
                 ? "New group"
                 : label.trimmingCharacters(in: .whitespacesAndNewlines),
             desiredCopies: settings.desiredCopies,
-            destinationTargetIDs: settings.destinationMode == .automatic
-                ? StorageGroup.automaticDestinations(
-                    copies: settings.desiredCopies, among: automaticEligibleDevices
-                  )
-                : settings.destinationTargetIDs,
+            destinationTargetIDs: startingDestinations(for: settings),
             destinationMode: settings.destinationMode,
             createdAt: Date()
         )
@@ -4542,14 +4538,17 @@ final class AppStore: ObservableObject {
     /// then hidden.
     private func makeStorageGroup(id: UUID = UUID(), label: String) -> StorageGroup? {
         let defaults = newSourceDefaults
-        let destinations = defaults.destinationTargetIDs.isEmpty
-            ? Array(targets.map(\.id).prefix(defaults.desiredCopies))
-            : defaults.destinationTargetIDs
         let group = StorageGroup(
             id: id,
             label: label,
             desiredCopies: defaults.desiredCopies,
-            destinationTargetIDs: destinations,
+            destinationTargetIDs: startingDestinations(for: defaults),
+            // Was omitted, and `StorageGroup` defaults it to `.chosen` — so
+            // every Google export was born pinned to the drives that existed on
+            // the day it was imported, and no drive registered afterwards was
+            // ever offered to it. The same defect the add-a-source default had,
+            // reached by the one path its fix did not cover.
+            destinationMode: defaults.destinationMode,
             createdAt: Date()
         )
         do {
@@ -6984,8 +6983,6 @@ final class AppStore: ObservableObject {
         targets.filter { $0.kind == .externalVolume }
     }
 
-    var automaticEligibleDeviceIDs: [UUID] { automaticEligibleDevices.map(\.id) }
-
     /// Where automatic placement would put copies, and never nowhere.
     ///
     /// Drives are preferred and this device is the fallback, in that order and
@@ -6995,12 +6992,30 @@ final class AppStore: ObservableObject {
     /// intended. Somebody who has not plugged anything in yet still has
     /// photographs worth recording, and one honest copy — reported as one — is
     /// where every archive starts.
-    func automaticDestinationsOrThisDevice(copies: Int) -> [UUID] {
-        let drives = StorageGroup.automaticDestinations(
-            copies: copies, among: automaticEligibleDevices
+    func automaticDestinationsOrThisDevice(
+        copies: Int,
+        among drives: [ReplicationTarget]? = nil
+    ) -> [UUID] {
+        let chosen = StorageGroup.automaticDestinations(
+            copies: copies, among: drives ?? automaticEligibleDevices
         )
-        guard drives.isEmpty else { return drives }
+        guard chosen.isEmpty else { return chosen }
         return targets.filter { $0.kind == .hostDevice }.map(\.id)
+    }
+
+    /// Where a brand-new group starts, given the settings it inherits.
+    ///
+    /// **One resolver, because there were three and they disagreed.**
+    /// `confirmAddingSource` took the sheet's answer, `createStorageGroup`
+    /// re-worked it out but without the this-device fallback, and
+    /// `makeStorageGroup` — the Google-export path — dropped the mode entirely,
+    /// so every export was born with its devices pinned by hand and never
+    /// adopted a drive registered later. Three spellings of one sentence, and
+    /// the fix for that last defect had reached only one of them.
+    func startingDestinations(for settings: StorageGroup.Defaults) -> [UUID] {
+        settings.destinationMode == .automatic
+            ? automaticDestinationsOrThisDevice(copies: settings.desiredCopies)
+            : settings.destinationTargetIDs
     }
 
     @discardableResult
@@ -7008,7 +7023,12 @@ final class AppStore: ObservableObject {
         let eligible = automaticEligibleDevices
         var changed = 0
         for group in storageGroups where group.destinationMode == .automatic {
-            let resolved = StorageGroup.automaticDestinations(
+            // The same call a new group starts from, fallback included. It used
+            // to resolve without the fallback, so a worked-out group whose only
+            // place was this device started life naming it and was emptied by
+            // the next resolve — the photos silently had nowhere to go. Where a
+            // group begins and where it settles has to be one rule.
+            let resolved = automaticDestinationsOrThisDevice(
                 copies: group.desiredCopies, among: eligible
             )
             guard resolved != group.destinationTargetIDs else { continue }

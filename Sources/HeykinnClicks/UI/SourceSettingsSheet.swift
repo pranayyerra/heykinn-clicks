@@ -52,7 +52,7 @@ struct SourceSettingsPicker: View {
             Stepper(
                 "Keep \(Formatters.count(desiredCopies, "copy", "copies")) of every photo",
                 value: $desiredCopies,
-                in: 1...max(store.automaticEligibleDeviceIDs.count, 1)
+                in: 1...max(store.automaticEligibleDevices.count, 1)
             )
             .font(.callout)
             .onChange(of: desiredCopies) { _, _ in
@@ -81,7 +81,7 @@ struct SourceSettingsPicker: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     if idleDrives > 0 {
-                        Text("You have \(Formatters.count(store.automaticEligibleDeviceIDs.count, "drive")) and keep \(Formatters.count(desiredCopies, "copy", "copies")), so \(idleDrives == 1 ? "one holds" : "\(idleDrives) hold") none of this.")
+                        Text("You have \(Formatters.count(store.automaticEligibleDevices.count, "drive")) and keep \(Formatters.count(desiredCopies, "copy", "copies")), so \(idleDrives == 1 ? "one holds" : "\(idleDrives) hold") none of this.")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -124,7 +124,7 @@ struct SourceSettingsPicker: View {
     /// there are drives. The one case where a drive bought later has nothing to
     /// do, and the reader should hear it from the app rather than notice it.
     private var idleDrives: Int {
-        max(0, store.automaticEligibleDeviceIDs.count - destinationTargetIDs.count)
+        max(0, store.automaticEligibleDevices.count - destinationTargetIDs.count)
     }
 
     /// Said before the choice is made rather than reported as a shortfall
@@ -137,7 +137,7 @@ struct SourceSettingsPicker: View {
         }
         if destinationTargetIDs.count < desiredCopies {
             return destinationMode == .automatic
-                ? "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) drives, and there \(store.automaticEligibleDeviceIDs.count == 1 ? "is" : "are") \(store.automaticEligibleDeviceIDs.count). Add another and this fills itself in."
+                ? "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) drives, and there \(store.automaticEligibleDevices.count == 1 ? "is" : "are") \(store.automaticEligibleDevices.count). Add another and this fills itself in."
                 : "\(Formatters.count(desiredCopies, "copy", "copies")) needs \(desiredCopies) devices, and \(destinationTargetIDs.count) is chosen. Photos will stop short until another is picked."
         }
         // A warning that this device "is not a second drive" was here, on the
