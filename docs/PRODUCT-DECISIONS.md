@@ -3,9 +3,9 @@
 *Four decisions about the interface, in the shape of `ARCHITECTURE-DECISIONS.md`:
 what is true today, what the options are, what each costs, and a recommendation.*
 
-**All four recommendations are accepted. P3 is built, P4 already was, and P1
-and P2 are not.** Settled questions waiting for a turn, not open ones to be
-argued again.
+**P3 is built, P4 already was, P1 is partly built, and P2 has been withdrawn
+and replaced** — see below. The rest are settled questions waiting for a turn,
+not open ones to be argued again.
 
 Companion to invariant 15 and requirement R8: *a person who is not technical can
 use this without learning our vocabulary.* That invariant has been satisfied for
@@ -121,7 +121,46 @@ with it.
 **What it costs.** The matrix is a good screen and it becomes an advanced one.
 That is the point, and it is still a loss for the person it was designed for.
 
-**Status:** decided, not yet built.
+**Status: withdrawn.** The recommendation above is wrong, and wrong in a way
+worth keeping on the page rather than quietly editing out.
+
+**Hiding groups removes a decision without supplying the judgement to replace
+it.** A group is currently the only place "which drives should hold what" is
+expressed. Take it out of the interface and nothing else is capable of deciding,
+because the machinery underneath cannot:
+
+- `StorageGroup.automaticDestinations` is one line — `Array(eligible.prefix(copies))`.
+  It takes the drives in the order they were registered. Not the ones with room,
+  not the ones that fit, not the ones nearest the import.
+- `PlacementPlanner` never reads capacity. The app knows free space — it shows
+  it, and checks it before an import — but placement is blind to it.
+- A drive records nothing about **whose it is**. Name, marker, volume id, last
+  seen. Every registered drive is equally a place the archive may spread onto.
+
+That last one is not hypothetical. A drive plugged in may be a friend's, or a
+work one, or one being handed back. The app should be able to know that, and
+today the only way to say it is to leave that drive out of a group's
+destinations — precisely the control this section proposed to hide.
+
+### What replaces it
+
+The sequence matters, and it is the reverse of what was written here:
+
+1. **Ask about a drive once, when it is registered.** Whose it is, and whether
+   the archive may live on it. Ownership is a fact about a drive, not a property
+   of a group, and it belongs where the drive is introduced.
+2. **Make placement able to decide.** Free space, what actually fits, which
+   device the import is happening from, and the ownership answer from step 1.
+3. **Then groups can recede** — because by then something else is doing their
+   job, and hiding them costs nothing.
+
+A few honest questions at the moment a drive or an import appears are not the
+problem this document set out to solve. A queue of questions in front of somebody
+who has not seen a photograph yet is. The two were run together here.
+
+**The original recommendation is left above rather than deleted**, because the
+reasoning that produced it — "most people want everything kept twice" — is still
+true, and is exactly why it was tempting.
 
 ---
 
