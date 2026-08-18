@@ -7,7 +7,7 @@ final class DemoSyncTests: XCTestCase {
     /// Skipped unless asked for, so a normal `swift test` stays readable:
     ///
     ///     HEYKINN_DEMO=1 swift test --filter DemoSyncTests
-    func testTwoMacsAndADrive() throws {
+    func testTwoDevicesAndADrive() throws {
         try XCTSkipIf(
             ProcessInfo.processInfo.environment["HEYKINN_DEMO"] == nil,
             "Set HEYKINN_DEMO=1 to watch a narrated run"

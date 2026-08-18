@@ -1,6 +1,6 @@
 import Foundation
 
-/// Extracts a zip with multiple concurrent unzip workers, each owning a
+/// Extracts a zip with several concurrent in-process readers, each owning a
 /// disjoint slice of the entry tree. Worker count adapts to the device's core
 /// count AND the destination disk: SSDs benefit from many parallel workers,
 /// while spinning/USB targets are kept at low concurrency because parallel

@@ -122,13 +122,13 @@ target's root and would silently name a file that does not exist.
   different questions and neither is "do these two drives look the same".
 
 **Protection state ≠ residency.** Local assets carry a computed protection
-state: `StagedOnly` → `ReplicatedToOneDrive` → `AwaitingFirstCheck` →
-`FullyReplicated`, plus `DriftDetected` (replica content diverged from catalog
-hash), `VerificationOverdue` (replica integrity not re-checked recently) and
-`NotApplicable` (asset is not Local-resident). `AwaitingFirstCheck` means the
+state: `stagedOnly` → `replicatedToOneDrive` → `awaitingFirstCheck` →
+`fullyReplicated`, plus `driftDetected` (replica content diverged from catalog
+hash), `verificationOverdue` (replica integrity not re-checked recently) and
+`notApplicable` (asset is not Local-resident). `awaitingFirstCheck` means the
 copies exist but none has been read back — it satisfies what the asset's
 group asks for, and is deliberately distinct from a check that has gone stale. An asset can
-validly be residency=Local, protection=ReplicatedToOneDrive, present on Drive A,
+validly be residency=Local, protection=replicatedToOneDrive, present on Drive A,
 pending on Drive B — the model represents that directly.
 
 ## Build & run
@@ -360,13 +360,17 @@ the external archive drive:
   read directly from the drive instead of extracting ~10 GB parts to Mac
   scratch space each time. Interruption-safe (`.extracting` temp dir + rename)
   with a free-space check; the zip is always kept as the pristine original.
-- **Adaptive parallel extraction**: zips extract with multiple concurrent
-  unzip workers, each owning a disjoint slice of the entry tree (partitioned
-  by Takeout/product/album prefix, balanced largest-first). Worker count
-  adapts to the Mac's cores AND the destination disk via diskutil: SSDs get
-  up to 8 workers, spinning drives are capped at 2 (parallel writes there
-  seek-thrash and lose to serial), unknown media gets a conservative 4.
-  Single-process ditto remains the fallback if the parallel path fails.
+- **Adaptive parallel extraction, in process**: zips extract with several
+  concurrent readers, each owning a disjoint slice of the entry tree (balanced
+  largest-first). Worker count adapts to the Mac's cores AND the destination
+  disk via diskutil: SSDs get up to 8 workers, spinning drives are capped at 2
+  (parallel writes there seek-thrash and lose to serial), unknown media gets a
+  conservative 4. **No `unzip` subprocess** — that is what made buckets
+  *patterns* rather than names, because an argument list has a length limit and
+  6,660 names do not fit in one; a worker is now handed the exact entries it
+  owns and nothing has to be escaped, quoted or matched. `ditto` remains as the
+  fallback if the reader fails, and the reason it fell back is recorded rather
+  than swallowed (`TakeoutExtractor.lastFallbackReason`).
   Where a part exists as both zip and folder, imports prefer the folder. After
   a folder's imported assets satisfy that source's configured copy policy, a gated
   "Delete folder" action reclaims its space (import state transfers to the zip
@@ -550,18 +554,30 @@ refused while an import, sync, or extraction is writing catalog state.
 
 ### Drive-connect prompt, and remembering the answer
 
-In the website build, an unmanaged external volume mounting triggers a question:
-use it as Local archive storage, search it for Takeout archives, or leave it
-alone. The sandboxed App Store build cannot enumerate an unknown drive, so the
-user first chooses it under Keep safe; registration takes the same lasting
-bookmark. There is no device-count cap. Known managed drives skip setup — on
-connect they auto-sync their backlog and get an automatic Takeout sweep.
+In the website build, a drive nobody has claimed triggers **one question with two
+answers** — *Use Field Drive for your photos?* / `Don't use it` · `Yes, use it`.
+The sandboxed App Store build cannot enumerate an unknown drive, so the user
+first chooses it under Keep safe; registration takes the same lasting bookmark.
+There is no device-count cap. Known managed drives skip setup — on connect they
+auto-sync their backlog and get an automatic Takeout sweep.
 
-**Answer once.** Every choice in that prompt can be remembered against the
-volume's identity, including the *action*, not only the suppression: a drive
-you told to scan is scanned on every future mount without asking. The grant is
-stored with a security-scoped bookmark to the volume, so it survives quitting
-the app rather than being re-requested at each mount.
+**Only that one case is a question.** A drive already in use asks nothing, and a
+drive belonging to somebody else asks nothing either — the app reads whose it is
+from the ID file on it, so the answer it would be asking for is one it already
+has. Taking somebody else's drive is not on this path at all: it is done from
+Keep safe, deliberately, and confirms before anything is written.
+
+**Answer once.** Both answers are remembered against the volume's identity, and
+closing the prompt means *no* — whose a drive is does not change on Tuesday, and
+being asked at every mount is worse than turning it on later, which is one
+screen away. The grant is stored with a security-scoped bookmark to the volume,
+so it survives quitting the app rather than being re-requested at each mount.
+
+**What the prompt no longer sets.** *Search this drive for Google downloads* was
+an action living inside a question about ownership, which is what made the list
+long; it already has a home under Add photos, which works on any drive without
+registering it. `VolumeDecision.scan` still exists and grants already set are
+still honoured — it can just no longer be chosen from here.
 
 **And take it back.** ⌘, → **Access** lists every disk the app has a
 remembered decision for — what was decided, when, and whether it is attached

@@ -8,7 +8,7 @@ and replaced** — steps 1 and 2 of the replacement are now built, leaving step 
 See below. The rest are settled questions waiting for a turn,
 not open ones to be argued again.
 
-Companion to invariant 15 and requirement R8: *a person who is not technical can
+Companion to invariant 19 and requirement R8: *a person who is not technical can
 use this without learning our vocabulary.* That invariant has been satisfied for
 words — the interface no longer says target, replica, catalog, marker or
 residency domain. These are the decisions it does **not** settle, because

@@ -156,7 +156,7 @@ final class ReclamationPlannerTests: XCTestCase {
 
     /// The line is shown to somebody who is not technical, so it may not use a
     /// word the app invented, and it may not promise an action the app cannot
-    /// take. See invariant 15 and R8.
+    /// take. See invariant 19 and R8.
     func testTheSummaryReadsAsEvidenceRatherThanAdvice() {
         var plan = ReclamationPlanner.Plan()
         plan.withVerifiedCloudCopy = 5_040

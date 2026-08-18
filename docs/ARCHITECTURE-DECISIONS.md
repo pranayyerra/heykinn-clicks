@@ -560,9 +560,15 @@ what is at risk — needs SQLite and the schema and **none** of the kernel. A
 **browser** adds zip reading, because 21,380 of 21,401 photographs are inside
 zips and thumbnails never leave the device that made them — and zip is a
 published format with a library on every platform, so this is not kernel work. A
-**writer** adds 3,534 lines of clock, journal, merge, segment codec and
+**writer** adds **3,011 lines** of clock, journal, merge, segment codec and
 checkpoint, reimplemented where a mistake is silent and corrupts the shared
 archive for every device.
+
+*Measured 18 August 2026 over `Domain/Portability/` minus `ZipContainer.swift`
+(that one is the browser tier), plus `Persistence/ChangeJournal.swift` and
+`Services/Sync/`. The basis is written down because the figure this replaces —
+3,534 — could not be reproduced from any file list, which makes a number that
+looks precise impossible to check.*
 
 The tiers are cumulative rather than alternatives: each strictly contains the one
 before, so the only real question is how far to go, and the last step can be

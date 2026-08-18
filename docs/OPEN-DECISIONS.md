@@ -148,7 +148,7 @@ Two tiers — read-only or read-write.
 |---|---|---|
 | **Status reader** | SQLite and the schema. **None of the kernel.** | What exists, where every copy lives, what is at risk, what is owed |
 | **Browser** | The above, plus zip reading (O1) | The photographs themselves |
-| **Writer** | The above, plus **3,534 lines** of kernel reimplemented and correct | Editing the archive from that device |
+| **Writer** | The above, plus **3,011 lines** of kernel reimplemented and correct | Editing the archive from that device |
 
 The split falls where it does because of two facts:
 
@@ -159,7 +159,7 @@ The split falls where it does because of two facts:
   O1. Thumbnails do not help — they live in a local `Caches` directory and never
   travel on the drive.
 
-The writer tier is where the risk concentrates: 3,534 lines of merge, clock,
+The writer tier is where the risk concentrates: 3,011 lines of merge, clock,
 journal, segment codec and checkpoint, reimplemented on a platform with no test
 coverage, where a mistake is
 silent and corrupts the shared archive for every device.

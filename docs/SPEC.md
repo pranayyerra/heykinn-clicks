@@ -365,8 +365,14 @@ to a platform that has never heard of Apple.
    copy count and a destination mode: let the app work out the required devices
    deterministically, or name specific devices — "this export: 2 copies, on
    Archive Drive and the NAS". Chosen mode places copies only on those devices;
-   automatic mode follows the stable registration-order policy rather than
-   chasing changing free-space figures. A source never silently switches from
+   automatic mode takes the drives with the most room, breaking ties on which
+   was registered first, and takes as many as the copy count asks for
+   (`StorageGroup.automaticDestinations`). The figure it sorts on is the free
+   space **recorded when each drive was last seen**, not measured live — so a
+   drive plugged into another device still counts, and every device reaches the
+   same answer from the same recorded facts. Measuring live would have each
+   device answer from whatever it could see, and a group's destinations would
+   flip at every sync. A source never silently switches from
    chosen back to automatic: where a person's photos live is a decision they
    are entitled to make, and an archive that quietly
    redistributes itself is one nobody can reason about.
@@ -427,6 +433,16 @@ to a platform that has never heard of Apple.
    has enough copies" the same sentence. The second let the app choose
    destinations by free space, which fixed the cap and took the decision away
    from the user in the same move.
+
+   **The second is not what automatic mode does today, and the difference is
+   the whole of it.** That version ran inside `PlacementPlanner`, per asset,
+   over devices the user had *named* — it overruled them. Today's rule runs one
+   layer up, only for a group where nobody has named anything, and it produces
+   a named list the planner then honours in order. Free space is still never
+   policy inside the planner: a destination without room is a reported
+   shortfall, never a silent substitution. What changed is what a group
+   resolves to when the user has expressed no preference at all — previously
+   registration order, which knew nothing about anything.
 5. Never stage or copy what a target already holds; never delete
    archive-backed content; moved content is repointed, never re-copied. **The
    host device is not exempt in principle** — a folder on this device's own disk
@@ -449,6 +465,12 @@ to a platform that has never heard of Apple.
     full boot disk simply stops being chosen for new content, and the drives
     take it. Forgetting the host target remains the way to keep the archive
     off this device entirely.
+11. **Devices are compared only where they overlap, and only by reading.**
+    Nothing may infer damage from two devices holding different content: that
+    is the normal steady state. A cross-device check whose inputs are both
+    derived from the catalog compares the catalog to itself and proves
+    nothing, however elaborate the structure it uses to do it.
+
 12. **No operation may require two devices connected at once.** One cable and
     two drives is the ordinary setup, not an exotic one. Work that needs both
     is work that never runs: it does not fail, it reports "nothing to do" for
@@ -457,12 +479,6 @@ to a platform that has never heard of Apple.
     meets the other reading in a later session — which is a fact about drives,
     not a weakening of the evidence (invariant 2 still applies: two readings
     are still two readings, whenever they were taken).
-
-11. **Devices are compared only where they overlap, and only by reading.**
-    Nothing may infer damage from two devices holding different content: that
-    is the normal steady state. A cross-device check whose inputs are both
-    derived from the catalog compares the catalog to itself and proves
-    nothing, however elaborate the structure it uses to do it.
 6. No destructive cleanup without explicit job state and confirmation — or,
    for future reclamation, the listed proof, which is stronger than a prompt.
 7. Interrupted work resumes; a crash or an unplug never corrupts the catalog.
@@ -528,7 +544,7 @@ to a platform that has never heard of Apple.
     failure is made loud instead: refusing costs somebody a sync, and the
     alternative costs them data they will not notice losing.
 
-15. **Nothing on screen uses a word the app invented.** The person using this is
+19. **Nothing on screen uses a word the app invented.** The person using this is
     not technical and should never have to become so. They own *drives*,
     *photos*, *copies*, and the question *are my photos safe* — and every screen,
     prompt, error and log line answers in those terms.

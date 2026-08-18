@@ -72,11 +72,14 @@ a format only `NSKeyedArchiver` can read. Those turn "we used the platform" into
 I checked what the existing code actually depends on, rather than assuming.
 **The result is much better than expected:**
 
-- **22 of 24 files in `Domain/` import only `Foundation`.** The domain model —
-  assets, targets, storage groups, policy, replication, residency, takeout — is
-  already portable. It was written that way without the goal being stated.
+- **Every file in `Domain/` imports only `Foundation`** — 23 of 23, as of
+  18 August 2026. The domain model — assets, targets, storage groups, policy,
+  replication, residency, takeout — is portable. It was written that way without
+  the goal being stated, and the last two exceptions went when CryptoKit was
+  moved out to a `Digest256` seam (hazard 4 below).
 - The Apple coupling is concentrated where it belongs: all of `UI/`, plus
-  `ApplePhotosConnector`, `TargetMonitor`, `ThumbnailCache`.
+  `Services/ApplePhotosConnector.swift` (`ApplePhotosVerifier`,
+  `ApplePhotosConnectionState`), `TargetMonitor`, `ThumbnailCache`.
 
 Five hazards were found in the kernel layer. **All five are now addressed.**
 
@@ -778,7 +781,7 @@ to implement.
 - **`cr-sqlite` or hand-rolled** for §6.3. It implements the model directly.
   Costs the project's first dependency and must build for every target platform
   — a heavier constraint under a cross-platform plan than a device-only one.
-- **How much of `AppStore`'s 8,000 lines assumes it is the only writer?** Step 4
+- **How much of `AppStore`'s 8,400 lines assumes it is the only writer?** Step 4
   is scoped as "every upsert in `Persistence/`", which may be optimistic.
 - **Does the zip-as-replica feature survive cross-platform?** H3 is not just
   `/usr/bin/unzip` — it implies every client needs a zip reader that agrees

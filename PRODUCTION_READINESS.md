@@ -9,7 +9,7 @@ recorded at the bottom rather than quietly dropped — a checklist that invents
 work is worse than no checklist, because the invented work crowds out the real
 work.
 
-**State of play:** 711 tests pass (8 environment-dependent tests skipped in the
+**State of play:** 900 tests pass (22 environment-dependent tests skipped in the
 ordinary run). Author's archive: 24,627 assets, 98.2 GB logical, across two
 external drives. No linked dependencies outside the standard library and
 system frameworks. The App Store package has uploaded; the current review is
@@ -262,8 +262,8 @@ Kept so the same mistakes do not return.
   drive is a perfectly ordinary setup. `TargetKind`'s own comment says it — "a
   target *is* a device".
 - **"248 GB / 24,626 photos."** 98.2 GB logical, 24,627 assets.
-- **"Core engine tests + one DMG integration test."** 711 tests pass in the
-  ordinary run, with 8 environment-dependent tests skipped unless their
+- **"Core engine tests + one DMG integration test."** 900 tests pass in the
+  ordinary run, with 22 environment-dependent tests skipped unless their
   prerequisites are enabled.
 - **"Choose staging location on Mac (default ~/Pictures/HeykinnClicks)."**
   Staging is the `Staging` folder inside the resolved archive directory

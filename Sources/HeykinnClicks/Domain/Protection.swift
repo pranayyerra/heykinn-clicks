@@ -1,13 +1,19 @@
 import Foundation
 
 /// Local protection state — how safely a Local-resident asset is replicated
-/// across the two managed targets. Deliberately richer than "backed up or not",
-/// and deliberately separate from residency: residency says *where the asset
-/// logically lives*, protection says *how safe the local copies are*.
+/// across the devices its group names. Deliberately richer than "backed up or
+/// not", and deliberately separate from residency: residency says *where the
+/// asset logically lives*, protection says *how safe the local copies are*.
+///
+/// Written when two drives were the only arrangement, which is why two case
+/// names still count rather than describe. They are kept: they are persisted
+/// `String` raw values, and renaming them would strand every row already
+/// written. `displayName` is where the accurate wording lives.
 enum ProtectionState: String, Codable, Hashable {
     /// Exists only in the local staging area; not yet on any managed drive.
     case stagedOnly
-    /// On exactly one managed drive; pending on the other.
+    /// Some of the copies its group asks for, but not all of them — one of
+    /// two, or two of three. Named for the two-drive case it was written in.
     case replicatedToOneDrive
     /// Present and verified on both managed targets.
     case fullyReplicated
