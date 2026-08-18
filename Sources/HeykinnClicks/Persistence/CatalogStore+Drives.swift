@@ -58,8 +58,8 @@ extension CatalogStore {
     func upsertTarget(_ target: ReplicationTarget) throws {
         try journaled("drives", [target.id.uuidString]) {
             try database.run("""
-            INSERT INTO drives (id, name, volume_uuid, marker_token, registered_at, last_seen_at, replica_root, last_mount_path, kind, configured_path)
-            VALUES (?,?,?,?,?,?,?,?,?,?)
+            INSERT INTO drives (id, name, volume_uuid, marker_token, registered_at, last_seen_at, replica_root, last_mount_path, kind, configured_path, free_bytes)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?)
             ON CONFLICT(id) DO UPDATE SET
                 name = excluded.name,
                 volume_uuid = excluded.volume_uuid,
@@ -69,7 +69,8 @@ extension CatalogStore {
                 replica_root = excluded.replica_root,
                 last_mount_path = excluded.last_mount_path,
                 kind = excluded.kind,
-                configured_path = excluded.configured_path;
+                configured_path = excluded.configured_path,
+                free_bytes = excluded.free_bytes;
             """, [
                 .text(target.id.uuidString),
                 .text(target.name),
@@ -88,6 +89,7 @@ extension CatalogStore {
                 .optionalText(target.lastKnownPath),
                 .text(target.kind.rawValue),
                 .optionalText(target.configuredPath),
+                .optionalInt(target.lastKnownFreeBytes),
             ])
         }
 
@@ -113,7 +115,7 @@ extension CatalogStore {
         // device arrives in once targets travel.
         try database.query("""
         SELECT d.id, d.name, d.volume_uuid, d.marker_token, d.registered_at, d.replica_root, d.kind,
-               l.last_seen_at, l.last_mount_path, l.configured_path
+               l.last_seen_at, l.last_mount_path, l.configured_path, d.free_bytes
         FROM drives d
         LEFT JOIN drive_local_state l ON l.drive_id = d.id
         ORDER BY d.registered_at;
@@ -130,7 +132,8 @@ extension CatalogStore {
                 lastSeenAt: row.optionalDate(7),
                 lastKnownPath: row.optionalText(8),
                 configuredPath: row.optionalText(9),
-                replicaRootComponent: row.text(5)
+                replicaRootComponent: row.text(5),
+                lastKnownFreeBytes: row.optionalInt(10)
             )
         }
     }

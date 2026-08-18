@@ -43,7 +43,7 @@ struct SourceSettingsPicker: View {
     /// Where a worked-out set lands, given what it is asking for now.
     private var workedOut: [UUID] {
         StorageGroup.automaticDestinations(
-            copies: desiredCopies, among: store.automaticEligibleDeviceIDs
+            copies: desiredCopies, among: store.automaticEligibleDevices
         )
     }
 

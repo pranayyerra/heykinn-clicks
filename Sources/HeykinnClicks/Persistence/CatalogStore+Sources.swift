@@ -43,6 +43,7 @@ extension CatalogStore {
             table: "storage_groups", column: "destination_mode",
             declaration: "TEXT NOT NULL DEFAULT 'chosen'"
         )
+        try addColumnIfMissing(table: "drives", column: "free_bytes", declaration: "INTEGER")
         try addColumnIfMissing(table: "assets", column: "source_id", declaration: "TEXT")
         try addColumnIfMissing(table: "assets", column: "storage_group_id", declaration: "TEXT")
         try database.exec(

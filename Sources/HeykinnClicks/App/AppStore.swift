@@ -2816,6 +2816,21 @@ final class AppStore: ObservableObject {
             if let index = targets.firstIndex(where: { $0.id == targetID }) {
                 targets[index].lastSeenAt = now
                 targets[index].lastKnownPath = mountURL.path
+                // How full it is, written down while the drive is here to ask.
+                // Placement puts copies on the emptiest drives and has to know
+                // about the ones plugged into another device, which cannot be
+                // measured from this one — so the number travels with the drive
+                // rather than being read where it is needed. See
+                // `ReplicationTarget.lastKnownFreeBytes`.
+                //
+                // Recorded on sighting rather than continuously: it changes as
+                // copies land, and a journal record per byte written would be
+                // noise on every device for no better an answer.
+                if let free = TakeoutExtractor.availableCapacity(
+                    onVolumeOf: mountURL.appendingPathComponent("x")
+                ) {
+                    targets[index].lastKnownFreeBytes = free
+                }
                 try? catalog.upsertTarget(targets[index])
             }
         }
@@ -4091,7 +4106,7 @@ final class AppStore: ObservableObject {
             desiredCopies: settings.desiredCopies,
             destinationTargetIDs: settings.destinationMode == .automatic
                 ? StorageGroup.automaticDestinations(
-                    copies: settings.desiredCopies, among: automaticEligibleDeviceIDs
+                    copies: settings.desiredCopies, among: automaticEligibleDevices
                   )
                 : settings.destinationTargetIDs,
             destinationMode: settings.destinationMode,
@@ -6944,13 +6959,17 @@ final class AppStore: ObservableObject {
     /// spread onto — counting it would let "2 copies" be satisfied by this device
     /// plus one drive and report that as safe. Naming it stays possible, but
     /// only as a `.chosen` device, which is a deliberate act.
-    /// The devices a worked-out group draws from, in the order it draws them.
-    var automaticEligibleDeviceIDs: [UUID] {
-        targets
-            .filter { $0.kind == .externalVolume }
-            .sorted { $0.registeredAt < $1.registeredAt }
-            .map(\.id)
+    /// The drives a worked-out group draws from.
+    ///
+    /// Unordered here on purpose: which of them gets chosen is
+    /// `StorageGroup.automaticDestinations`'s decision, made from how full each
+    /// one is, and this used to pre-sort by registration date — which was the
+    /// whole of the old policy hiding in a property nobody would look at.
+    var automaticEligibleDevices: [ReplicationTarget] {
+        targets.filter { $0.kind == .externalVolume }
     }
+
+    var automaticEligibleDeviceIDs: [UUID] { automaticEligibleDevices.map(\.id) }
 
     /// Where automatic placement would put copies, and never nowhere.
     ///
@@ -6963,7 +6982,7 @@ final class AppStore: ObservableObject {
     /// where every archive starts.
     func automaticDestinationsOrThisDevice(copies: Int) -> [UUID] {
         let drives = StorageGroup.automaticDestinations(
-            copies: copies, among: automaticEligibleDeviceIDs
+            copies: copies, among: automaticEligibleDevices
         )
         guard drives.isEmpty else { return drives }
         return targets.filter { $0.kind == .hostDevice }.map(\.id)
@@ -6971,7 +6990,7 @@ final class AppStore: ObservableObject {
 
     @discardableResult
     func resolveAutomaticDestinations() -> Int {
-        let eligible = automaticEligibleDeviceIDs
+        let eligible = automaticEligibleDevices
         var changed = 0
         for group in storageGroups where group.destinationMode == .automatic {
             let resolved = StorageGroup.automaticDestinations(

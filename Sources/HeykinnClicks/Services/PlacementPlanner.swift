@@ -9,6 +9,14 @@ import Foundation
 /// a *constraint* here, never a policy. A destination without room produces a
 /// reported shortfall, never a quiet substitution onto some other disk.
 ///
+/// **`StorageGroup.automaticDestinations` now does rank by free space, and is
+/// not a repeat of the version withdrawn above.** It runs one layer up and only
+/// for a group nobody has named devices for: it decides what `destinations`
+/// *is*, once, and records the answer. By the time this planner sees that list
+/// it is a named list like any other, honoured in order. The objection that
+/// killed the earlier attempt — that it overruled someone who had said where
+/// their photos go — cannot apply to a group where nobody said.
+///
 /// Pure and deterministic. Placement decides where bytes live for years, so a
 /// plan that varied between runs could not be tested, reasoned about, or
 /// reproduced after a crash.

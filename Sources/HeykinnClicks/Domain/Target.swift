@@ -52,6 +52,32 @@ struct ReplicationTarget: Identifiable, Hashable {
     var configuredPath: String?
     /// Directory name at the target root that holds this target's replicas.
     var replicaRootComponent: String
+    /// Free space when this drive was last seen, in bytes. Nil until it has
+    /// been seen once.
+    ///
+    /// **Recorded rather than read, and that is the point.** Placement puts
+    /// copies on the emptiest drives, so it needs to know how full each one is
+    /// — including the ones plugged into another device right now, which cannot
+    /// be measured from here.
+    ///
+    /// Reading it live would have each device answer from what it happens to be
+    /// able to see. A laptop holding one nearly-full drive would call that drive
+    /// the emptiest it knows of and send copies there; the device at home,
+    /// seeing two roomier ones, would send them elsewhere. Both answers are
+    /// reasonable and they disagree, so a group's destinations would flip at
+    /// every sync and copies would be queued, unqueued and queued again.
+    ///
+    /// Written down, the number travels with the drive like everything else
+    /// about it, and every device computes the same answer. It goes stale
+    /// between sightings, which costs a slightly worse choice; two devices
+    /// disagreeing costs the archive never settling.
+    ///
+    /// Nil on every drive registered before this existed, until each is next
+    /// plugged in. Unseen sorts last, so drives that all read nil fall back to
+    /// registration order — which is exactly the rule this replaces. An archive
+    /// that has not seen its drives yet behaves as it did, and improves as it
+    /// sees them.
+    var lastKnownFreeBytes: Int64?
 
     /// Deliberately still says "drive": marker files written by earlier
     /// versions are sitting on users' volumes right now, and renaming the file

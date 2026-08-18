@@ -47,10 +47,10 @@ struct StorageGroup: Identifiable, Hashable {
     /// it. Nothing did: every group kept its two devices, the new drive held
     /// nothing, and no screen said why.
     enum DestinationMode: String, Codable, Hashable {
-        /// Worked out: the longest-registered devices, as many as
-        /// `desiredCopies` asks for. Re-resolved when the devices change, so a
-        /// drive that is forgotten is replaced and copies are made to fill the
-        /// gap. Never deletes anything to do it.
+        /// Worked out: the emptiest devices, as many as `desiredCopies` asks
+        /// for — see `automaticDestinations`. Re-resolved when the devices
+        /// change, so a drive that is forgotten is replaced and copies are made
+        /// to fill the gap. Never deletes anything to do it.
         case automatic
         /// Picked, and left alone. The advanced case, and the reason it must be
         /// recorded: someone who deliberately keeps a group off the drive they
@@ -59,24 +59,70 @@ struct StorageGroup: Identifiable, Hashable {
         case chosen
     }
 
-    /// The devices `.automatic` resolves to, given everything registered.
+    /// Where copies should go, chosen from the drives themselves.
     ///
-    /// **Longest-registered first, never by free space.** Free space is a
-    /// tempting tiebreak and it points exactly the wrong way: the reason to
-    /// keep fewer copies than you have drives is almost always that one of them
-    /// lives somewhere else, and free space would happily put both copies on
-    /// whichever drive is emptier — one building, two copies, and a screen
-    /// saying you are safe. Space still validates a plan; it never picks one.
+    /// **Three rules, in order:**
     ///
-    /// Eligibility is *registered and not forgotten*. Whether a drive happens
-    /// to be plugged in is deliberately not consulted — on one cable it never
-    /// is, and a policy that changed with the cable would be no policy at all
-    /// (invariant 12).
+    /// 1. Only drives that are yours. Free, because a drive that is not yours
+    ///    never becomes a registered one.
+    /// 2. Emptiest first. Ties break on which was registered first.
+    /// 3. Take as many as the group asks for.
+    ///
+    /// Nothing else — no weights, no thresholds, no numbers anybody has to
+    /// justify. The version this replaces was `prefix(copies)` over the drives
+    /// in the order they were registered, which put copies on a nearly-full
+    /// 500 GB drive while a fresh 4 TB one sat idle beside it.
+    ///
+    /// **Spreading falls out of rule 2 rather than being a rule of its own.**
+    /// Three drives and two copies: the two emptiest are chosen. As one fills,
+    /// its free space falls below another's and the choice moves. Nobody has to
+    /// decide "spread or fill" — the ordering answers it, and keeps answering
+    /// it as the drives change.
+    ///
+    /// **Running short falls out too.** One drive and two copies wanted gives
+    /// one drive back, and the app already says "in one place only" in exactly
+    /// those words.
+    ///
+    /// **Eligibility is registered and not forgotten**, and whether a drive
+    /// happens to be plugged in is deliberately not consulted — on one cable it
+    /// never is, and a policy that changed with the cable would be no policy at
+    /// all (invariant 12). This is why rule 2 reads a recorded number.
+    ///
+    /// **The objection this replaces, kept because it is half right.** The old
+    /// comment argued free space "points exactly the wrong way": if two drives
+    /// are kept in two buildings, sorting by space will cheerfully fill the
+    /// emptier one twice and call the archive safe. True — and not an argument
+    /// for what it was defending, because registration order does not know
+    /// where a drive lives either. Neither rule can see a building. What the
+    /// old rule really had was that its answer never moved, and `.chosen` is
+    /// how somebody says "these two, and leave them alone" — which is the
+    /// actual answer to the offsite case, and is untouched by any of this.
+    ///
+    /// **This is not the free-space ranking `PlacementPlanner` withdrew.** That
+    /// one ran per asset, over devices the user had named, and overruled them.
+    /// This one runs only where nobody has named anything, and its output is a
+    /// named list the planner then honours in order.
+    ///
+    /// **Deterministic on purpose.** Every input is a recorded fact that travels
+    /// with the archive, so two devices reach the same answer — which they must,
+    /// because a group's destinations travel between them and a disagreement
+    /// would have copies queued to one drive, then another, for ever. A drive
+    /// never seen sorts last rather than first: unknown is not the same as
+    /// empty, and guessing it were would send copies at a drive nobody has
+    /// measured.
     static func automaticDestinations(
         copies: Int,
-        among eligible: [UUID]
+        among drives: [ReplicationTarget]
     ) -> [UUID] {
-        Array(eligible.prefix(max(0, copies)))
+        drives
+            .sorted { left, right in
+                let ours = left.lastKnownFreeBytes ?? -1
+                let theirs = right.lastKnownFreeBytes ?? -1
+                if ours != theirs { return ours > theirs }
+                return left.registeredAt < right.registeredAt
+            }
+            .prefix(max(0, copies))
+            .map(\.id)
     }
 
     /// Whether this group's settings can currently be satisfied at all. Fewer
