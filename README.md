@@ -336,7 +336,7 @@ the external archive drive:
 - **Split downloads are export sets.** Large exports arrive as ordered parts
   (`takeout-<session>-001.zip`, `-002.zip`, …). Parts sharing a session token
   are grouped into one set, with a warning when part numbers have gaps.
-  "Import set" runs the parts serially as a single import batch with
+  Importing a set runs its parts serially as a single import batch with
   cross-part duplicate detection (Google can repeat media between parts) and
   one migration job covering the whole set. Parts already imported are kept if
   a later part fails. Multiple zips extracted into one merged `Takeout` folder
@@ -371,15 +371,17 @@ the external archive drive:
   owns and nothing has to be escaped, quoted or matched. `ditto` remains as the
   fallback if the reader fails, and the reason it fell back is recorded rather
   than swallowed (`TakeoutExtractor.lastFallbackReason`).
-  Where a part exists as both zip and folder, imports prefer the folder. After
-  a folder's imported assets satisfy that source's configured copy policy, a gated
-  "Delete folder" action reclaims its space (import state transfers to the zip
-  twin so the set still reads as imported). Re-scans refresh existing records
-  (size, set grouping) without touching import state.
+  Where a part exists as both zip and folder, imports prefer the folder.
+  Removing the spare form is offered from the export's own card
+  (`ExportFormRemovalSheet`) once every part is held on the drive in the other
+  form; it refuses, with reasons, until then. **This is the only place the app
+  offers to delete anything you own** — a folder you imported from is read and
+  never touched, however redundant its contents become. Re-scans refresh
+  existing records (size, set grouping) without touching import state.
 
 ### Automatic Takeout management & archive-backed replicas
 
-With "Automatically manage Takeout" on (default), a target becoming reachable
+With "Handle Google exports found on a drive" on (default), a drive becoming reachable
 runs the zero-button pipeline: **scan → reconcile → extract → import**.
 
 - **Archive-backed replicas.** Assets imported from a Takeout folder on a
