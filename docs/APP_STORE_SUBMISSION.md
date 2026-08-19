@@ -78,7 +78,20 @@ after an upload and a wait: it checks the app is sandboxed and that a profile is
 embedded.
 
 Upload with **Transporter** (free, from the Mac App Store) — drag the `.pkg` in.
-It handles the credentials, so nothing here has to.
+It handles the credentials, so nothing here has to. Or from the terminal:
+
+```bash
+xcrun altool --upload-app -f build/HeykinnClicks-<version>-<build>.pkg -t macos -u <apple-id> --wait
+```
+
+**Raise `CFBundleShortVersionString` too, not only the build number.** Once a
+version has been approved, that train is closed: a new build under the same
+version is rejected before it uploads, with *"the value for key
+CFBundleShortVersionString must contain a higher version than that of the
+previously approved version"* and *"the train version is closed for new build
+submissions"*. The version lives in `Packaging/Info.plist` and nothing overrides
+it — `--build-number` sets `CFBundleVersion` only. Build numbers do not have to
+restart when the version changes.
 
 ## What the first upload actually cost
 
