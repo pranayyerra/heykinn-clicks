@@ -104,14 +104,6 @@ final class AppStore: ObservableObject {
     /// the developer's physical USB drives and could block on their privacy
     /// gate despite the environment promising not to touch them.
     private let runsBackgroundWork: Bool
-    /// Whether a staged copy is released once the archive's own drives hold
-    /// the content safely. On, because staging is transit and the alternative
-    /// is a permanent second copy of everything on the boot disk that nothing
-    /// ever counted as protection.
-    @Published var reclaimStagingWhenSafe: Bool = true {
-        didSet { defaults.set(reclaimStagingWhenSafe, forKey: "reclaimStagingWhenSafe") }
-    }
-
     @Published var autoSyncOnConnect: Bool = true {
         didSet { defaults.set(autoSyncOnConnect, forKey: "autoSyncOnConnect") }
     }
@@ -482,7 +474,6 @@ final class AppStore: ObservableObject {
         // `didSet`, so nothing is written back on the way in.
         let stored = environment.defaults
         autoSyncOnConnect = stored.object(forKey: "autoSyncOnConnect") as? Bool ?? true
-        reclaimStagingWhenSafe = stored.object(forKey: "reclaimStagingWhenSafe") as? Bool ?? true
         autoManageTakeout = stored.object(forKey: "autoManageTakeout") as? Bool ?? true
         backgroundRotPatrol = stored.object(forKey: "backgroundRotPatrol") as? Bool ?? true
         importFromApplePhotos = stored.object(forKey: "importFromApplePhotos") as? Bool ?? true
@@ -3420,9 +3411,20 @@ final class AppStore: ObservableObject {
     /// avoidable in general, because a file deletion and a database write are
     /// not one operation; the orphan sweep is what makes the unavoidable one
     /// recoverable.
+    /// **Unconditional.** This was behind a switch, and the switch guarded
+    /// nothing: `StagingReclaimer.plan` releases a photograph only once it is
+    /// `.fullyReplicated` — every copy its set asks for exists *and* has been
+    /// read back and matched, which is the strictest standard in the app. Every
+    /// case where the working copy could have saved anybody was already
+    /// excluded by that condition.
+    ///
+    /// What switching it off actually bought was a permanent duplicate the app
+    /// does not count as one of your copies — staging is transit, and the
+    /// storage screen leaves it out of what each drive holds. That is the exact
+    /// thing this app exists to get rid of, so it was not a preference; it was
+    /// a way to quietly opt out of the point of the app.
     @discardableResult
-    func reclaimStaging(force: Bool = false) -> Int64 {
-        guard force || reclaimStagingWhenSafe else { return 0 }
+    func reclaimStaging() -> Int64 {
         let plan = stagingReclaimPlan
         var freed: Int64 = 0
         var released = 0

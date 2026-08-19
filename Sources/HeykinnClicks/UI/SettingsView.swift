@@ -46,13 +46,6 @@ private struct AutomationSettings: View {
                     help: "Finds exports on a connected drive, unpacks and imports what is new, and recognises copies the drive already holds instead of copying them again."
                 )
             }
-            Section {
-                ExplainedToggle(
-                    "Free up space once your drives hold a photo",
-                    isOn: $store.reclaimStagingWhenSafe,
-                    help: "Photos added from anywhere the app does not manage are copied onto this device first, so they are safe before any drive is plugged in. With this on, that working copy is released once your own drives hold the photo and have read it back to confirm it — the same standard the app uses to call a photo safe anywhere else. Your originals are never touched, and nothing is released while a photo is short of the copies you asked for."
-                )
-            }
         }
         .formStyle(.grouped)
     }

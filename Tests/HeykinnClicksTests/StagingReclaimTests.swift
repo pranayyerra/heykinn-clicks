@@ -118,20 +118,17 @@ final class StagingReclaimIntegrationTests: XCTestCase {
         return url
     }
 
-    private func makeStore(reclaim: Bool = true) throws -> AppStore {
-        try makeStoreReturningDirectory(reclaim: reclaim).store
+    private func makeStore() throws -> AppStore {
+        try makeStoreReturningDirectory().store
     }
 
     /// For tests that have to reach the same catalog from a second connection,
     /// to seed the state an earlier session would have left.
-    private func makeStoreReturningDirectory(
-        reclaim: Bool = true
-    ) throws -> (store: AppStore, directory: URL) {
+    private func makeStoreReturningDirectory() throws -> (store: AppStore, directory: URL) {
         let directory = try makeDirectory("store")
         let suiteName = "heykinn-tests-\(UUID().uuidString)"
         suiteNames.append(suiteName)
         let defaults = UserDefaults(suiteName: suiteName)!
-        defaults.set(reclaim, forKey: "reclaimStagingWhenSafe")
         defaults.set(false, forKey: "autoSyncOnConnect")
         let store = AppStore(environment: AppEnvironment(
             appDirectory: directory, defaults: defaults, runsBackgroundWork: false
@@ -187,7 +184,7 @@ final class StagingReclaimIntegrationTests: XCTestCase {
         try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
 
         let before = store.staging.totalBytes
-        store.reclaimStaging(force: true)
+        store.reclaimStaging()
         XCTAssertEqual(store.staging.totalBytes, before, "No target holds it at all")
         XCTAssertNotNil(store.assets.first?.stagingRelativePath)
     }
@@ -292,20 +289,11 @@ final class StagingReclaimIntegrationTests: XCTestCase {
         XCTAssertEqual(store.staging.totalBytes, 0)
     }
 
-    func testTurningItOffKeepsTheStagedCopy() async throws {
-        let store = try makeStore(reclaim: false)
-        let source = try makeDirectory("source")
-        try Data("a photo".utf8).write(to: source.appendingPathComponent("photo.jpg"))
-        let mount = try makeDirectory("target")
-
-        store.importFolders([source])
-        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
-        store.registerHostDeviceTarget(at: mount, name: "Drive")
-        store.syncDrive(try XCTUnwrap(store.targets.first?.id))
-        try await waitUntil("the sync to drain") { !store.isSyncing }
-
-        XCTAssertNotNil(store.assets.first?.stagingRelativePath, "Left alone, as asked")
-        XCTAssertGreaterThan(store.staging.totalBytes, 0)
-        XCTAssertFalse(store.stagingReclaimPlan.isEmpty, "But the app can still say what it would free")
-    }
+    /// **The test that pinned "leave the copy alone" is gone with the switch.**
+    ///
+    /// It asserted that turning reclaim off kept the staged copy, which was
+    /// true and was the defect: the release condition is `.fullyReplicated` —
+    /// every copy present *and* read back and matched — so the switch protected
+    /// nothing, and what it actually kept was a duplicate the app does not
+    /// count as one of your copies. See `AppStore.reclaimStaging`.
 }

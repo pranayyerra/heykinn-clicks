@@ -489,12 +489,10 @@ struct DrivesView: View {
             // it, and only once they have been read back and matched.
             if !reclaimable.isEmpty {
                 HStack(spacing: 6) {
-                    Text(store.reclaimStagingWhenSafe
-                         ? "\(Formatters.bytes.string(fromByteCount: reclaimable.bytes)) of this is content your drives already hold safely, and is released after the next sync."
-                         : "\(Formatters.bytes.string(fromByteCount: reclaimable.bytes)) of this is content your drives already hold safely.")
+                    Text("\(Formatters.bytes.string(fromByteCount: reclaimable.bytes)) of this is content your drives already hold safely, and is released after the next sync. Your originals are never touched, and nothing goes while a photo is short of the copies you asked for.")
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
-                    Button("Release now") { store.reclaimStaging(force: true) }
+                    Button("Release now") { store.reclaimStaging() }
                         .buttonStyle(.link)
                     Spacer(minLength: 0)
                 }

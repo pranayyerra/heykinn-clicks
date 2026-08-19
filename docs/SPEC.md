@@ -778,6 +778,10 @@ Earned against a real 248 GB archive; the stories are in git history.
     and deletes nothing.
 17. Preferences live in ⌘,; the working screens show the archive itself.
 18. Reclamation, when it comes, is automatic and gated on proof, not prompts.
+    The working copy on this device follows the same rule and has no switch: it
+    is released once every copy exists *and* has been read back and matched, so
+    a switch could only ever have kept a duplicate the app does not count as one
+    of your copies — the thing the app exists to remove.
 19. The spec holds vision, invariants, and path; for shipped behavior the code
     is the source of truth.
 20. A date the file states can still be impossible; say so where it shows, and
