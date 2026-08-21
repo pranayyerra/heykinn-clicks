@@ -26,7 +26,20 @@ struct FolderReclaimSheet: View {
                 .bold()
                 .fixedSize(horizontal: false, vertical: true)
 
-            if plan.isEmpty {
+            if plan.isFolderEmpty {
+                // The state a folder is in *after* this sheet has done its job,
+                // and the one it used to describe as still holding your
+                // photographs. There is nothing here to be waiting on.
+                Text("This folder is empty. Everything the app took from it has already gone to the Trash, and there is nothing left here to clear.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if plan.holdsOnlyFilesTheAppNeverTookIn {
+                // Nothing is blocked, so nothing is pending — saying copies are
+                // still being made would be inventing a wait that is not on.
+                Text("Nothing here is a spare copy — the archive holds none of what is still in this folder.")
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else if plan.isEmpty {
                 Text("Nothing here can go yet. Every photo the app took from this folder still needs its copies made and read back — until then this folder is one of the places they exist.")
                     .font(.callout)
                     .fixedSize(horizontal: false, vertical: true)
@@ -58,22 +71,28 @@ struct FolderReclaimSheet: View {
             }
 
             HStack {
-                Button("Cancel") { dismiss() }
+                // Nothing to offer means nothing to decline: one way out, and
+                // it is not a cancellation. A greyed-out "Move 0 files to the
+                // Trash" is an offer the sheet has just finished explaining it
+                // cannot make.
+                Button(plan.isEmpty ? "Done" : "Cancel") { dismiss() }
                     .keyboardShortcut(.cancelAction)
                 Spacer()
                 if isWorking {
                     ProgressView().controlSize(.small)
                 }
-                Button("Move \(Formatters.count(plan.releasable.count, "file")) to the Trash") {
-                    isWorking = true
-                    Task {
-                        await store.reclaimFolder(at: path)
-                        isWorking = false
-                        dismiss()
+                if !plan.isEmpty {
+                    Button("Move \(Formatters.count(plan.releasable.count, "file")) to the Trash") {
+                        isWorking = true
+                        Task {
+                            await store.reclaimFolder(at: path)
+                            isWorking = false
+                            dismiss()
+                        }
                     }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(isWorking)
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(plan.isEmpty || isWorking)
             }
         }
         .padding(24)

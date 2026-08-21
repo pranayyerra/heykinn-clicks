@@ -58,6 +58,25 @@ enum SourceFolderReclaim {
         var isEmpty: Bool { releasable.isEmpty }
         /// Whether removing everything releasable would leave the folder there.
         var leavesFilesBehind: Bool { !notImported.isEmpty || !blocked.isEmpty }
+
+        /// Nothing visible in the folder at all — which is what a folder looks
+        /// like after a reclaim took everything it could.
+        ///
+        /// `isEmpty` alone cannot tell that apart from a folder where every
+        /// file is blocked, and the two need opposite things said about them:
+        /// one is finished, the other is waiting. Asking a plan "is there
+        /// nothing to do?" and answering "then the copies must still be
+        /// unread" is how an empty folder ended up being described as one of
+        /// the places your photographs are kept.
+        var isFolderEmpty: Bool {
+            releasable.isEmpty && notImported.isEmpty && blocked.isEmpty
+        }
+
+        /// Nothing here is spare, and nothing is being waited on either — what
+        /// remains is only ever files the app did not import.
+        var holdsOnlyFilesTheAppNeverTookIn: Bool {
+            releasable.isEmpty && blocked.isEmpty && !notImported.isEmpty
+        }
     }
 
     /// - Parameters:

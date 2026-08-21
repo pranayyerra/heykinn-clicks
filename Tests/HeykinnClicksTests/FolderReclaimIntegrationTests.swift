@@ -137,4 +137,104 @@ final class FolderReclaimIntegrationTests: XCTestCase {
         let plan = await store.planFolderReclaim(at: folder.path, protectionByHash: archive)
         XCTAssertEqual(plan.releasable.map(\.url.lastPathComponent), ["deep.jpg"])
     }
+
+    // MARK: - Asking a second time
+
+    /// Deletes for real rather than recording the call: what the *next* plan
+    /// says is the thing under test, and that depends on the folder actually
+    /// having changed. These are fixtures in a temp directory, not the tester's
+    /// own files, so nothing goes near a real Trash.
+    private func reclaimForReal(
+        _ store: AppStore, _ folder: URL, _ archive: [String: ProtectionState]
+    ) async -> Int {
+        await store.reclaimFolder(at: folder.path, protectionByHash: archive) {
+            try FileManager.default.removeItem(at: $0)
+        }
+    }
+
+    /// **The folder this sheet has just emptied.** Every one of these states
+    /// answers "nothing can go", and they used to be told apart by nothing —
+    /// so a folder with no files left in it was described as one of the places
+    /// your photographs are kept.
+    func testAnEmptiedFolderIsNotDescribedAsStillHoldingPhotographs() async throws {
+        let store = try makeStore()
+        let folder = try makeFolder("emptied")
+        let photo = try write("a photograph", named: "one.jpg", into: folder)
+        let archive = try held(photo, as: .fullyReplicated)
+
+        let count = await reclaimForReal(store, folder, archive)
+        XCTAssertEqual(count, 1)
+
+        let after = await store.planFolderReclaim(at: folder.path, protectionByHash: archive)
+        XCTAssertTrue(after.isEmpty, "there is nothing left to release")
+        XCTAssertTrue(
+            after.isFolderEmpty,
+            "the folder is empty, and the sheet has to be able to say so rather than claiming copies are still being made"
+        )
+        XCTAssertFalse(after.holdsOnlyFilesTheAppNeverTookIn)
+        XCTAssertFalse(after.leavesFilesBehind)
+    }
+
+    /// What is left is only ever somebody's own files, so there is nothing
+    /// pending — "still needs its copies made" would be inventing a wait.
+    func testAFolderLeftHoldingOnlyItsOwnFilesIsNotDescribedAsWaiting() async throws {
+        let store = try makeStore()
+        let folder = try makeFolder("leftovers")
+        let photo = try write("a photograph", named: "one.jpg", into: folder)
+        try write("my notes", named: "notes.txt", into: folder)
+        let archive = try held(photo, as: .fullyReplicated)
+
+        let removed = await reclaimForReal(store, folder, archive)
+        XCTAssertEqual(removed, 1)
+
+        let after = await store.planFolderReclaim(at: folder.path, protectionByHash: archive)
+        XCTAssertTrue(after.isEmpty)
+        XCTAssertFalse(after.isFolderEmpty, "notes.txt is still there")
+        XCTAssertTrue(
+            after.holdsOnlyFilesTheAppNeverTookIn,
+            "nothing here is blocked, so nothing is being waited on"
+        )
+        XCTAssertEqual(after.notImported.map(\.url.lastPathComponent), ["notes.txt"])
+    }
+
+    /// The one case the old wording was written for, and the one it must keep:
+    /// files that really are waiting on their copies.
+    func testAFolderStillWaitingOnCopiesKeepsSayingSo() async throws {
+        let store = try makeStore()
+        let folder = try makeFolder("waiting")
+        let safe = try write("a photograph", named: "safe.jpg", into: folder)
+        let unread = try write("another photograph", named: "unread.jpg", into: folder)
+        let archive = [
+            try HashingService.sha256(of: safe): ProtectionState.fullyReplicated,
+            try HashingService.sha256(of: unread): ProtectionState.awaitingFirstCheck,
+        ]
+
+        let removed = await reclaimForReal(store, folder, archive)
+        XCTAssertEqual(removed, 1)
+
+        let after = await store.planFolderReclaim(at: folder.path, protectionByHash: archive)
+        XCTAssertTrue(after.isEmpty)
+        XCTAssertFalse(after.isFolderEmpty)
+        XCTAssertFalse(
+            after.holdsOnlyFilesTheAppNeverTookIn,
+            "unread.jpg is blocked, so this folder genuinely is waiting"
+        )
+        XCTAssertEqual(after.blocked.values.map(\.self), [.neverReadBack])
+    }
+
+    /// Asking again after everything went must not offer to do it again.
+    func testAskingAgainAfterEverythingWentFindsNothingToOffer() async throws {
+        let store = try makeStore()
+        let folder = try makeFolder("twice")
+        let photo = try write("a photograph", named: "one.jpg", into: folder)
+        let archive = try held(photo, as: .fullyReplicated)
+
+        let first = await reclaimForReal(store, folder, archive)
+        XCTAssertEqual(first, 1)
+        let second = await reclaimForReal(store, folder, archive)
+        XCTAssertEqual(
+            second, 0,
+            "a second run had nothing to take and must not claim otherwise"
+        )
+    }
 }

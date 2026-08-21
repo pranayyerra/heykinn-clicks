@@ -1,6 +1,4 @@
 import Foundation
-import ImageIO
-import AVFoundation
 
 /// Reunites the two halves of a Live Photo.
 ///
@@ -12,6 +10,22 @@ import AVFoundation
 /// Filename stems are only a hint (two unrelated files can share one). The
 /// content identifier is the authority, so a pair is confirmed by reading it
 /// from both files and requiring a match.
+/// The identifiers a Live Photo's two halves carry, read from the files.
+///
+/// **A seam so the rules above it can be tested at all.** Deciding a pair takes
+/// four different outcomes and three of them need real Live Photo files to
+/// reach — a still and a movie carrying matching Apple content identifiers,
+/// which cannot be written by hand. Before this, only the rejection was
+/// reachable from a test, and the subtle case — Google re-encodes some stills
+/// and drops Apple's maker note, so the link survives on the movie's side only
+/// — was carried by a comment and nothing else.
+protocol LivePhotoIdentifiers {
+    /// Apple's Live Photo identifier from a still's maker note.
+    func stillIdentifier(_ url: URL) -> String?
+    func motionIdentifier(_ url: URL) async -> String?
+    func motionDuration(_ url: URL) async -> TimeInterval?
+}
+
 enum LivePhotoPairer {
 
     /// Longest a Live Photo's movie can plausibly be; used only to skip
@@ -23,33 +37,6 @@ enum LivePhotoPairer {
         var motionAssetID: UUID
         var stillURL: URL
         var motionURL: URL
-    }
-
-    /// Apple's Live Photo identifier from a still's maker note.
-    static func stillContentIdentifier(_ url: URL) -> String? {
-        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
-              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any],
-              let apple = properties[kCGImagePropertyMakerAppleDictionary] as? [String: Any]
-        else { return nil }
-        // Key "17" is the Live Photo pairing UUID.
-        return apple["17"] as? String
-    }
-
-    /// The same identifier as QuickTime metadata on the movie.
-    static func motionContentIdentifier(_ url: URL) async -> String? {
-        let asset = AVURLAsset(url: url)
-        guard let items = try? await asset.load(.metadata) else { return nil }
-        for item in items where item.identifier == .quickTimeMetadataContentIdentifier {
-            if let value = try? await item.load(.stringValue) { return value }
-        }
-        return nil
-    }
-
-    static func motionDuration(_ url: URL) async -> TimeInterval? {
-        guard let duration = try? await AVURLAsset(url: url).load(.duration), duration.isNumeric else {
-            return nil
-        }
-        return duration.seconds
     }
 
     /// How firmly a pair was established.
@@ -81,14 +68,18 @@ enum LivePhotoPairer {
     /// Confirms a candidate really is a Live Photo pair. A shared filename is
     /// never sufficient on its own — at minimum the movie must prove it is a
     /// Live Photo's motion half by carrying a content identifier.
-    static func confirm(_ candidate: Candidate) async -> Confidence {
-        if let duration = await motionDuration(candidate.motionURL), duration > maxMotionDuration {
+    static func confirm(
+        _ candidate: Candidate,
+        using reader: LivePhotoIdentifiers
+    ) async -> Confidence {
+        if let duration = await reader.motionDuration(candidate.motionURL),
+           duration > maxMotionDuration {
             return .notLivePhotoMotion
         }
-        let motionID = await motionContentIdentifier(candidate.motionURL)
+        let motionID = await reader.motionIdentifier(candidate.motionURL)
         guard let motionID, !motionID.isEmpty else { return .notLivePhotoMotion }
 
-        if let stillID = stillContentIdentifier(candidate.stillURL), !stillID.isEmpty {
+        if let stillID = reader.stillIdentifier(candidate.stillURL), !stillID.isEmpty {
             return stillID == motionID ? .identifiersMatch : .stillDoesNotMatch
         }
         // Still has no identifier to compare; the movie's presence plus the
