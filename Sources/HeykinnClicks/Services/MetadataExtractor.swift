@@ -1,33 +1,7 @@
 import Foundation
 import ImageIO
 
-struct ExtractedMetadata {
-    var kind: AssetKind
-    var captureDate: Date?
-    var captureDateSource: CaptureDateSource = .unknown
-    var pixelWidth: Int?
-    var pixelHeight: Int?
-    var exifSummary: [String: String]
-}
-
-/// EXIF/metadata extraction via ImageIO. Encapsulated so an external tool
-/// (e.g. exiftool) could replace the implementation later without touching
-/// the import pipeline.
 enum MetadataExtractor {
-    private static let photoExtensions: Set<String> = [
-        "jpg", "jpeg", "png", "heic", "heif", "gif", "tiff", "tif", "webp", "dng", "raw", "cr2", "nef", "arw", "bmp",
-    ]
-    private static let videoExtensions: Set<String> = [
-        "mov", "mp4", "m4v", "avi", "mkv", "webm", "3gp", "mts",
-    ]
-
-    static func kind(forFileExtension ext: String) -> AssetKind {
-        let lowered = ext.lowercased()
-        if photoExtensions.contains(lowered) { return .photo }
-        if videoExtensions.contains(lowered) { return .video }
-        return .unknown
-    }
-
     static func extract(from url: URL) -> ExtractedMetadata {
         let kind = kind(forFileExtension: url.pathExtension)
         var metadata = ExtractedMetadata(kind: kind, captureDate: nil, pixelWidth: nil, pixelHeight: nil, exifSummary: [:])
@@ -70,11 +44,17 @@ enum MetadataExtractor {
     /// one. That is what import did, and re-reading it later on a device that has
     /// since moved zones lands hours away — which is why provenance recovery
     /// treats a failure to reproduce a stored date as a refusal, not a repair.
-    static func parseExifDate(_ string: String) -> Date? {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy:MM:dd HH:mm:ss"
-        formatter.timeZone = TimeZone.current
-        return formatter.date(from: string)
+
+    /// Kept so the pipeline's call sites do not all change in the same commit
+    /// as the seam; `MediaKinds` is where these live now.
+    static func kind(forFileExtension ext: String) -> AssetKind {
+        MediaKinds.kind(forFileExtension: ext)
     }
+
+    static func parseExifDate(_ string: String) -> Date? {
+        MediaKinds.parseExifDate(string)
+    }
+
+    /// The protocol's instance requirement, satisfied by the static one.
+    func extract(from url: URL) -> ExtractedMetadata { Self.extract(from: url) }
 }
