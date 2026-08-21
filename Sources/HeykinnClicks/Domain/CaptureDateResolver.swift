@@ -1,5 +1,4 @@
 import Foundation
-import AVFoundation
 
 
 struct ResolvedCaptureDate {
@@ -232,23 +231,7 @@ enum CaptureDateResolver {
         return .fileMetadata
     }
 
-    /// Creation date from a movie's container metadata — the video equivalent
-    /// of EXIF, and previously not read at all.
-    static func movieCreationDate(_ url: URL) async -> Date? {
-        let asset = AVURLAsset(url: url)
-        if let item = try? await asset.load(.creationDate) {
-            if let value = try? await item.load(.dateValue) { return value }
-            if let text = try? await item.load(.stringValue) { return parseISOish(text) }
-        }
-        guard let items = try? await asset.load(.metadata) else { return nil }
-        for item in items where item.commonKey == .commonKeyCreationDate {
-            if let value = try? await item.load(.dateValue) { return value }
-            if let text = try? await item.load(.stringValue), let parsed = parseISOish(text) { return parsed }
-        }
-        return nil
-    }
-
-    private static func parseISOish(_ text: String) -> Date? {
+    static func parseISOish(_ text: String) -> Date? {
         let iso = ISO8601DateFormatter()
         iso.formatOptions = [.withInternetDateTime]
         if let date = iso.date(from: text) { return date }
