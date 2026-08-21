@@ -34,7 +34,7 @@ enum SourceFolderReclaim {
     }
 
     /// Why a file the app *did* import still cannot go.
-    enum Blocker: String, Equatable, Hashable {
+    enum Blocker: String, CaseIterable, Equatable, Hashable {
         /// Fewer copies than the photograph's set asks for.
         case notEnoughCopies
         /// Copies exist, but nothing has read one back yet.

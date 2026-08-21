@@ -459,7 +459,15 @@ to a platform that has never heard of Apple.
    resolves to when the user has expressed no preference at all — previously
    registration order, which knew nothing about anything.
 5. Never stage or copy what a target already holds; never delete
-   archive-backed content; moved content is repointed, never re-copied. **The
+   archive-backed content. **A folder somebody imported from is read and never
+   written, with one exception they have to ask for**: once the archive holds a
+   file's exact bytes on the devices its set names, and has read one of those
+   copies back, the folder's copy can be moved to the Trash on request. Never
+   automatically, never a file the app did not import, and never on the strength
+   of copies nothing has read (`SourceFolderReclaim`). Everything else the app
+   deletes is its own — the working copy in staging, a spare form of an export
+   it put on a drive.
+   Beyond that: moved content is repointed, never re-copied. **The
    host device is not exempt in principle** — a folder on this device's own disk
    is content the host target already holds, and copying it into the managed
    folder writes a second copy on one disk, which is not a second copy of

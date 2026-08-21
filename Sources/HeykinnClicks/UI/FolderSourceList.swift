@@ -9,6 +9,13 @@ import SwiftUI
 /// the time, and how many photos came in, were skipped as duplicates, or
 /// failed; it was only ever rendered as a line in the audit log, filed under
 /// the mechanism rather than under the place the photos came from.
+/// One import's folder, and what it still holds.
+struct FolderReclaimRequest: Identifiable {
+    let id = UUID()
+    let path: String
+    let plan: SourceFolderReclaim.Plan
+}
+
 struct FolderSourceList: View {
     @EnvironmentObject private var store: AppStore
     @State private var opened: UUID?
@@ -68,6 +75,9 @@ struct FolderSourceList: View {
         }
     }
 
+    @State private var checking: UUID?
+    @State private var reclaim: FolderReclaimRequest?
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(batches) { batch in
@@ -79,6 +89,9 @@ struct FolderSourceList: View {
             if !unaccountedFor.isEmpty {
                 unaccountedRow
             }
+        }
+        .sheet(item: $reclaim) { request in
+            FolderReclaimSheet(path: request.path, plan: request.plan)
         }
     }
 
@@ -209,6 +222,31 @@ struct FolderSourceList: View {
                 Text("Nothing from this folder is in the archive — every photo in it was already here.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+
+            // Offered, never done. A folder you imported from is read and never
+            // written, and this is the single exception — so it is a thing
+            // somebody asks for, and even then it only reports what it found.
+            if batch.isFilesystemPath, !assets.isEmpty {
+                if checking == batch.id {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text("Reading the folder to see what is still needed…")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Button("Is this folder still needed?") {
+                        checking = batch.id
+                        Task {
+                            let plan = await store.planFolderReclaim(at: batch.sourcePath)
+                            checking = nil
+                            reclaim = FolderReclaimRequest(path: batch.sourcePath, plan: plan)
+                        }
+                    }
+                    .buttonStyle(.link)
+                    .font(.caption)
+                }
             }
         }
         .padding(.leading, 28)

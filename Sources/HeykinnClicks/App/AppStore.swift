@@ -3401,6 +3401,115 @@ final class AppStore: ObservableObject {
         StagingReclaimer.plan(assets: assets, protectionStates: protectionStates)
     }
 
+    // MARK: - Reclaiming a folder you imported from
+
+    /// What removing the folder behind an import would and would not touch.
+    ///
+    /// Hashes the folder as it stands now rather than trusting anything
+    /// recorded at import time: a file edited since then no longer matches
+    /// what the archive holds, and so is left alone without needing a rule.
+    /// That means real reading, so it runs off the main actor and is only ever
+    /// started by somebody asking.
+    func planFolderReclaim(at path: String) async -> SourceFolderReclaim.Plan {
+        await planFolderReclaim(at: path, protectionByHash: protectionByContentHash)
+    }
+
+    /// What the archive holds, keyed by the bytes rather than by row.
+    ///
+    /// Separate from the walk so a test can state the archive's side of the
+    /// question outright: `protectionStates` is read-only from outside, which
+    /// is correct — it is derived, not set.
+    var protectionByContentHash: [String: ProtectionState] {
+        Dictionary(
+            assets.compactMap { asset -> (String, ProtectionState)? in
+                guard let state = protectionStates[asset.id] else { return nil }
+                return (asset.contentHash, state)
+            },
+            // A photograph is held once; if two rows ever shared a hash, the
+            // safer state wins, and "not yet" is safer than "go ahead".
+            uniquingKeysWith: { first, second in
+                [first, second].contains(.driftDetected) ? .driftDetected
+                    : first.verdict.isSatisfied ? second : first
+            }
+        )
+    }
+
+    func planFolderReclaim(
+        at path: String,
+        protectionByHash: [String: ProtectionState]
+    ) async -> SourceFolderReclaim.Plan {
+        let root = URL(fileURLWithPath: path, isDirectory: true)
+        return await Task.detached(priority: .utility) {
+            var files: [SourceFolderReclaim.File] = []
+            // Drained into an array first: `FileManager.Enumerator`'s iterator
+            // is unavailable from an async context, and this closure is one.
+            guard let walk = FileManager.default.enumerator(
+                at: root,
+                includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
+            ) else { return SourceFolderReclaim.Plan() }
+            let found = walk.compactMap { $0 as? URL }
+            for url in found {
+                let values = try? url.resourceValues(forKeys: [.isRegularFileKey, .fileSizeKey])
+                guard values?.isRegularFile == true else { continue }
+                guard let hash = try? HashingService.sha256(of: url) else { continue }
+                files.append(SourceFolderReclaim.File(
+                    url: url,
+                    contentHash: hash,
+                    size: Int64(values?.fileSize ?? 0)
+                ))
+            }
+            return SourceFolderReclaim.plan(files: files, protectionByHash: protectionByHash)
+        }.value
+    }
+
+    /// Moves the releasable files to the Trash, and says how many went.
+    ///
+    /// **The Trash rather than unlinked.** This is the only thing the app
+    /// deletes that belongs to the person using it, and recoverable costs
+    /// nothing: the space is not returned until they empty it, which is their
+    /// decision to make and not the app's to make for them.
+    ///
+    /// Re-planned immediately before acting, not taken from the sheet: the plan
+    /// was made by reading every byte in the folder, and between then and the
+    /// button there is a person deciding, which is time enough for a file to
+    /// change. Anything that no longer qualifies is simply not in the new plan.
+    /// `remove` is a seam only so this can be tested: calling the real one puts
+    /// files in the tester's own Trash, which a test suite has no business
+    /// doing. Every caller in the app takes the default.
+    @discardableResult
+    func reclaimFolder(
+        at path: String,
+        protectionByHash: [String: ProtectionState]? = nil,
+        remove: (URL) throws -> Void = {
+            try FileManager.default.trashItem(at: $0, resultingItemURL: nil)
+        }
+    ) async -> Int {
+        let plan = await planFolderReclaim(
+            at: path, protectionByHash: protectionByHash ?? protectionByContentHash
+        )
+        var trashed = 0
+        var failed = 0
+        for file in plan.releasable {
+            do {
+                try remove(file.url)
+                trashed += 1
+            } catch {
+                failed += 1
+            }
+        }
+        if trashed > 0 {
+            audit(
+                .system,
+                "Moved \(Formatters.count(trashed, "file")) to the Trash from \(path) — the archive holds every one of them on the drives its photos are kept on, and has read them back. Nothing it did not import was touched."
+            )
+        }
+        if failed > 0 {
+            lastError = "\(Formatters.count(failed, "file")) could not be moved to the Trash. Nothing else was changed."
+        }
+        return trashed
+    }
+
     /// Releases staged copies of content the archive's own drives now hold
     /// safely, and sweeps up staged files nothing claims.
     ///
