@@ -3498,10 +3498,22 @@ final class AppStore: ObservableObject {
                 failed += 1
             }
         }
+        // Only after the files have gone: a directory is empty because they
+        // went, so asking before would find nothing and leave the husks behind.
+        // The folder itself is never removed — see `pruneEmptyDirectories`.
+        var prunedDirectories = 0
         if trashed > 0 {
+            prunedDirectories = SourceFolderReclaim.pruneEmptyDirectories(
+                under: URL(fileURLWithPath: path, isDirectory: true)
+            )
+        }
+        if trashed > 0 {
+            let tidied = prunedDirectories > 0
+                ? " \(Formatters.count(prunedDirectories, "folder")) left empty by this were tidied up; the folder itself stays."
+                : ""
             audit(
                 .system,
-                "Moved \(Formatters.count(trashed, "file")) to the Trash from \(path) — the archive holds every one of them on the drives its photos are kept on, and has read them back. Nothing it did not import was touched."
+                "Moved \(Formatters.count(trashed, "file")) to the Trash from \(path) — the archive holds every one of them on the drives its photos are kept on, and has read them back. Nothing it did not import was touched.\(tidied)"
             )
         }
         if failed > 0 {

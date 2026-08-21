@@ -74,7 +74,13 @@ struct HelpView: View {
             body: """
             Pointing the app at a folder, a Photos library or a Google download copies what \
             it finds into the archive and leaves the original exactly as it was. Nothing is \
-            moved, renamed or deleted where it came from, ever.
+            moved, renamed or deleted where it came from unless you ask for it.
+
+            There is one thing you can ask for. Once every photograph the app took from a \
+            folder is on your own drives and has been read back, that folder's card offers to \
+            move those spare copies to the Trash — the copies, not the folder, and never a \
+            file the app did not import itself. It goes to the Trash rather than being \
+            deleted, so nothing is gone until you empty it.
 
             Photos arriving from anywhere the app does not manage land on this device first, so \
             they are safe before any drive is plugged in. That working copy is released only \

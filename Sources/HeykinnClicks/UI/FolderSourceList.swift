@@ -78,6 +78,27 @@ struct FolderSourceList: View {
     @State private var checking: UUID?
     @State private var reclaim: FolderReclaimRequest?
 
+    /// What each opened folder still holds.
+    ///
+    /// Read from the folder rather than remembered from the reclaim. A flag
+    /// saying "this was cleared" would be wrong the moment somebody put
+    /// something back, emptied the folder themselves, or unplugged its disk —
+    /// and the question on this row is about the folder now, not about what the
+    /// app once did to it.
+    @State private var presence: [UUID: SourceFolderReclaim.Presence] = [:]
+
+    /// Cheap enough to run on opening a folder — it stops at the first file.
+    private func lookAtFolder(_ batch: ImportBatch) {
+        guard batch.isFilesystemPath else { return }
+        let path = batch.sourcePath
+        Task {
+            let found = await Task.detached(priority: .utility) {
+                SourceFolderReclaim.presence(of: URL(fileURLWithPath: path, isDirectory: true))
+            }.value
+            presence[batch.id] = found
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             ForEach(batches) { batch in
@@ -90,7 +111,14 @@ struct FolderSourceList: View {
                 unaccountedRow
             }
         }
-        .sheet(item: $reclaim) { request in
+        .sheet(item: $reclaim, onDismiss: {
+            // Whatever the sheet did, the folder is no longer necessarily what
+            // this row last read. Only one row is ever open, and it is the one
+            // the sheet came from.
+            if let opened, let batch = batches.first(where: { $0.id == opened }) {
+                lookAtFolder(batch)
+            }
+        }) { request in
             FolderReclaimSheet(path: request.path, plan: request.plan)
         }
     }
@@ -138,6 +166,10 @@ struct FolderSourceList: View {
         let isOpen = opened == batch.id
         return Button {
             opened = isOpen ? nil : batch.id
+            // Read the folder on the way open, not on every render: the row
+            // below it is the only thing that asks, and this is the moment it
+            // starts existing.
+            if !isOpen { lookAtFolder(batch) }
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: isOpen ? "chevron.down" : "chevron.right")
@@ -227,6 +259,11 @@ struct FolderSourceList: View {
             // Offered, never done. A folder you imported from is read and never
             // written, and this is the single exception — so it is a thing
             // somebody asks for, and even then it only reports what it found.
+            //
+            // Not offered at all once the folder has nothing left in it. The
+            // question is "is this folder still needed?", and an empty folder
+            // has already answered it — asking again re-read every byte of
+            // nothing to arrive at a sheet that could only say so.
             if batch.isFilesystemPath, !assets.isEmpty {
                 if checking == batch.id {
                     HStack(spacing: 6) {
@@ -236,16 +273,33 @@ struct FolderSourceList: View {
                             .foregroundStyle(.secondary)
                     }
                 } else {
-                    Button("Is this folder still needed?") {
-                        checking = batch.id
-                        Task {
-                            let plan = await store.planFolderReclaim(at: batch.sourcePath)
-                            checking = nil
-                            reclaim = FolderReclaimRequest(path: batch.sourcePath, plan: plan)
+                    switch presence[batch.id] {
+                    case .empty:
+                        Label(
+                            "This folder is empty. Everything the app took from it has gone to the Trash.",
+                            systemImage: "checkmark.circle"
+                        )
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    case .unreachable:
+                        // `PathRow` above already names the disk that is
+                        // missing. Repeating it here would say it twice; what
+                        // this needs to do is not offer a question the app
+                        // cannot answer without the folder.
+                        EmptyView()
+                    case .holdsFiles, .none:
+                        Button("Is this folder still needed?") {
+                            checking = batch.id
+                            Task {
+                                let plan = await store.planFolderReclaim(at: batch.sourcePath)
+                                checking = nil
+                                reclaim = FolderReclaimRequest(path: batch.sourcePath, plan: plan)
+                            }
                         }
+                        .buttonStyle(.link)
+                        .font(.caption)
                     }
-                    .buttonStyle(.link)
-                    .font(.caption)
                 }
             }
         }

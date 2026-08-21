@@ -263,8 +263,13 @@ struct SourcesView: View {
             // safe rather than being described in two tenses here.
             Text("Where your photos come from")
                 .font(.title3)
+            // "Nothing here moves or deletes them" was unconditional, on the
+            // screen that leads to the one feature that does. Clearing a folder
+            // is offered from a card below this line, and a promise with a
+            // silent exception in it is worth less than the smaller promise
+            // that is actually true.
             Label(
-                "Your originals are only ever read. Nothing here moves or deletes them.",
+                "Your originals are only ever read. The app never moves or deletes them on its own — clearing a folder it has finished with is the one thing it will do, and only when you ask.",
                 systemImage: "lock.open.trianglebadge.exclamationmark"
             )
             .font(.callout)

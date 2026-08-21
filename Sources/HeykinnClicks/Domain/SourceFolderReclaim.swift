@@ -79,6 +79,92 @@ enum SourceFolderReclaim {
         }
     }
 
+    /// What an imported folder still holds, cheaply enough to ask on sight.
+    ///
+    /// Deliberately not a `Plan`: planning hashes every byte in the folder, and
+    /// the screen only needs to know whether there is anything there at all —
+    /// which is the first regular file, or the absence of one.
+    enum Presence: Equatable {
+        /// The folder is not there, or its disk is not.
+        case unreachable
+        /// Nothing visible left in it, anywhere below.
+        case empty
+        /// Still holding something.
+        case holdsFiles
+    }
+
+    /// Stops at the first file it finds, so the answer this exists for — an
+    /// emptied folder — costs one directory read.
+    static func presence(of root: URL) -> Presence {
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory),
+              isDirectory.boolValue else { return .unreachable }
+        guard let walk = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isRegularFileKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return .unreachable }
+        for case let url as URL in walk {
+            let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+            if values?.isRegularFile == true { return .holdsFiles }
+        }
+        return .empty
+    }
+
+    /// Removes the directories a reclaim has just emptied, below an imported
+    /// folder.
+    ///
+    /// **The folder itself is never removed**, only what the app emptied inside
+    /// it. A folder somebody chose and pointed the app at is a place they know;
+    /// having it disappear out of Finder is alarming in a way that a tidied-up
+    /// `logo-jpg/` underneath it is not. That is also what the sheet promises
+    /// in its most prominent line, so it is a promise and not a preference.
+    ///
+    /// The same narrow contract as `ReplicationService.pruneEmptyBucket`, for
+    /// the same reason — this one is pointed at a path the user owns, so it can
+    /// afford it even less. It refuses anything that is not strictly inside
+    /// `root`, and a directory still holding *anything*, hidden files included,
+    /// is left alone: removing somebody's `.DS_Store` is not this function's
+    /// business, and a directory is not empty just because the app cannot see
+    /// what is in it.
+    ///
+    /// Failure is silent. A directory left behind is untidy; nothing about the
+    /// archive is wrong because of it.
+    @discardableResult
+    static func pruneEmptyDirectories(under root: URL) -> Int {
+        let rootPath = root.standardizedFileURL.path
+        guard let walk = FileManager.default.enumerator(
+            at: root,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles, .skipsPackageDescendants]
+        ) else { return 0 }
+
+        var directories: [URL] = []
+        for case let url as URL in walk {
+            let values = try? url.resourceValues(forKeys: [.isDirectoryKey])
+            if values?.isDirectory == true { directories.append(url) }
+        }
+        // Deepest first, so a directory holding nothing but empty directories
+        // has become empty itself by the time it is considered.
+        directories.sort { $0.pathComponents.count > $1.pathComponents.count }
+
+        var removed = 0
+        for directory in directories {
+            let path = directory.standardizedFileURL.path
+            guard path != rootPath, path.hasPrefix(rootPath + "/") else { continue }
+            guard let contents = try? FileManager.default.contentsOfDirectory(
+                at: directory, includingPropertiesForKeys: nil, options: []
+            ), contents.isEmpty else { continue }
+            do {
+                try FileManager.default.removeItem(at: directory)
+                removed += 1
+            } catch {
+                continue
+            }
+        }
+        return removed
+    }
+
     /// - Parameters:
     ///   - files: what is in the folder now, already hashed.
     ///   - protectionByHash: the protection state of the photograph the archive
