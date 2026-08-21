@@ -42,7 +42,7 @@ struct FolderReclaimSheet: View {
                         .font(.callout.weight(.medium))
                     if !plan.notImported.isEmpty {
                         Label(
-                            "\(Formatters.count(plan.notImported.count, "file")) the app never took in — \(Formatters.bytes.string(fromByteCount: plan.notImportedBytes)). It has no copy of these, so it will not touch them.",
+                            "\(Formatters.count(plan.notImported.count, "file")) the app never took in — \(Formatters.bytes.string(fromByteCount: plan.notImportedBytes)). It has no copy of \(plan.notImported.count == 1 ? "it, so it will not touch it" : "these, so it will not touch them").",
                             systemImage: "hand.raised.fill"
                         )
                         .font(.caption)

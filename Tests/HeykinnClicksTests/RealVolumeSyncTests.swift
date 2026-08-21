@@ -18,7 +18,7 @@ final class RealVolumeSyncTests: XCTestCase {
 
     override func setUpWithError() throws {
         guard let path = ProcessInfo.processInfo.environment["HEYKINN_TEST_VOLUME"] else {
-            throw XCTSkip("Set HEYKINN_TEST_VOLUME to a mounted volume to run these")
+            throw XCTSkip("Set HEYKINN_TEST_VOLUME to a mounted volume to run these. The two unplug tests need HEYKINN_TEST_VOLUME_IMAGE as well, naming the .dmg behind that volume — an ordinary USB drive runs six of the eight and says nothing about the other two.")
         }
         volume = URL(fileURLWithPath: path, isDirectory: true)
         try XCTSkipUnless(
