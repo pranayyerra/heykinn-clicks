@@ -113,24 +113,20 @@ final class ThumbnailCache {
             options: [.skipsHiddenFiles]
         ) else { return 0 }
 
-        var entries: [(url: URL, size: Int64, used: Date)] = []
-        var total: Int64 = 0
+        var entries: [ThumbnailEviction.Entry] = []
         for case let url as URL in enumerator where url.pathExtension == "jpg" {
             let values = try? url.resourceValues(forKeys: [.fileSizeKey, .contentModificationDateKey])
-            let size = Int64(values?.fileSize ?? 0)
-            entries.append((url, size, values?.contentModificationDate ?? .distantPast))
-            total += size
+            entries.append(ThumbnailEviction.Entry(
+                url: url,
+                size: Int64(values?.fileSize ?? 0),
+                lastUsed: values?.contentModificationDate ?? .distantPast
+            ))
         }
-        guard total > limit else { return 0 }
 
-        var removed = 0
-        for entry in entries.sorted(by: { $0.used < $1.used }) {
-            if total <= limit { break }
-            try? fileManager.removeItem(at: entry.url)
-            total -= entry.size
-            removed += 1
-        }
-        return removed
+        // What to drop is a decision; removing the files is this layer's job.
+        let doomed = ThumbnailEviction.choose(from: entries, budget: limit)
+        for entry in doomed { try? fileManager.removeItem(at: entry.url) }
+        return doomed.count
     }
 
     // MARK: - Generation
