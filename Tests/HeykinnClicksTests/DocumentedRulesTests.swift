@@ -122,6 +122,75 @@ final class DocumentedRulesTests: XCTestCase {
         )
     }
 
+    /// **`Persistence/` needs Foundation and SQLite, and nothing else.**
+    ///
+    /// This is what a status reader on another platform actually needs — what
+    /// exists, where the copies are, what is at risk — and it needs none of the
+    /// kernel and none of Apple. It was already true except for one enum:
+    /// `CaptureDateSource` is stored in the catalog and read back, and lived in
+    /// the file that resolves capture dates, which needs AVFoundation. One
+    /// declaration was the difference between the claim being true and being
+    /// nearly true.
+    func testTheCatalogLayerNeedsOnlyFoundationAndSQLite() throws {
+        let root = repositoryRoot.appendingPathComponent("Sources/HeykinnClicks", isDirectory: true)
+        let persistence = root.appendingPathComponent("Persistence", isDirectory: true)
+
+        var foreignImports: [String] = []
+        for file in try swiftFiles(under: persistence) {
+            for raw in try String(contentsOf: file, encoding: .utf8).split(separator: "\n") {
+                let line = raw.trimmingCharacters(in: .whitespaces)
+                guard line.hasPrefix("import ") else { continue }
+                let module = String(line.dropFirst("import ".count)).trimmingCharacters(in: .whitespaces)
+                if module != "Foundation", module != "SQLite3" {
+                    foreignImports.append("\(file.lastPathComponent) imports \(module)")
+                }
+            }
+        }
+        XCTAssertEqual(foreignImports, [], "the catalog layer picked up a dependency")
+
+        // And the same reference check the domain gets: an import is not the
+        // only way to depend on a file that will not compile elsewhere.
+        let declaration = try! NSRegularExpression(
+            pattern: "^(?:public |internal |private |fileprivate )?(?:final )?(?:struct|enum|class|actor|protocol) ([A-Z][A-Za-z0-9_]*)",
+            options: [.anchorsMatchLines]
+        )
+        var appleOnlyTypes: Set<String> = []
+        for area in ["UI", "Services", "App"] {
+            for file in try swiftFiles(under: root.appendingPathComponent(area, isDirectory: true)) {
+                let text = try String(contentsOf: file, encoding: .utf8)
+                guard text.split(separator: "\n").contains(where: {
+                    let line = $0.trimmingCharacters(in: .whitespaces)
+                    return line.hasPrefix("import ") && !line.hasSuffix(" Foundation")
+                        && !line.hasSuffix(" SQLite3") && !line.hasSuffix(" Compression")
+                }) else { continue }
+                let range = NSRange(text.startIndex..<text.endIndex, in: text)
+                for match in declaration.matches(in: text, range: range) {
+                    if let r = Range(match.range(at: 1), in: text) { appleOnlyTypes.insert(String(text[r])) }
+                }
+            }
+        }
+        var offences: [String] = []
+        for file in try swiftFiles(under: persistence) {
+            let code = try String(contentsOf: file, encoding: .utf8)
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .map { line -> Substring in
+                    guard let comment = line.range(of: "//") else { return line }
+                    return line[line.startIndex..<comment.lowerBound]
+                }
+                .joined(separator: "\n")
+            let words = Set(code.split { !$0.isLetter && !$0.isNumber && $0 != "_" }.map(String.init))
+            for named in appleOnlyTypes.intersection(words).sorted() {
+                offences.append("\(file.lastPathComponent) names \(named)")
+            }
+        }
+        XCTAssertEqual(
+            offences, [],
+            """
+            The catalog is what another platform reads to say what exists and             where the copies are. These name a type declared in a file that             needs an Apple framework — move the declaration into Domain/ if the             catalog stores it, as CaptureDateSource was.
+            """
+        )
+    }
+
     // MARK: - The invariant list
 
     /// **Every invariant is numbered once, and they run in order.**
