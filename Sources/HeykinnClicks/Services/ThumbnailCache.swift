@@ -2,7 +2,6 @@ import Foundation
 import AppKit
 import ImageIO
 import AVFoundation
-import UniformTypeIdentifiers
 
 /// Two-level thumbnail cache: an in-memory tier for scrolling, and a small
 /// on-disk tier so the Library stays browsable when the targets are unplugged.

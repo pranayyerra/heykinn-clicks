@@ -1,5 +1,4 @@
 import Foundation
-import UniformTypeIdentifiers
 
 /// A provider's metadata for one imported file, kept as it was written.
 ///
