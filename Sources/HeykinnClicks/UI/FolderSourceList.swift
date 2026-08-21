@@ -283,11 +283,25 @@ struct FolderSourceList: View {
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                     case .unreachable:
-                        // `PathRow` above already names the disk that is
-                        // missing. Repeating it here would say it twice; what
-                        // this needs to do is not offer a question the app
-                        // cannot answer without the folder.
-                        EmptyView()
+                        // Silence here was the first version, on the reasoning
+                        // that `PathRow` already names a disk that is missing.
+                        // It does — but only when the *disk* is the problem. A
+                        // folder deleted off a disk that is right here left the
+                        // row showing a path, a "Show in Finder" and nothing
+                        // else, which reads as the app having no opinion about
+                        // a folder it can no longer find.
+                        if RevealInFinder.unreachableReason(batch.sourcePath) == nil {
+                            Label(
+                                "The app cannot see this folder any more. Every photograph it took from it is in the archive.",
+                                systemImage: "questionmark.folder"
+                            )
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                        }
+                        // Otherwise the disk itself is absent, and `PathRow`
+                        // has already said which one. Saying it twice is worse
+                        // than saying it once.
                     case .holdsFiles, .none:
                         Button("Is this folder still needed?") {
                             checking = batch.id

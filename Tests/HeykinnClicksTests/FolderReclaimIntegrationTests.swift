@@ -222,6 +222,90 @@ final class FolderReclaimIntegrationTests: XCTestCase {
         XCTAssertEqual(after.blocked.values.map(\.self), [.neverReadBack])
     }
 
+    // MARK: - What the folder looks like afterwards
+
+    /// The husk problem: a reclaim that empties `logo-jpg/` used to leave the
+    /// empty directory sitting there for somebody to clear up by hand.
+    func testTheDirectoriesAReclaimEmptiesAreTidiedUp() async throws {
+        let store = try makeStore()
+        let folder = try makeFolder("husks")
+        let jpg = folder.appendingPathComponent("logo-jpg", isDirectory: true)
+        let png = folder.appendingPathComponent("logo-png", isDirectory: true)
+        for directory in [jpg, png] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let one = try write("a photograph", named: "one.jpg", into: jpg)
+        let two = try write("another photograph", named: "two.png", into: png)
+        let archive = [
+            try HashingService.sha256(of: one): ProtectionState.fullyReplicated,
+            try HashingService.sha256(of: two): ProtectionState.fullyReplicated,
+        ]
+
+        let removed = await reclaimForReal(store, folder, archive)
+        XCTAssertEqual(removed, 2)
+
+        XCTAssertFalse(FileManager.default.fileExists(atPath: jpg.path), "logo-jpg was left behind empty")
+        XCTAssertFalse(FileManager.default.fileExists(atPath: png.path), "logo-png was left behind empty")
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: folder.path),
+            "the folder somebody chose must survive — that is what the sheet promises"
+        )
+    }
+
+    /// A directory that still holds something of the user's is not empty, and
+    /// is not the app's to remove.
+    func testADirectoryStillHoldingSomethingIsLeftAlone() async throws {
+        let store = try makeStore()
+        let folder = try makeFolder("kept")
+        let inner = folder.appendingPathComponent("mixed", isDirectory: true)
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let photo = try write("a photograph", named: "one.jpg", into: inner)
+        try write("my notes", named: "notes.txt", into: inner)
+        let archive = try held(photo, as: .fullyReplicated)
+
+        let removed = await reclaimForReal(store, folder, archive)
+        XCTAssertEqual(removed, 1)
+        XCTAssertTrue(
+            FileManager.default.fileExists(atPath: inner.path),
+            "notes.txt is still in there, so the directory is not the app's to remove"
+        )
+    }
+
+    /// The prune must never reach the folder somebody pointed the app at, even
+    /// when the reclaim empties it completely.
+    func testTheChosenFolderItselfIsNeverRemoved() async throws {
+        let folder = try makeFolder("survivor")
+        try write("a photograph", named: "one.jpg", into: folder)
+        try FileManager.default.removeItem(at: folder.appendingPathComponent("one.jpg"))
+
+        let pruned = SourceFolderReclaim.pruneEmptyDirectories(under: folder)
+        XCTAssertEqual(pruned, 0, "there were no subdirectories to take")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: folder.path))
+    }
+
+    /// What the row asks before it offers the question at all.
+    func testPresenceTellsAnEmptiedFolderFromOneStillHoldingThings() throws {
+        let folder = try makeFolder("presence")
+        XCTAssertEqual(SourceFolderReclaim.presence(of: folder), .empty)
+
+        try write("a photograph", named: "one.jpg", into: folder)
+        XCTAssertEqual(SourceFolderReclaim.presence(of: folder), .holdsFiles)
+
+        let gone = folder.appendingPathComponent("not-there", isDirectory: true)
+        XCTAssertEqual(SourceFolderReclaim.presence(of: gone), .unreachable)
+    }
+
+    /// Files below the top level still count as the folder holding something.
+    func testPresenceLooksBelowTheTopLevel() throws {
+        let folder = try makeFolder("deep-presence")
+        let inner = folder.appendingPathComponent("2019", isDirectory: true)
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        XCTAssertEqual(SourceFolderReclaim.presence(of: folder), .empty, "an empty tree is empty")
+
+        try write("a photograph", named: "deep.jpg", into: inner)
+        XCTAssertEqual(SourceFolderReclaim.presence(of: folder), .holdsFiles)
+    }
+
     /// Asking again after everything went must not offer to do it again.
     func testAskingAgainAfterEverythingWentFindsNothingToOffer() async throws {
         let store = try makeStore()

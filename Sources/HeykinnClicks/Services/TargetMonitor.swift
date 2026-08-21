@@ -1,5 +1,4 @@
 import Foundation
-import AppKit
 
 /// Works out which replication targets are reachable right now.
 ///
@@ -17,47 +16,33 @@ final class TargetMonitor: ObservableObject {
     /// All candidate external volumes, for the registration UI.
     @Published private(set) var availableVolumes: [VolumeInfo] = []
 
-    private var mountObservers: [NSObjectProtocol] = []
-
-    init() {
-        let center = NSWorkspace.shared.notificationCenter
-        for name in [NSWorkspace.didMountNotification, NSWorkspace.didUnmountNotification, NSWorkspace.didRenameVolumeNotification] {
-            let observer = center.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
-                Task { @MainActor in
-                    self?.rescanRequested?()
-                }
-            }
-            mountObservers.append(observer)
-        }
-        // macOS posts this *before* unmounting, which is the only chance to
-        // stop reading from the volume and let the eject succeed. Without it,
-        // ejecting from Finder while the app is hashing files fails with
-        // "disk in use" — or the volume is yanked out from under open handles.
-        let willUnmount = center.addObserver(
-            forName: NSWorkspace.willUnmountNotification, object: nil, queue: .main
-        ) { [weak self] notification in
-            let url = notification.userInfo?[NSWorkspace.volumeURLUserInfoKey] as? URL
-            Task { @MainActor in
-                self?.volumeWillUnmount?(url)
-            }
-        }
-        mountObservers.append(willUnmount)
-    }
-
-    deinit {
-        let center = NSWorkspace.shared.notificationCenter
-        for observer in mountObservers {
-            center.removeObserver(observer)
-        }
-    }
 
     /// Set by AppStore so mount events trigger a rescan with the current registry.
     var rescanRequested: (() -> Void)?
     /// Called just before a volume unmounts, so work touching it can stop.
     var volumeWillUnmount: ((URL?) -> Void)?
 
-    /// Seeds reachable state directly; used by tests to simulate a target that
-    /// was already reachable before a rescan.
+    /// Where mount and unmount events come from. Injected so the rest of this
+    /// class — matching volumes to drives, reading markers, resolving folders —
+    /// is Foundation and portable, which it already was apart from the four
+    /// lines that subscribed.
+    private let events: VolumeEvents
+
+    init(events: VolumeEvents = AppleVolumeEvents()) {
+        self.events = events
+        events.onVolumesChanged = { [weak self] in
+            Task { @MainActor in self?.rescanRequested?() }
+        }
+        events.onVolumeWillUnmount = { [weak self] url in
+            Task { @MainActor in self?.volumeWillUnmount?(url) }
+        }
+        events.start()
+    }
+
+    deinit {
+        events.stop()
+    }
+
     func setReachablePathsForTesting(_ paths: [UUID: URL]) {
         reachablePaths = paths
     }
