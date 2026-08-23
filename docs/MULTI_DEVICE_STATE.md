@@ -755,28 +755,26 @@ cheerfully and describes an archive that does not match the disks.
 
 ## 10. Order of work
 
-Each step ships alone. Steps 1–5 involve no drives, no sync and no second
-platform — the merge model should be correct before removable media, torn
-writes and physical latency join the debugging surface.
+Steps 1 to 8 are done — schema guard, hashing spec and vectors, device-local
+state split out, the clock, per-field last-writer-wins with tombstones, the
+segment codec, merge on connect, checkpoints and pruning, and the six adapter
+seams. Each shipped alone; the reasoning is in the commit that made it true.
 
-| | | |
-|---|---|---|
-| ~~**1**~~ | ~~`PRAGMA user_version` + refuse to open a newer catalog~~ | **Done.** Stamped on open, refused when newer, checked before a restore replaces anything. `CatalogSchemaVersionTests`. |
-| ~~**2**~~ | ~~Write `SPEC-hashing.md` + vectors; fix H1, H2, H4~~ | **Done.** Spec written, `Domain/Portability/` added, 17 conformance vectors. |
-| ~~**3**~~ | ~~Split device-local state out of shared tables~~ | **Done.** `CatalogScope` classifies every table with a test that catches a new one; `drive_local_state` splits the mixed columns out of `drives`. |
-| **4a** | ~~Hybrid logical clock~~ | **Done.** [`SPEC-format.md`](SPEC-format.md) §1, `HybridLogicalClock`, 16 vectors. Self-contained; nothing existing changed. |
-| **4b** | ~~`device_id` + per-field LWW + tombstones + the merge engine~~ | **Done.** [`SPEC-format.md`](SPEC-format.md) §2, `DeviceIdentity`, `ChangeJournal`, 13 property tests. Two catalogs merged in a test; no drive involved. |
-| ~~**4c**~~ | ~~Take the remaining shared tables through `recordingWrite`~~ | **Done.** All 14, composite keys included, with a coverage test that fails when a new table is not wired. |
-| ~~**5**~~ | ~~Segment codec + `SPEC-format.md` §3~~ | **Done.** JSON Lines with per-line checksums; `SegmentStore`, `DriveSync`, and a torn write among the tests. |
-| ~~**6**~~ | ~~Merge on connect~~ | **Done.** Runs from the existing connect handler, in slices so the window keeps drawing, with a line on the drive's card saying what travelled. |
-| ~~**7**~~ | ~~Checkpoints, pruning, device retirement~~ | **Done, and smaller than it looked.** [`SPEC-format.md`](SPEC-format.md) §4. Making the checkpoint the base rather than an optimisation removed the low-mark arithmetic and device retirement entirely — segments below a checkpoint are unreachable by anybody, so pruning consults no reader. `CheckpointSyncTests`. |
-| ~~**8**~~ | ~~Extract adapters behind ports~~ | **Done.** Six seams: `MetadataReading`, `MovieDateReading`, `LivePhotoIdentifiers`, `Inflate` (guarded, beside `ZipContainer`), `VolumeEvents`, `ThumbnailEviction`. What still needs Apple outside `UI/` is thumbnail *rendering*, `ApplePhotosConnector` — where being Apple-only is the job — and the three files that are the app shell. `AppStore` imports SwiftUI for `ObservableObject` alone, which is its own decision and not a port. **The lesson worth carrying: five of the six had a portable half far larger than the file boundary suggested — 250 lines against one function, four imports of frameworks nothing used, a port needing only its import guarded. Only thumbnail rendering was as Apple-bound as it looked.** |
-| **9** | Read-only client on another platform | The vectors are what make this safe. **The status tier is not blocked on step 8**: it needs `Persistence/` and `Domain/`, which are Foundation, SQLite and nothing else — now enforced by `DocumentedRulesTests`. Step 8 is what the *browser* tier needs, for thumbnails and metadata. |
+Two things outlived the table of ticks:
 
-Step 2 was moved up deliberately and is the reason to have done it first: it was
-nearly free, and it is the step that stops being possible. Every day the app
-runs, more checksums and trees get written under whatever rule the code happens
-to implement.
+- **Step 2 was moved up deliberately**, and it is the step that stops being
+  possible. Every day the app runs, more checksums get written under whatever
+  rule the code happens to implement, and a specification written afterwards
+  describes an accident rather than a decision.
+- **The step 8 survey was wrong in one direction.** Five of six seams had a
+  portable half far larger than the file boundary suggested. Only thumbnail
+  rendering was as Apple-bound as it looked. The writer tier will be estimated
+  the same way and will probably be wrong the same way.
+
+**Step 9** is what is left. Its first tier is blocked on nothing: a status
+reader needs `Persistence/` and `Domain/`, which are Foundation and SQLite alone
+(`DocumentedRulesTests`), and `StatusReaderConformanceTests` shows a raw-SQL
+reader reaching the app's own answer. What remains is choosing a platform.
 
 ---
 

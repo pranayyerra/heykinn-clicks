@@ -8,7 +8,11 @@ not be revisited without new evidence; **built** means the code matches it.
 Three decisions are settled but not yet built, and the gap is deliberate — the
 measurements that settled them arrived after the first implementation.
 
-Working for the measurements is in `ARCHITECTURE-REVIEW.md`. Decisions still
+The working paper that produced D5, D6, D15 and D16 was `ARCHITECTURE-REVIEW.md`,
+deleted once every verdict in it had shipped and been recorded here — it still
+opened with "nothing here is implemented", which had stopped being true. It is
+in git history if the reasoning is ever wanted; the measurements it carried are
+below, re-measured after the thing was built. Decisions still
 open are listed at the end.
 
 ---

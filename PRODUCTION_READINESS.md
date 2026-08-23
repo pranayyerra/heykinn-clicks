@@ -20,119 +20,21 @@ recording in `docs/releases/app-review-guideline-2.1.md`, not for a code change.
 
 ---
 
-## Blockers
+## Blockers — all cleared before 1.0
 
-Nobody else can run this until these are done. **All three are now done**, and
-the last of them was only ever an assumption until somebody watched it fail.
+Three, and each is worth one line because the fix is in the code and the
+reasoning is in the commit that made it.
 
-### ~~App bundle.~~ Done, and verified somewhere it had never run
-
-`Packaging/bundle.sh` assembles, signs and verifies `HeykinnClicks.app`. See
-`Packaging/README.md` for why the app is deliberately unsandboxed and what that
-costs (Developer ID and notarisation for the website build, a second sandboxed
-build for the App Store).
-
-The last line was the one that mattered, and it is the one that failed.
-
-- [x] Bundle with a real `CFBundleIdentifier` and `Info.plist`
-- [x] `NSPhotoLibraryUsageDescription` — without it the first PhotoKit call
-      terminates the process instead of prompting
-- [x] `NSRemovableVolumesUsageDescription` for macOS 13+
-- [x] Hardened runtime, no exceptions needed
-- [x] App icon — the Hey Kinn otter, white on the brand gradient, built from
-      `Packaging/BrandMark.png` by `Packaging/make-icon.swift`. A generator
-      rather than a checked-in binary, so the sizing is a number somebody can
-      change and re-run. The mark exists only as raster (228×275 inside the
-      800×800 lock-up), so 512 and 1024 upscale about 2.2× — fine for a flat
-      shape, but **a vector from the designer would be sharper** and is the one
-      improvement worth asking for.
-- [x] Developer ID signature, notarisation, stapling. Submission
-      `7780fe4c-9bab-4f84-91b9-3863ef284f18` came back `Accepted`, the ticket is
-      stapled, and a quarantined copy unzipped elsewhere reports
-      `accepted, source=Notarized Developer ID`. Sequence in
-      `Packaging/README.md`.
-
-      Two things had to be fixed to get there, both of which fail in ways worth
-      remembering. `bundle.sh` signed with `--timestamp=none`: fine locally,
-      and an automatic rejection from the notary service, which requires a
-      secure timestamp. It now asks for one unless the signature is ad-hoc,
-      where a network round trip in every local build would buy nothing. And
-      the archive that gets uploaded is the *un-stapled* one — the ticket is
-      attached afterwards — so the build to hand round has to be re-zipped after
-      stapling, or every recipient gets a copy that must reach Apple to open.
-- [x] **Verify the Photos prompt actually appears standalone.** Done, on a
-      fresh macOS user account with no history of this app: the prompt appears
-      and access is granted. It was an assumption for the app's whole life and
-      it turned out to be a wrong one — see below.
-
-      It failed the first three times, and none of the reasons were the obvious
-      ones. The app was refused the Photos library **silently**: no prompt, and
-      no entry under Privacy & Security → Photos, which from inside the app is
-      indistinguishable from somebody having declined. The cause was a single
-      missing entitlement,
-      `com.apple.security.personal-information.photos-library`, absent from the
-      Developer ID file and present in the App Store one.
-
-      That key reads as a sandbox entitlement and is not only one: the
-      `personal-information.*` keys are **Hardened Runtime** resource-access
-      entitlements too, and this app runs hardened because notarisation
-      requires it. Nothing about an unsandboxed app suggests it needs
-      permission to be permitted.
-
-      It hid behind the development loop for months. `swift run` produces a bare
-      binary with no hardened runtime and Xcode holds the grant, so connecting
-      Photos always worked at the author's desk — seven times over two days, in
-      the audit log. Only the bundled, signed, notarised build was refused,
-      which is the only build anybody else runs. This document warned about that
-      exact gap from the day it was written; it still took a clean account to
-      walk into it.
-
-      Guards, since the mistake was in a file nothing read: `bundle.sh` prints
-      what each signature actually carries and says so loudly when Photos is
-      missing, and `EntitlementTests` reads both entitlement files as source.
-
-### ~~Import can fill the boot disk.~~ Done
-
-`runFolderImport` refuses before it copies anything when the sweep would eat
-into the Mac's reserve, and says how much it needs against how much there is —
-`AppStore.stagingSpaceRefusal`, over `ImportService.stagingBytesNeeded`.
-
-The estimate is not the folder's size. A file the archive already holds is
-recognised by its `stat` against the scan memo and never copied, so a re-sweep
-of an imported folder — the cheapest import there is, and an ordinary thing to
-do — is not refused for needing room it does not need. Everything else is
-counted in full, including a remembered file that has changed since: the guard
-errs high, because over-reserving costs a message somebody can ignore and
-under-reserving fills the disk. If the volume will not report its capacity the
-import proceeds; this is a guard rail, not an accounting system.
-
-### ~~No route back from a bad catalog.~~ Done
-
-`AppStore.restoreCatalog(from:)` is the read half, reachable from Settings →
-Safety → Restore. Snapshots on every connected drive are listed with their date,
-asset count and how many kinds of record they hold — the count being the figure
-that matters, since a snapshot holding a fraction of the assets the
-archive has is what a catalog going wrong looks like from outside.
-
-- [x] List snapshots found on connected targets, with date and asset count
-- [x] Restore with the current catalog kept first, and verify the restored file
-      opens and its counts are sane before switching to it
-
-Three things worth knowing about how it behaves:
-
-- **The outgoing catalog is kept, never deleted** — moved aside as
-  `catalog-replaced-<stamp>.sqlite`, so there is a way back from the way back.
-  The write-ahead log is checkpointed into it first; without that the kept copy
-  would be missing the most recent work, which is exactly what somebody would be
-  trying to recover.
-- **Unreadable snapshots are not offered.** A file that will not open, fails its
-  integrity check, or holds no assets is dropped from the list rather than shown
-  and disabled. Restoring an empty catalog would drop every record of photos
-  still sitting on the drives.
-- **Refused while work is in flight.** A sync, an import or an extraction is
-  writing rows into the catalog about to be replaced.
-
----
+- **The app bundle.** `swift run` produces a bare binary with no bundle
+  identity, so privacy grants attach to whatever launched it. `Packaging/bundle.sh`
+  is the fix, and it reports which entitlements the signed binary actually
+  carries — the Photos grant was silently refused for months because one was
+  missing.
+- **An import could fill the boot disk.** Staging now refuses when a batch
+  would eat into the reserve, and says what it needs against what there is.
+- **No route back from a bad catalog.** Verified snapshots ride along on every
+  connected drive, and Settings → Safety → Restore installs one, keeping the
+  replaced catalog beside it.
 
 ## Real gaps, ranked
 

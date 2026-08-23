@@ -3,134 +3,26 @@
 *Investigated so each can be taken. Facts first, then what each option costs,
 then a recommendation.*
 
-Companion to `ARCHITECTURE-DECISIONS.md` §Still open.
+Companion to `ARCHITECTURE-DECISIONS.md` §Still open. **O1 is built and O2's
+first tier is done**; both are kept as short entries rather than deleted,
+because the recommendation each carries is what the next tier is measured
+against.
 
 ---
 
-## O1 · How zip members get read
+## O1 · How zip members get read — **decided and built**
 
-### What was assumed
+Written when it looked like a choice between vendoring a dependency and writing
+a DEFLATE decoder by hand. It was neither: zip stores raw DEFLATE, which every
+platform's own library already decodes, so the only thing to write was the
+container reader. `ZipContainer` and `Inflate` are in `Domain/Portability/`, no
+dependency was added, and the shell-outs to `unzip`, `tar` and `ditto` went with
+it — `ditto` remains as a recorded fallback.
 
-That this needs either a vendored dependency or a hand-written DEFLATE decoder,
-and that it is a cross-platform concern for later.
-
-### What is actually true
-
-**The surface is six shell-outs across five files**, all macOS-only:
-
-| Tool | Where | Doing |
-|---|---|---|
-| `unzip -Z1` | `ZipTools.listEntries` | listing entries |
-| `unzip -p` | `HashingService.sha256OfZipEntry` | reading one entry to hash it |
-| `unzip` | `ParallelZipExtraction`, `TakeoutScanner` | bulk extraction, scanning |
-| `tar` | `ZipTools.extractEntries` | extraction that `unzip` gets wrong |
-| `ditto` | `TakeoutExtractor` | extraction |
-
-_All six are gone; see the status at the end of this section._
-
-They reduce to **three operations**: list entries, read one entry as a stream,
-extract many to disk.
-
-**Inflate is already on every target platform.** This is the fact that changes
-the decision:
-
-| | |
-|---|---|
-| Apple | `Compression` framework — `COMPRESSION_ZLIB` is raw DEFLATE. A system framework, not a dependency |
-| Windows | zlib, or the built-in Compression API |
-| Android | `java.util.zip.Inflater`, in the platform |
-
-So the work is **not** "write inflate" and **not** "vendor a library". It is
-*parse the zip container and call the platform's inflate.* The container is a
-well-documented format — local headers, central directory, end-of-central-
-directory — with no compression logic in it, and published test files.
-
-### And it is not only about other platforms
-
-`unzip` is **already known-broken for this archive**, and the codebase documents
-it. From `ZipTools.extractEntries`:
-
-> A Mac screenshot exported by Google carries a narrow no-break space in its
-> name. `unzip` mangles every non-ASCII byte to a literal `?` — in its *listing*
-> as well as on disk — and then aborts mid-archive with a "disk full" error that
-> has nothing to do with the disk, taking every entry after it. On one real part
-> that was **4,673 of 6,660 sidecars lost, silently, with a zero exit path that
-> looked like success.**
-
-`extractEntries` was moved to `tar` because of this. **`listEntries` and
-`sha256OfZipEntry` were not.** So today:
-
-1. Entry names come from `unzip -Z1` — mangled where non-ASCII.
-2. Those names are passed to `unzip -p` to hash the entry.
-3. The `?` is unzip's own single-character wildcard, so the lookup matches by
-   luck or not at all.
-
-**A zip member with a non-ASCII name cannot be reliably claimed or verified on
-macOS right now.** This archive has such files — that is where the quoted numbers
-come from.
-
-### The options
-
-| | Cost | Gets you |
-|---|---|---|
-| **Write the container reader, use the platform's inflate** | ~200–300 lines plus vectors. No dependency. | Fixes the live bug; unblocks every platform; removes six shell-outs |
-| Vendor a zip library | Fastest to write. First dependency, in the path that decides whether photographs are found. | Same, with a supply-chain question |
-| Replace `unzip` with `tar` everywhere, stay on macOS | Small. | Fixes the live bug only. Leaves R4 blocked and keeps a subprocess per entry |
-| Extract every zip on import and stop reading them | No reader needed. | Costs the disk space the zips exist to save — on this archive, most of it |
-
-### Recommendation
-
-**Write the reader.** It was mis-scoped as a large piece of work: the hard part
-(inflate) is supplied by every platform, and the part that must be written is a
-container parse with published test files. It is the only option that fixes a
-defect which is silently mis-verifying this archive today, and unblocking
-Windows and Android is a side effect rather than the justification.
-
-### Decided and built
-
-`ZipContainer` parses the central directory, including zip64, and reads names
-from the archive's own bytes. `ZipReader` streams an entry through the
-platform's inflate. `ZipTools.listEntries`, `HashingService.sha256OfZipEntry`
-and `TakeoutScanner.zipListingLooksLikeTakeout` no longer run a subprocess.
-
-**One correction to the analysis above.** The defect is narrower than first
-stated: `unzip -p` works correctly *given a correct name* — exit 0, right bytes.
-Everything downstream broke because the **listing** was the mangled source.
-Fixing `listEntries` is what fixes it.
-
-Measured with the old listing in place, on an archive of four files:
-
-| Entry | Listed as | Readable |
-|---|---|---|
-| `Image 10-10-24 at 4.54 PM.jpg` | `…4.54???PM.jpg` | No |
-| `café/naïve.jpg` | `cafe??/nai??ve.jpg` | No |
-| `emoji 📷 shot.jpg` | `emoji ???? shot.jpg` | No |
-| `plain.jpg` | `plain.jpg` | Yes |
-
-**Three of four unreadable** — any accent, emoji or unusual space. Each one is a
-photograph the app would record as absent from a drive holding it.
-
-**Bulk extraction has since followed, and it was a separate question.** Those
-paths write files to disk rather than producing recorded facts, so the case for
-converting them was R4 and not correctness. That was checked rather than assumed:
-`ParallelZipExtraction`'s `unzip` workers were tested against a fixture in
-Google's exact shape — UTF-8 names with the UTF-8 flag *unset*, covering both the
-ASCII-wildcard and the literal-escaped-name paths — and **every entry
-round-tripped**. The mangling that broke the listing did not reach them, because
-the patterns those workers are given are ASCII directory prefixes.
-
-Converted anyway, for R4, and two things came of it:
-
-- **1.39× faster than the four `unzip` processes it replaced** — 0.34s against
-  0.47s for 1,200 photographs and their sidecars in a 229 MB archive. No process
-  to spawn, no argument list to build, and no length limit on one either, which
-  is why buckets can now be exact entry names rather than glob patterns.
-- **A refusal nobody owned.** An entry named `../../.ssh/authorized_keys` was
-  refused by `unzip` and `tar` in their own ways; extracting in process means
-  owning that check rather than inheriting it.
-
-`diskutil` remains and is allowed to: it picks a worker count, which is a speed
-hint rather than a recorded fact.
+The investigation that reached that is in git history. What it was worth keeping
+is one finding, because it was a live defect rather than an argument: reading
+entry names through `unzip` output **lost non-ASCII filenames**, which is not a
+portability concern at all. It was fixed by the same change.
 
 ---
 
