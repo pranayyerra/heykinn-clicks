@@ -1,8 +1,14 @@
 # Testing checklist
 
 Manual passes before a release. Everything here was checked against the code on
-2026-08-14 — paths, filenames and thresholds are the real ones, so a step that
+2026-08-23 — paths, filenames and thresholds are the real ones, so a step that
 fails is a bug rather than a typo in this document.
+
+**Re-check this date against the code before trusting the file.** Between
+14 and 23 August it described an app that had changed underneath it in four
+places: it promised a source folder was never touched, tested a setting that had
+been removed, quoted a test count wrong by two hundred, and said nothing at all
+about the screens most of the week's work went into.
 
 **Rule for adding to this file:** if you cannot point at the code that does it,
 it does not go in. A checklist that describes features nobody built is worse
@@ -41,7 +47,7 @@ HEYKINN_ARCHIVE_DIRECTORY=/tmp/scratch-archive HEYKINN_NO_BACKGROUND_WORK=1 \
 ## Automated first
 
 ```bash
-swift test                                    # 718 pass, 11 environment-dependent skip (~21s here)
+swift test                                    # green, with the environment-dependent ones skipped
 HEYKINN_DMG_TESTS=1 swift test --filter DriveIdentity
 HEYKINN_VOLUME_TESTS=1 swift test --filter 'DriveResilience|TargetMonitorThreading'
 ```
@@ -128,7 +134,9 @@ were.
       contents are skipped
 - [ ] The folder's **full path** is recorded and shown, with Reveal in Finder
 - [ ] Re-importing the same folder recognises everything as already held
-- [ ] The source folder is **completely untouched** — verify in Finder
+- [ ] The source folder is **untouched by the import** — verify in Finder.
+      Clearing it out afterwards is the one thing the app will do to it, and
+      only when asked; that is section 5
 
 ### Google Takeout
 - [ ] Finds zips and extracted folders on a connected target
@@ -149,6 +157,36 @@ were.
       not stored twice
 - [ ] The iCloud question is asked, not guessed
 
+## 3b. What the screens say
+
+Added because the two defects a walkthrough found last time were both here, and
+neither was reachable from a test: a sentence built inside a view, and a badge
+whose colour disagreed with the screen next door.
+
+- [ ] **Adding photos states its plan rather than asking.** Choosing a folder
+      gives one sentence — *"Every photo on Nina's Back and My Passport"* — with
+      `Change…` beside it, not a form. The form is still there behind the link,
+      and opens by itself if the set already names its own drives
+- [ ] **The reason is only given when there was a choice.** Two drives and two
+      copies says just where they go; three drives and two copies adds *"the
+      devices with the most room"*. On a fresh install with no drive it names
+      this device and claims nothing about room
+- [ ] **One answer to "are my photos safe".** Overview and Keep safe open with
+      the same sentence, and a photograph's own badge agrees with it — a photo
+      held in one place is never labelled safe while the archive warns about it
+- [ ] **A damaged copy is reported as damaged**, not as still copying
+- [ ] **Keep safe shows one line** while every set of photos is kept the same
+      way, with `Show each set of photos` to expand. Give one set different
+      drives or a different copy count and the rows come back on their own
+- [ ] **Plugging in a drive nobody has claimed asks one question**, with two
+      named buttons. A drive already in use asks nothing; a drive carrying
+      another archive's ID file asks nothing and is left alone
+- [ ] **Nothing on screen uses a word the app invented.** The photo library's
+      filter reads *All photos · My drives · iCloud · Google Photos*. Registering
+      a drive says an ID file, not a marker. `DocumentedRulesTests` enforces the
+      list; a walkthrough is what catches a word that is technically allowed and
+      still wrong
+
 ## 4. Targets and replication
 
 - [ ] Registering writes `.heykinn-clicks-drive.json` at the volume root
@@ -161,7 +199,11 @@ were.
       different path
 - [ ] Disconnecting mid-sync leaves the rest queued; reconnecting resumes
 - [ ] Protection moves staged → one copy → fully replicated, and the Library
-      agrees with the Overview
+      agrees with the Overview — including the wording, not only the counts
+- [ ] **A new drive is used by imports that came before it.** Register a drive
+      after importing, and a set that works out its own devices adopts it and
+      queues the copies; the audit log says how many it took. A set given
+      specific drives by hand is left alone, deliberately
 
 ## 5. Placement, adoption, reclamation
 
@@ -183,13 +225,34 @@ deletes anything. Walk it deliberately.
 - [ ] The catalog points at **your** file, the app's duplicate is gone, and your
       original is untouched — verify all three in Finder
 
-### Releasing a staged copy
+### Releasing the working copy
 - [ ] One target only: nothing is released, whatever the disk pressure
-- [ ] Both targets holding it and each read back: the staged copy goes, and the
-      Drives screen said so *before* it happened
-- [ ] Setting off: staging kept, and the screen still reports what it would free
+- [ ] Both targets holding it and each read back: the working copy goes, and
+      Keep safe said so *before* it happened
 - [ ] Quit mid-release, relaunch: nothing loses its last copy, and staged files
       nothing references are swept up
+- [ ] **There is no setting for this any more.** Settings → Automation has three
+      switches and none of them is about freeing space; the release condition is
+      `.fullyReplicated`, which is every copy present *and* read back
+
+### Clearing out a folder you imported from
+
+New, and the only place the app offers to delete something that is yours.
+Everything else it deletes is its own.
+
+- [ ] Import a folder holding photographs **and something that is not one** — a
+      `.txt`, a video it does not handle. Let the copies finish and be read back
+- [ ] Add photos → the folder's row → **"Is this folder still needed?"**
+- [ ] The sheet names how many files would go and how much that frees, and says
+      the folder stays
+- [ ] The thing it never imported is counted separately, and the sentence about
+      it reads correctly for **one** file as well as several
+- [ ] Confirm: the photographs are in the **Trash** — recoverable, not unlinked —
+      and the stranger is still in the folder. Verify both in Finder
+- [ ] Edit one photograph in the folder before clearing: it is not offered,
+      because its bytes no longer match anything the archive holds
+- [ ] With copies that have never been read back, the offer refuses and says so
+- [ ] No drive needs to be plugged in for any of this
 
 ### Two drives never connected together
 - [ ] Import, sync to drive A only, let the staged copy be released
