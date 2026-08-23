@@ -13,7 +13,7 @@ import XCTest
 ///
 /// These cover what has to remain true now that it is gone — chiefly that the
 /// paths which change residency *because something actually happened* all still
-/// work. See `docs/PRODUCT-DECISIONS.md` P3.
+/// work. See SPEC invariant 22.
 final class ResidencyIsObservedTests: XCTestCase {
 
     private func makeAsset(

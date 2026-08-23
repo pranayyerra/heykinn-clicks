@@ -583,13 +583,61 @@ to a platform that has never heard of Apple.
     whether a sentence is accurate; it is whether somebody who has never read
     this document knows what to do next.
 
-    *Partly true.* The main screens already speak plainly — the visible text uses
-    drive, copy, device and archive almost throughout. Error messages and the
-    detail panes were where the vocabulary leaked, and have been rewritten. The
-    deeper question, whether some of these concepts should be visible at all
-    rather than merely renamed, is open and is a design decision rather than a
-    copy one; the four decisions it comes down to are laid out in
-    [`PRODUCT-DECISIONS.md`](PRODUCT-DECISIONS.md).
+    Enforced rather than asserted: `DocumentedRulesTests` reads every string a
+    person can see and fails on target, replica, catalog, marker, residency,
+    domain or asset. It had been written up as satisfied once before, while the
+    photo library's filter still read *All domains* — which is why it is a test.
+
+    **Renaming a concept and removing it are different acts**, and the five that
+    follow are the second. They were argued out separately and are recorded here
+    because each is a thing that must not come back.
+
+20. **The app states what it is about to do rather than asking.** Adding photos
+    gives one sentence — *"Every photo on Nina's Back and My Passport"* — with
+    `Change…` beside it, not a form whose answers are already correct. The whole
+    form is still there behind the link, and opens by itself for a set that
+    already names its own devices.
+
+    This became possible only when placement acquired a reason worth showing.
+    While the answer was "whichever drives were registered first", there was
+    nothing to say and the controls were the only honest way to show the
+    arrangement. **A control is often a missing explanation**, and the reverse
+    holds: the app may only decide for somebody where it can say why in one
+    sentence they could check, and it may only claim a reason where one exists —
+    naming both of two drives is not a judgement about room.
+
+21. **A row, a prompt or a control appears where something differs.** The
+    storage screen shows one line while every set of photos is kept the same
+    way, because a set exists per import and six identical rows answer "where
+    did this come from", which is provenance, on the screen asked "are my photos
+    safe" (`StorageGroup.sharedRule`). A drive nobody has claimed asks one
+    question with two named buttons; a drive already in use, or carrying another
+    archive's ID file, asks nothing, because the answer is already known.
+
+    This is also what protects the case that cannot be automated. Somebody who
+    keeps one set off the drive they travel with has a set that differs, so it
+    does not collapse — no rule has to detect the intention, because the
+    difference *is* the intention.
+
+22. **Where a photograph is kept is observed, never set.** A control whose only
+    effect is to make the app start reporting a discrepancy is a trap however
+    well it is worded. Moving content is a job with a confirmation, and it is
+    the only thing that changes where a photograph lives; the app's record
+    follows the bytes. `ResidencyIsObservedTests` fails if a hand-set path
+    returns.
+
+23. **The answer comes first, and it is the worst true thing.** Every screen
+    that reports safety leads with one sentence, ordered: nothing yet, no drive,
+    damaged, in no place at all, asking for more copies than there are drives,
+    behind, in one place only, safe (`SafetyAnswer`). One archive has one answer
+    — two screens working it out separately is how a damaged copy came to be
+    described as still copying on the screen people open first.
+
+24. **A photograph in one place is never called safe**, even where one copy is
+    all its set asked for. Meeting a one-copy policy is reported as met; it is
+    not reported as safety, because the archive's own definition needs two
+    places and a green tick beside a warning is the app contradicting itself one
+    click apart.
 
 ---
 

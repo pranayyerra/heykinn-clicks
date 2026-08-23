@@ -7781,7 +7781,7 @@ final class AppStore: ObservableObject {
     //
     // Where content should live is changed by moving it — `createMigration`,
     // which copies the bytes and checks they landed. See
-    // `docs/PRODUCT-DECISIONS.md` P3.
+    // SPEC invariant 22.
 
     // MARK: - Policies
 

@@ -83,7 +83,7 @@ struct AssetDetailView: View {
                     // the app then reported the photo as being in the wrong
                     // place until something else moved it. A switch whose only
                     // effect is to start a complaint is a trap however it is
-                    // worded — see docs/PRODUCT-DECISIONS.md P3.
+                    // worded — see SPEC invariant 22, where it is kept observed.
                     GroupBox("Where this is kept") {
                         VStack(alignment: .leading, spacing: 6) {
                             LabeledRow(label: "Kept on", value: asset.residency.displayName)
