@@ -5823,7 +5823,7 @@ final class AppStore: ObservableObject {
     /// Set when the user forgets the host target, so the app does not silently
     /// re-adopt this device on the next launch and undo their decision. Forgetting
     /// is the supported way to run an archive that will not fit on the boot
-    /// disk (SPEC invariant 4), and a default that reasserts itself is not a
+    /// disk (SPEC invariant 10), and a default that reasserts itself is not a
     /// default, it is a policy.
     private var hostTargetDeclined: Bool = false
 

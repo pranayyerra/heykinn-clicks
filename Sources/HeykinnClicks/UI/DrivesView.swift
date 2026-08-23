@@ -533,11 +533,15 @@ struct DrivesView: View {
             // No cap: copies are per photo, not devices in total, and refusing
             // a drive because two copies were asked for confused the two.
             //
-            // Nor does adding a device change where anything goes. This line
-            // used to say the archive would spread itself across devices "by
-            // whichever has the most room", which was the model before this
-            // one — the app choosing destinations is precisely what SPEC
-            // invariant 4 rules out.
+            // Nor does adding a device change where anything already is. This
+            // line used to promise the archive would spread itself across
+            // devices "by whichever has the most room", which was a different
+            // claim: that registering a drive *moves* things. It does not.
+            //
+            // A group that works its own devices out does now prefer the drives
+            // with room (invariant 4), so a new drive is adopted and copies are
+            // queued to fill it — but nothing already placed is taken away, and
+            // a group given devices by hand is left alone entirely.
             Text("Registering a drive moves nothing by itself. A group that works out its own devices will use this one as soon as it asks for more copies than it has drives; a group set to specific drives stays exactly where you put it.")
                 .font(.caption)
                 .foregroundStyle(.secondary)

@@ -361,10 +361,8 @@ to a platform that has never heard of Apple.
    one-time question about their *setup* (does this library sync?) is
    topology, not presence, and may not be stretched into one. An unavailable
    or empty source yields a refusal, never a negative.
-4. **Redundancy is configured per storage group**, and a group is only *shown*
-   when it differs from the rest — while every set of photos is kept the same
-   way the screen says so in one line, and a set kept differently gets a row of
-   its own (`StorageGroup.sharedRule`). Each group carries its own
+4. **Redundancy is configured per storage group.** Whether a group is *shown*
+   is invariant 21's business, not this one's. Each group carries its own
    copy count and a destination mode: let the app work out the required devices
    deterministically, or name specific devices — "this export: 2 copies, on
    Archive Drive and the NAS". Chosen mode places copies only on those devices;
@@ -384,63 +382,6 @@ to a platform that has never heard of Apple.
    to hold different content — one source's destinations have nothing to do
    with another's. One device still holds at most one copy of an asset, and
    identity is still the marker file, never a mount path.
-
-   **Provenance and policy are two rows.** `PhotoArchiveSource` records where
-   photos came from and never changes; `StorageGroup` records how they are kept
-   and is the user's to change. Every asset points at one of each, and
-   membership on the group side is a strict partition — a policy needs one
-   answer, and "this photo is in three groups naming three devices" has none. A
-   group made by hand has policy and no provenance, which is the case the
-   single-row model could not represent without inventing a history.
-
-   **A source is its own first group.** Adding a folder or an export creates
-   one group carrying the source's id and name, so a person meets *one* thing —
-   a name, where it came from, and a rule — rather than two rows that happen to
-   agree. "Group" only becomes a separate idea when a second one exists, which
-   is the moment it is worth learning. Every route that makes a source does
-   this; it was true of the migration and of exports and coincidental for
-   folders, which is the worst of the three states to be in.
-
-   The two stay distinct in what they *mean*, and diverge the moment anything
-   is regrouped or renamed. Sharing an id is not sharing a row: provenance is
-   still immutable, policy is still the user's to change, and a group can
-   outlive the source it was named after or belong to no source at all.
-
-   **Policy is a storage group's, and nothing else's.** Not the archive's, not
-   a source's, and never an asset's: `Asset` carries no copy count and no
-   destinations, and must not gain them. Per-asset storage was considered and
-   refused — it makes "what does this photo want" answerable as many ways as
-   there are photos, with no object to read the answer off, and no way to say
-   what a set of photos is for. A group is the smallest thing policy may attach
-   to, and a group of one is still a group.
-
-   The one exception is a stop-gap and is treated as one: a photo in *no* group
-   follows the add-sheet defaults, because placing nothing would stop protecting
-   content that was protected yesterday. That state is reachable (an import
-   through no source flow names no group), so it is surfaced under Keep safe
-   and fixable there — never left as a silent answer nobody can see.
-
-   **There is no archive-wide copy count.** Not as a policy, and not as a
-   default that binds anything: the only surviving global is
-   `newSourceDefaults`, and it is **derived, never stored**: a new set of photos
-   starts from the count most of the archive already keeps, and from devices
-   worked out through the one call every new group starts from
-   (`AppStore.startingDestinations`). It governs nothing once a source exists.
-
-   Both halves used to be remembered and both went stale. The device list froze
-   new groups onto whatever was plugged in the first time anybody touched it, so
-   a drive bought later was never proposed again — and the Google export path
-   reached the same state by another route, omitting the mode and inheriting
-   `chosen` from `StorageGroup`'s own default. The count then drifted on its
-   own: one real archive had a stored answer of one copy while every set of
-   photos in it kept two, so the app stood ready to propose less protection than
-   it was already providing. A remembered answer is a second source of truth
-   about something the archive can be asked directly. Every protection
-   verdict, every placement and every reclamation precondition reads the
-   number off the asset's own source, through
-   `AppStore.placementPolicy(forAsset:)`. An asset with no source recorded
-   falls back to those same defaults rather than to nothing — placing nothing
-   would stop protecting content that was protected yesterday.
 
    Two earlier models were wrong here and are worth naming so neither returns.
    The first capped devices at the copy count and replicated everything to
@@ -511,27 +452,23 @@ to a platform that has never heard of Apple.
     not a weakening of the evidence (invariant 2 still applies: two readings
     are still two readings, whenever they were taken).
 13. **A marker naming another archive is never overwritten silently.**
-    Registering a drive writes a marker file at its root, and registration will
-    currently overwrite one that is already there. Two archives on one device is
-    no longer an exotic case — the app itself offers a test archive beside the
-    real one — and the second to register a drive takes it: the first archive's
-    marker is replaced, and it can no longer identify by the primary mechanism
-    what is, as far as it knows, still its drive.
+    Registration reads the marker before writing one, and where it names a
+    different archive it stops and asks (`DriveMarkerConflict`,
+    `MarkerConflictTests`). It applies to every archive equally — the real one
+    must not be able to quietly claim a test archive's drive either.
 
-    *Not yet true. Recorded here because it was found by doing it.* Setting up
-    a throwaway archive for screenshots, with a real drive mounted, registered
-    that drive and overwrote the real archive's marker. No content was moved
-    and nothing was lost — the volume UUID is a fallback and it held — but the
-    archive was relying on its backup identity for a drive plugged into the
+    Found by doing it: setting up a throwaway archive for screenshots, with a
+    real drive mounted, registered that drive and overwrote the real archive's
+    marker. Nothing was lost — the volume UUID is a fallback and it held — but
+    the archive was relying on its backup identity for a drive plugged into the
     device, and nothing said so.
 
-    What it should do: read the marker before writing one, and when it names a
-    different archive, say so and ask. "This drive already belongs to another
-    Heykinn Clicks archive" is a sentence somebody can act on; a silently
-    replaced identity is one they find out about later, from a drive that reads
-    as unmanaged. The check belongs in registration, beside the read-only
-    refusal, and applies to every archive equally — the real one must not be
-    able to quietly claim a test archive's drive either.
+    Two archives on one device is not exotic; the app itself offers a test
+    archive beside the real one. And the rule reaches further than registration:
+    a folder is adopted because it carries a marker naming *this* target, never
+    because it sits where one would expect, which is what lets
+    `HostTargetPathRepair` find this device's own copy again after the archive
+    directory moves without risking somebody else's.
 
 14. **Two devices given the same changes reach the same answers.** Including
     which of two conflicting edits won. If two devices resolve one conflict
@@ -583,11 +520,6 @@ to a platform that has never heard of Apple.
     whether a sentence is accurate; it is whether somebody who has never read
     this document knows what to do next.
 
-    Enforced rather than asserted: `DocumentedRulesTests` reads every string a
-    person can see and fails on target, replica, catalog, marker, residency,
-    domain or asset. It had been written up as satisfied once before, while the
-    photo library's filter still read *All domains* — which is why it is a test.
-
     **Renaming a concept and removing it are different acts**, and the five that
     follow are the second. They were argued out separately and are recorded here
     because each is a thing that must not come back.
@@ -638,6 +570,63 @@ to a platform that has never heard of Apple.
     not reported as safety, because the archive's own definition needs two
     places and a green tick beside a warning is the app contradicting itself one
     click apart.
+
+25. **Where photos came from and how they are kept are two rows.**
+    `PhotoArchiveSource` records where photos came from and never changes; `StorageGroup` records how they are kept
+    and is the user's to change. Every asset points at one of each, and
+    membership on the group side is a strict partition — a policy needs one
+    answer, and "this photo is in three groups naming three devices" has none. A
+    group made by hand has policy and no provenance, which is the case the
+    single-row model could not represent without inventing a history.
+
+    **A source is its own first group.** Adding a folder or an export creates
+    one group carrying the source's id and name, so a person meets *one* thing —
+    a name, where it came from, and a rule — rather than two rows that happen to
+    agree. "Group" only becomes a separate idea when a second one exists, which
+    is the moment it is worth learning. Every route that makes a source does
+    this; it was true of the migration and of exports and coincidental for
+    folders, which is the worst of the three states to be in.
+
+    The two stay distinct in what they *mean*, and diverge the moment anything
+    is regrouped or renamed. Sharing an id is not sharing a row: provenance is
+    still immutable, policy is still the user's to change, and a group can
+    outlive the source it was named after or belong to no source at all.
+
+    **Policy is a storage group's, and nothing else's.** Not the archive's, not
+    a source's, and never an asset's: `Asset` carries no copy count and no
+    destinations, and must not gain them. Per-asset storage was considered and
+    refused — it makes "what does this photo want" answerable as many ways as
+    there are photos, with no object to read the answer off, and no way to say
+    what a set of photos is for. A group is the smallest thing policy may attach
+    to, and a group of one is still a group.
+
+    The one exception is a stop-gap and is treated as one: a photo in *no* group
+    follows the add-sheet defaults, because placing nothing would stop protecting
+    content that was protected yesterday. That state is reachable (an import
+    through no source flow names no group), so it is surfaced under Keep safe
+    and fixable there — never left as a silent answer nobody can see.
+
+26. **There is no archive-wide copy count**, and no remembered answer standing
+    in for one. Not as a policy, and not as a default that binds anything: the
+    only surviving global is
+    `newSourceDefaults`, and it is **derived, never stored**: a new set of photos
+    starts from the count most of the archive already keeps, and from devices
+    worked out through the one call every new group starts from
+    (`AppStore.startingDestinations`). It governs nothing once a source exists.
+
+    Both halves used to be remembered and both went stale. The device list froze
+    new groups onto whatever was plugged in the first time anybody touched it, so
+    a drive bought later was never proposed again — and the Google export path
+    reached the same state by another route, omitting the mode and inheriting
+    `chosen` from `StorageGroup`'s own default. The count then drifted on its
+    own: one real archive had a stored answer of one copy while every set of
+    photos in it kept two, so the app stood ready to propose less protection than
+    it was already providing. A remembered answer is a second source of truth
+    about something the archive can be asked directly. Every protection
+    verdict, every placement and every reclamation precondition reads the
+    number off the asset's own source, through
+    `AppStore.placementPolicy(forAsset:)`, and an asset with no source recorded
+    falls back to the same defaults as a photo in no group, above.
 
 ---
 
