@@ -291,11 +291,22 @@ the purpose string is present. `bundle.sh` reports that effective entitlement,
 and `make-pkg.sh` additionally refuses an unsandboxed App Store package, a
 missing application identifier/profile, and known unsupported entitlements.
 
-## Current distribution status
+## What is in this folder
 
-- The icon is present at `Packaging/AppIcon.icns`.
-- The website build has been Developer ID signed, notarised, and stapled.
-- The sandboxed App Store package builds successfully. Upload of the current
-  candidate follows the exact-build physical pass; App Review information and
-  the recording plan are in
-  `docs/releases/app-review-guideline-2.1.md`.
+| | |
+|---|---|
+| `bundle.sh` | Assembles `HeykinnClicks.app` around the SwiftPM binary and reports which entitlements the signed result actually carries. Everything else starts here |
+| `make-pkg.sh` | The installer package the App Store takes. Refuses rather than producing something that would be rejected after an upload and a wait |
+| `make-dmg.sh` | The disk image for the website build |
+| `make-icon.swift` | Redraws `AppIcon.icns` from `BrandMark.png`. Needed when the branding changes, not otherwise |
+| `make-demo-photos.swift` | Photographs for listing screenshots. The real archive cannot appear in a public listing — it holds real drive names and real people read out of a Google export |
+| `make-review-fixtures.swift` | Privacy-safe media for an App Review recording, for the same reason |
+| `make-review-volume.sh` | A disposable writable volume, so a reviewer's functional pass exercises the picker, bookmark, copy and relaunch paths without a personal disk |
+| `validate-app-review-packet.sh` | Preflight on the reviewer notes: the 4000-byte limit, no unreplaced placeholders, every required heading, and that the version named matches `Info.plist` |
+
+The last four are release tooling. What shipped, when, and the reviewer notes
+themselves are in [`docs/releases/`](../docs/releases/README.md).
+
+`prune-empty-replicas.sh` was here and is gone: a one-time sweep of empty
+replica directories left by an older version, which the app has pruned as it
+removes for months. Its own header said nothing called it.
