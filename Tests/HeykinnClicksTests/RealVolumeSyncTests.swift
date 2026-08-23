@@ -289,6 +289,16 @@ final class RealVolumeSyncTests: XCTestCase {
         )
         XCTAssertEqual(try deviceB.fetchStorageGroups().map(\.label), ["Family"])
 
+        // 4. And the *filesystem* survived, not only the archive. Everything
+        //    above would pass on a volume that came back needing repair, which
+        //    is the failure a person actually notices: not a photograph
+        //    missing, but their Mac offering to fix the drive.
+        //
+        //    Worth running on **exFAT**, which is how large drives arrive and
+        //    which has no journal to replay. It had never been run on one — the
+        //    format comes from whatever volume the environment points at.
+        assertVolumeIsSound(image: image)
+
         // Which case this run actually hit. A run where the write never landed
         // at all is a weaker test than one that tore a file, and saying so is
         // the difference between a green tick and evidence.
@@ -430,6 +440,54 @@ final class RealVolumeSyncTests: XCTestCase {
         for _ in 0..<50 where !FileManager.default.fileExists(atPath: volume.path) {
             Thread.sleep(forTimeInterval: 0.2)
         }
+    }
+
+    /// Detaches the volume and runs the filesystem's own checker over it.
+    ///
+    /// Read-only (`-n`): the question is whether a repair *would* be needed,
+    /// and repairing it would destroy the evidence.
+    private func assertVolumeIsSound(image: String) {
+        run("/usr/bin/hdiutil", ["detach", "-force", volume.path])
+        let listing = capture("/usr/bin/hdiutil", ["attach", image, "-nomount"])
+        guard let node = listing
+            .split(separator: "\n")
+            .compactMap({ $0.split(separator: " ").first.map(String.init) })
+            .last(where: { $0.hasPrefix("/dev/disk") && $0.contains("s") })
+        else {
+            attach(image)
+            return XCTFail("no partition to check in:\n\(listing)")
+        }
+
+        let report = capture("/sbin/fsck_exfat", ["-n", node])
+        run("/usr/bin/hdiutil", ["detach", String(node.dropLast(2))])
+        attach(image)
+
+        guard report.contains("Checking") else {
+            return  // Not exFAT; this check says nothing about APFS or HFS+.
+        }
+        XCTAssertTrue(
+            report.contains("appears to be OK"),
+            """
+            The archive survived the disconnect but the volume did not — it now \
+            needs repair. That is the failure a person notices: not a missing \
+            photograph, but their Mac offering to fix the drive.
+
+            \(report)
+            """
+        )
+    }
+
+    private func capture(_ tool: String, _ arguments: [String]) -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: tool)
+        process.arguments = arguments
+        let pipe = Pipe()
+        process.standardOutput = pipe
+        process.standardError = FileHandle.nullDevice
+        guard (try? process.run()) != nil else { return "" }
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? ""
     }
 
     @discardableResult

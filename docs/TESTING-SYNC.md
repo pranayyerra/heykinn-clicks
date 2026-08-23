@@ -118,3 +118,28 @@ on real hardware, that is worth knowing and worth reporting back.
 - **Windows and Android cannot read the Takeout zips**, so a client on either
   would see almost nothing of this archive. Tracked as H3 in
   `MULTI_DEVICE_STATE.md`.
+
+## Yanking a drive
+
+```bash
+hdiutil create -size 400m -fs ExFAT -volname YANKTEST /tmp/yank -quiet
+hdiutil attach /tmp/yank.dmg -nobrowse
+HEYKINN_TEST_VOLUME=/Volumes/YANKTEST HEYKINN_TEST_VOLUME_IMAGE=/tmp/yank.dmg \
+  swift test --filter testADriveYankedMidWriteLosesNothingPermanently
+```
+
+**Format it exFAT.** That is how large drives arrive, it has no journal to
+replay, and it is what the author's own drives use. The test takes its format
+from whatever volume you point it at, and had only ever been run on APFS — where
+the answer to "did the volume survive" is easier.
+
+It asserts two different things. That no photograph is lost for good: the
+watermark never advances past a tear, so whatever was cut short comes back on
+the next sync. And that the **volume itself** is still sound afterwards, by
+running `fsck_exfat -n` over it — everything else would pass on a drive that
+came back needing repair, which is the failure a person actually notices.
+
+**What it still cannot reach.** A forced detach invalidates the mount; it does
+not cut power to a drive's controller mid-flush, where the drive's own write
+cache may hold bytes that never reach the flash. Nothing on a disk image
+reproduces that. It needs a USB stick somebody is willing to lose.
