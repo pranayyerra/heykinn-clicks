@@ -98,11 +98,14 @@ struct AssetDetailView: View {
 
                     GroupBox("Local storage") {
                         VStack(alignment: .leading, spacing: 6) {
+                            // "Staging" is the app's word for it; Keep safe
+                            // already says "Waiting to be copied" and this
+                            // screen was the last place the internal one showed.
                             LabeledRow(
-                                label: "Staging",
+                                label: "Waiting to be copied",
                                 value: asset.stagingRelativePath.map {
-                                    store.staging.exists(relativePath: $0) ? "Staged (\($0))" : "Recorded but file missing (\($0))"
-                                } ?? "Not staged"
+                                    store.staging.exists(relativePath: $0) ? "Yes (\($0))" : "Recorded, but the file is missing (\($0))"
+                                } ?? "No — the drives have it"
                             )
                             ForEach(replicaRows(for: asset), id: \.0) { _, text in
                                 Text(text)

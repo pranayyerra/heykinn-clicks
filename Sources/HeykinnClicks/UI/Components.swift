@@ -108,17 +108,41 @@ extension ProtectionVerdict {
         }
     }
 
+    /// A tick beside "In one place only" would undo the sentence, so the mark
+    /// follows the words rather than the verdict.
+    func symbolName(copies: Int) -> String {
+        self == .meetsPolicy && copies <= 1 ? "shield.lefthalf.filled" : symbolName
+    }
+
     /// - Parameter copies: what this photo's own source asks for. Passed in
     ///   rather than read from a global, because there is no longer an
     ///   archive-wide answer and two photos side by side in the Library can
     ///   legitimately want different numbers.
     func displayName(copies: Int) -> String {
         switch self {
+        // **Never "safe" for a single copy, even when that is all its source
+        // asked for.** It used to say "Safe on one copy", which put a green
+        // tick on a photograph that exists in exactly one place — while the
+        // same archive's headline called those photographs "in one place only"
+        // and warned about them. Both statements were defensible and they
+        // contradicted each other on two screens a click apart.
+        //
+        // The app's own definition settles it: `SafetyAnswer.isSound` requires
+        // two places. So one copy gets the words the rest of the app uses for
+        // it, and meeting a one-copy policy is reported as met without being
+        // called safety.
+        case .meetsPolicy where copies <= 1: return "In one place only"
         case .meetsPolicy: return "Safe on \(Formatters.copies(copies))"
         case .shortOfPolicy: return "Not yet on \(Formatters.copies(copies))"
         case .diverged: return "A copy no longer matches"
         case .notLocal: return "—"
         }
+    }
+
+    /// The colour that goes with the sentence above, which is why it takes the
+    /// copy count too: green is a claim, and one copy does not earn it.
+    func tint(copies: Int) -> Color {
+        self == .meetsPolicy && copies <= 1 ? .orange : tint
     }
 }
 
@@ -145,12 +169,12 @@ struct ProtectionBadge: View {
     var body: some View {
         let verdict = state.verdict
         HStack(spacing: 6) {
-            Label(verdict.displayName(copies: copies), systemImage: verdict.symbolName)
+            Label(verdict.displayName(copies: copies), systemImage: verdict.symbolName(copies: copies))
                 .font(.caption)
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
-                .background(verdict.tint.opacity(0.15), in: Capsule())
-                .foregroundStyle(verdict.tint)
+                .background(verdict.tint(copies: copies).opacity(0.15), in: Capsule())
+                .foregroundStyle(verdict.tint(copies: copies))
             if let note = state.checkStanding.note {
                 Text(note)
                     .font(.caption2)

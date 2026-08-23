@@ -80,4 +80,34 @@ final class SafetyAnswerTests: XCTestCase {
             "saying it twice when the numbers agree is noise"
         )
     }
+
+    /// **A photograph in one place is never labelled safe, anywhere.**
+    ///
+    /// Found by opening a photo after a one-copy import: the badge read "Safe
+    /// on one copy" with a green tick, while the same archive's headline read
+    /// "13 photos are in one place only" in orange. Both were defensible — the
+    /// badge answers "does this meet what its source asked for" — and they
+    /// contradicted each other one click apart. `isSound` settles it: two
+    /// places or it is not safety.
+    func testOneCopyIsNeverCalledSafeOnAPhotograph() {
+        XCTAssertEqual(ProtectionVerdict.meetsPolicy.displayName(copies: 1), "In one place only")
+        XCTAssertEqual(ProtectionVerdict.meetsPolicy.displayName(copies: 2), "Safe on two copies")
+        XCTAssertFalse(
+            ProtectionVerdict.meetsPolicy.displayName(copies: 1).contains("Safe"),
+            "the archive warns about this photograph while its own badge reassures"
+        )
+    }
+
+    /// And the mark follows the words — a green tick beside "In one place only"
+    /// would undo the sentence.
+    func testTheMarkAgreesWithTheSentence() {
+        XCTAssertNotEqual(
+            ProtectionVerdict.meetsPolicy.symbolName(copies: 1),
+            ProtectionVerdict.meetsPolicy.symbolName
+        )
+        XCTAssertEqual(
+            ProtectionVerdict.meetsPolicy.symbolName(copies: 2),
+            ProtectionVerdict.meetsPolicy.symbolName
+        )
+    }
 }
