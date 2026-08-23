@@ -566,6 +566,11 @@ final class AppStore: ObservableObject {
         // readable at all; unsandboxed it costs a resolve per device and saves
         // the sweep from being the only way one is found.
         targetBookmarks.resumeAccess()
+        // Before adoption, not after: this device's copy may already exist and
+        // simply be recorded at the path it had before the archive moved.
+        // Adopting first would register a second host target beside the one
+        // that was only ever lost.
+        repairHostTargetPath()
         adoptHostDeviceIfNeeded()
         // After host adoption, so a first launch has a device to read
         // destinations from, and before the first placement audit, which needs
@@ -5842,6 +5847,37 @@ final class AppStore: ObservableObject {
     ///   device takes the share that fits and placement routes the rest to
     ///   drives, so the old "will the entire archive fit on the boot disk"
     ///   gate was asking a question that no longer decides anything.
+    /// Re-points this device's own copy after the archive directory has moved.
+    ///
+    /// See `HostTargetPathRepair` for what goes wrong without it: the folder
+    /// travels with the archive, the recorded path does not, and the device
+    /// reads "away" for ever while being the one the app is running on.
+    func repairHostTargetPath() {
+        for target in targets where target.kind == .hostDevice {
+            guard let repaired = HostTargetPathRepair.repairedPath(
+                for: target,
+                archiveDirectory: appDirectory,
+                markerAt: { TargetMonitor.readMarker(at: $0) },
+                exists: { FileManager.default.fileExists(atPath: $0.path) }
+            ) else { continue }
+
+            var updated = target
+            updated.configuredPath = repaired
+            updated.lastKnownPath = repaired
+            do {
+                try catalog.upsertTarget(updated)
+                audit(
+                    .drive,
+                    "\(target.name) was recorded at a folder that no longer exists — the archive has moved since. Found it again at \(repaired), by the ID file it still carries, and nothing was copied.",
+                    targetID: target.id
+                )
+            } catch {
+                lastError = "Could not update where \(target.name) is kept: \(error.localizedDescription)"
+            }
+        }
+        loadAll()
+    }
+
     func adoptHostDeviceIfNeeded() {
         guard !hostTargetDeclined else { return }
         guard !targets.contains(where: { $0.kind == .hostDevice }) else { return }

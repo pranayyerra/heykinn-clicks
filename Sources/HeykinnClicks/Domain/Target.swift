@@ -90,6 +90,13 @@ struct ReplicationTarget: Identifiable, Hashable {
     /// is theirs.
     static let appFolderName = "HeykinnClicks"
     static let defaultReplicaRoot = appFolderName + "/Replicas"
+
+    /// Where this device keeps its own copy, inside the archive directory.
+    ///
+    /// Named here rather than built from the staging path in one place and
+    /// assumed in another: `HostTargetPathRepair` has to look for it after the
+    /// archive has moved, which is exactly when a second spelling would drift.
+    static let hostCopyFolderName = "LocalCopy"
 }
 
 /// The storage a path actually sits on.
