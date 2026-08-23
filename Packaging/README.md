@@ -9,22 +9,6 @@
 ./Packaging/bundle.sh --release --appstore --sign "Apple Distribution: Name (TEAMID)" --build-number 153
 ```
 
-Privacy-safe App Review media is generated locally—no real Photos library and
-no downloaded or third-party images are involved:
-
-```bash
-swift Packaging/make-review-fixtures.swift /tmp/Heykinn-Review-Fixtures
-```
-
-The result contains an ordinary 12-image folder and a four-image extracted
-Google Takeout-shaped tree with synthetic sidecars.
-
-The icon is generated, not checked in as an opaque binary:
-
-```bash
-swift Packaging/make-icon.swift          # BrandMark.png -> AppIcon.icns
-```
-
 `make-dmg.sh` wraps whatever is in `build/` in a disk image to hand somebody:
 
 ```bash
@@ -298,15 +282,24 @@ missing application identifier/profile, and known unsupported entitlements.
 | `bundle.sh` | Assembles `HeykinnClicks.app` around the SwiftPM binary and reports which entitlements the signed result actually carries. Everything else starts here |
 | `make-pkg.sh` | The installer package the App Store takes. Refuses rather than producing something that would be rejected after an upload and a wait |
 | `make-dmg.sh` | The disk image for the website build |
-| `make-icon.swift` | Redraws `AppIcon.icns` from `BrandMark.png`. Needed when the branding changes, not otherwise |
-| `make-demo-photos.swift` | Photographs for listing screenshots. The real archive cannot appear in a public listing — it holds real drive names and real people read out of a Google export |
-| `make-review-fixtures.swift` | Privacy-safe media for an App Review recording, for the same reason |
-| `make-review-volume.sh` | A disposable writable volume, so a reviewer's functional pass exercises the picker, bookmark, copy and relaunch paths without a personal disk |
 | `validate-app-review-packet.sh` | Preflight on the reviewer notes: the 4000-byte limit, no unreplaced placeholders, every required heading, and that the version named matches `Info.plist` |
 
-The last four are release tooling. What shipped, when, and the reviewer notes
-themselves are in [`docs/releases/`](../docs/releases/README.md).
+What shipped, when, and the reviewer notes themselves are in
+[`docs/releases/`](../docs/releases/README.md).
 
-`prune-empty-replicas.sh` was here and is gone: a one-time sweep of empty
-replica directories left by an older version, which the app has pruned as it
-removes for months. Its own header said nothing called it.
+### Deleted, and how to get them back
+
+Five scripts have gone. Each had run once, produced something that is either
+committed or throwaway, and was never part of any test — so they were a hundred
+lines apiece to avoid a `git show`.
+
+| | What it did | If you need it |
+|---|---|---|
+| `make-icon.swift` | Drew `AppIcon.icns` from `BrandMark.png` | The icon is committed. A new one is more likely to arrive as a file than be redrawn |
+| `make-demo-photos.swift` | Downloaded photographs from Lorem Picsum for listing screenshots | Also carried a licence caveat — fine in a screenshot, not for redistribution |
+| `make-review-fixtures.swift` | Drew gradients and synthetic sidecars for an App Review recording | Any folder of images does this; the point was only that no real photograph appears |
+| `make-review-volume.sh` | Made a disposable writable volume for a reviewer's functional pass | Three lines of `hdiutil create -fs ExFAT` |
+| `prune-empty-replicas.sh` | Swept empty replica directories left by an older version | The app prunes as it removes; the drives are already clean |
+
+`git log --diff-filter=D --oneline -- Packaging/` finds the commit that removed
+each one.
