@@ -179,7 +179,7 @@ Pro, macOS 26.6.2 (25G82)**.
 ## Draft App Review Notes / reply
 
 The paste-ready version is
-[`APP_REVIEW_2_1_NOTES.txt`](APP_REVIEW_2_1_NOTES.txt). It contains all seven
+[`app-review-notes-1.0.txt`](app-review-notes-1.0.txt). It contains all seven
 answers while staying below App Store Connect's 4,000-byte Notes limit. The
 longer text below is retained as the evidence-rich source draft and must not be
 pasted wholesale into the Notes field.
@@ -188,7 +188,7 @@ Validate the final note and attached recording before submission:
 
 ```bash
 ./Packaging/validate-app-review-packet.sh \
-  docs/APP_REVIEW_2_1_NOTES.txt /path/to/review-recording.mov
+  app-review-notes-1.0.txt /path/to/review-recording.mov
 ```
 
 During preparation, validate structure and size while allowing the two
@@ -196,7 +196,7 @@ deliberate `[[PLACEHOLDER]]` values:
 
 ```bash
 ./Packaging/validate-app-review-packet.sh --allow-placeholders \
-  docs/APP_REVIEW_2_1_NOTES.txt
+  app-review-notes-1.0.txt
 ```
 
 Replace the bracketed values, then paste this into both the reply and the App

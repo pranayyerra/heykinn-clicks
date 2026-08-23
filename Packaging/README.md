@@ -298,4 +298,4 @@ missing application identifier/profile, and known unsupported entitlements.
 - The sandboxed App Store package builds successfully. Upload of the current
   candidate follows the exact-build physical pass; App Review information and
   the recording plan are in
-  `docs/APP_REVIEW_2_1_RESPONSE.md`.
+  `docs/releases/app-review-guideline-2.1.md`.

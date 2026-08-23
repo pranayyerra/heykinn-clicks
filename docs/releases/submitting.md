@@ -66,6 +66,22 @@ At [appstoreconnect.apple.com](https://appstoreconnect.apple.com) →
 - Bundle ID: `com.heykinn.HeykinnClicks`
 - SKU: anything stable and private, e.g. `heykinn-clicks-1`
 
+## Before you start
+
+Add the release to [`README.md`](README.md) in this folder — version, build,
+date, and what somebody using the app would notice. Do it while you still
+remember; reconstructing it from commit messages afterwards is how a release
+ends up described as "various fixes".
+
+Tag the commit the build was made from, matching the existing style:
+
+```bash
+git tag -a v1.2.0 -m "Heykinn Clicks 1.2 (155) — App Store"
+```
+
+The tag is the only reliable answer to "what was actually in that build", since
+`main` moves on immediately.
+
 ## 5. Build and upload
 
 ```bash
@@ -125,8 +141,8 @@ grows from what has actually been met rather than from any published set.
 ## 7. App Review information
 
 The physical-device test record, evidence, and recording script live in
-[`APP_REVIEW_2_1_RESPONSE.md`](APP_REVIEW_2_1_RESPONSE.md). The separate
-[`APP_REVIEW_2_1_NOTES.txt`](APP_REVIEW_2_1_NOTES.txt) is the paste-ready
+[`app-review-guideline-2.1.md`](app-review-guideline-2.1.md). The separate
+[`app-review-notes-1.0.txt`](app-review-notes-1.0.txt) is the paste-ready
 seven-part answer; it is deliberately kept below App Store Connect's
 4,000-byte Notes limit. Fill its two placeholders from the exact submitted
 build pass, attach the recording and generated sample archive, then validate
@@ -135,7 +151,7 @@ review reply:
 
 ```bash
 ./Packaging/validate-app-review-packet.sh \
-  docs/APP_REVIEW_2_1_NOTES.txt /path/to/review-recording.mov
+  app-review-notes-1.0.txt /path/to/review-recording.mov
 ```
 
 There are no review credentials because the app has no account. Do not leave

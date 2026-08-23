@@ -31,7 +31,7 @@ changed as part of that update.
 
 ## Resubmission evidence completed
 
-1. [`APP_REVIEW_2_1_NOTES.txt`](APP_REVIEW_2_1_NOTES.txt) was saved to the
+1. [`app-review-notes-1.0.txt`](app-review-notes-1.0.txt) was saved to the
    live Notes field (3,890 of 4,000 bytes).
 2. `HeykinnClicks-1.0-153-App-Review-Walkthrough.mov` was attached to the app
    version.

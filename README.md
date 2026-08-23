@@ -8,6 +8,8 @@ The vision, the invariants that must never regress, and the path from here
 are in [docs/SPEC.md](docs/SPEC.md). For shipped behavior, this codebase is
 the source of truth; the full build-time spec lives in git history.
 
+**Releases:** what shipped and when is in [`docs/releases/`](docs/releases/README.md).
+
 ## Installing it
 
 Download the `.dmg` from [Releases](../../releases), open it, and drag Heykinn

@@ -16,7 +16,7 @@ August 2026, which is a measurement of one archive on one day and not a claim
 about the app. No linked dependencies outside the standard library and
 system frameworks. The App Store package has uploaded; the current review is
 waiting for the seven-part reviewer information package and physical-device
-recording in `docs/APP_REVIEW_2_1_RESPONSE.md`, not for a code change.
+recording in `docs/releases/app-review-guideline-2.1.md`, not for a code change.
 
 ---
 
