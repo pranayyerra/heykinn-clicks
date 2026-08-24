@@ -211,6 +211,21 @@ final class DocumentedRulesTests: XCTestCase {
         XCTAssertEqual(numbers, Array(1...numbers.count), "the invariant numbering has a gap")
     }
 
+    /// **The appendix of lessons is numbered once and in order too.**
+    ///
+    /// The same check as above, on the other numbered list in the same file,
+    /// added because that list had sixteen duplicate numbers — two blocks
+    /// inserted mid-list, each restarting at a number already used, and the
+    /// sequence running 1–14, 30–36, 15–29, 30–39. Nothing cites a lesson by
+    /// number, so nothing broke; it was simply wrong, and had been for as long
+    /// as it took to notice, because the guard only covered the list somebody
+    /// had already been bitten by.
+    func testTheLessonsAreNumberedOnceAndInOrder() throws {
+        let numbers = try numberedItems(under: "## Appendix")
+        XCTAssertGreaterThan(numbers.count, 50, "parsed almost no lessons")
+        XCTAssertEqual(numbers, Array(1...numbers.count), "the lessons are misnumbered")
+    }
+
     /// **Every `invariant N` citation points at one that exists.**
     ///
     /// The other half: renumbering the list is safe only if something checks
@@ -244,15 +259,19 @@ final class DocumentedRulesTests: XCTestCase {
         return walk.compactMap { $0 as? URL }.filter { extensions.contains($0.pathExtension) }
     }
 
-    /// The numbers of the entries under `## Invariants — never regress`, up to
-    /// the next heading. SPEC has other numbered lists and they are not this.
     private func specInvariantNumbers() throws -> [Int] {
+        try numberedItems(under: "## Invariants")
+    }
+
+    /// The numbers of the top-level list items under a heading, up to the next
+    /// one. SPEC has two numbered lists and they are not each other.
+    private func numberedItems(under heading: String) throws -> [Int] {
         let spec = repositoryRoot.appendingPathComponent("docs/SPEC.md")
         let lines = try String(contentsOf: spec, encoding: .utf8).split(
             separator: "\n", omittingEmptySubsequences: false
         )
-        guard let start = lines.firstIndex(where: { $0.hasPrefix("## Invariants") }) else {
-            XCTFail("SPEC.md has no invariants heading"); return []
+        guard let start = lines.firstIndex(where: { $0.hasPrefix(heading) }) else {
+            XCTFail("SPEC.md has no \(heading) heading"); return []
         }
         var numbers: [Int] = []
         for line in lines[lines.index(after: start)...] {
