@@ -183,7 +183,9 @@ raw-SQL reader reaching the same answer about safety that the app does.
    with another's. One device still holds at most one copy of an asset, and
    identity is still the marker file, never a mount path.
 
-   Two earlier models were wrong here and are worth naming so neither returns.
+   **Ask what the person wanted to decide before deciding it well on their
+   behalf.** Two earlier models were wrong here and are worth naming so neither
+   returns.
    The first capped devices at the copy count and replicated everything to
    every device, which made "this device holds the archive" and "this photo
    has enough copies" the same sentence. The second let the app choose
@@ -219,6 +221,9 @@ raw-SQL reader reaching the same answer about safety that the app does.
    an absolute-path replica form first.
 6. No destructive cleanup without explicit job state and confirmation — or,
    for future reclamation, the listed proof, which is stronger than a prompt.
+   The working copy on this device follows the same rule and has no switch: it
+   goes once every copy exists *and* has been read back, so a switch could only
+   ever have kept a duplicate the app does not count as one of your copies.
 7. Interrupted work resumes; a crash or an unplug never corrupts the catalog.
 8. Defects are fixed in the code path that produces them — the import path,
    the scan, startup reconciliation — so every install benefits, and so the
@@ -241,7 +246,8 @@ raw-SQL reader reaching the same answer about safety that the app does.
     Nothing may infer damage from two devices holding different content: that
     is the normal steady state. A cross-device check whose inputs are both
     derived from the catalog compares the catalog to itself and proves
-    nothing, however elaborate the structure it uses to do it.
+    nothing, however elaborate the structure it uses to do it — so ask what a
+    check's inputs are derived from before asking how clever it is.
 
 12. **No operation may require two devices connected at once.** One cable and
     two drives is the ordinary setup, not an exotic one. Work that needs both
@@ -564,10 +570,15 @@ somebody reading it and drawing the wrong conclusion.
 
 ---
 
-## Appendix: lessons, one line each
+## Appendix: lessons
 
-Earned against a real 248 GB archive; the stories are in git history.
+Earned against a real 248 GB archive. Each is a defect that shipped, with the
+numbers it cost, because the number is what makes it memorable — and a lesson
+compressed past its evidence is a slogan.
 
+Rules that must not regress are invariants, above; these are the findings that
+produced them and the ones too specific to be rules. Ten were removed for
+saying what an invariant already says.
 1. Cloud presence cannot be assumed — record evidence or nothing.
 2. Replication has a unit; for a split export it is the part, not the asset.
 3. Verification needs grades — an honest cheap check beats a proof too
@@ -585,156 +596,118 @@ Earned against a real 248 GB archive; the stories are in git history.
 14. Stat anchors and files for free, aim the reads; only the patrol finds rot.
     A replica is often not its own file — one stat can cover ten thousand of
     them — which is what made stat-ing everything on connect affordable.
-15. A check whose two inputs both come from the catalog compares the catalog
-    to itself. The Merkle comparison read convincingly, had tests, and shipped
-    — and its leaves were catalog hashes on both sides, so a shared key could
-    not differ however far the bytes had rotted. Ask what a check's inputs are
-    derived from before asking how clever it is.
-16. Risk belongs to the asset, not the replica. A copy read yesterday makes its
+15. Risk belongs to the asset, not the replica. A copy read yesterday makes its
     asset safe no matter how stale the other copy is, and two copies both read
     six months ago are in more danger than either one alone suggests — so
     "oldest replica first" aims the reads at the wrong files. Order by the age
     of an asset's *freshest* copy.
-17. `k` of `n` is not `n` of `n`. Capping the number of devices at the number
-    of copies made "this device holds everything" and "this photo has enough
-    copies" the same sentence, and the cap on how many drives somebody could
-    own was the visible symptom of the two having been conflated.
-18. Automating a decision is not the same as fixing the bug that made it hard.
-    Removing the device cap was correct; replacing it with free-space
-    balancing solved the mechanics and took from the user the one thing they
-    had asked for by name — saying where their photos go. Ask what the person
-    wanted to decide before deciding it well on their behalf.
-19. The unit of a storage policy is the source, not the asset and not the
-    device. "Keep my 2019 folder on these two drives" is the sentence people
-    actually say; per-asset rules are unmanageable and per-device rules cannot
-    express it at all.
-20. "Move" is two operations wearing one word. Bytes the app wrote can be
+16. "Move" is two operations wearing one word. Bytes the app wrote can be
     deleted after the new copy verifies; bytes the user put there can only
     stop being counted. A retarget sheet that does not separate them is
     promising to free space it will not free, or threatening a deletion it
     will not perform.
-21. Removing a file is not removing what held it. Replicas are filed under the
+17. Removing a file is not removing what held it. Replicas are filed under the
     first two characters of their id, so draining a device left up to 256
     empty directories the app could not see and the user could — a folder tree
     still sitting there after the app said it had stopped using the drive.
     Deletion has to clean up the shape it made, not only the contents.
-22. A moved folder is repointed, never re-copied.
-23. Targets are configuration, capped by the policy; forgetting frees a slot
-    and deletes nothing.
-24. Preferences live in ⌘,; the working screens show the archive itself.
-25. Reclamation, when it comes, is automatic and gated on proof, not prompts.
-    The working copy on this device follows the same rule and has no switch: it
-    is released once every copy exists *and* has been read back and matched, so
-    a switch could only ever have kept a duplicate the app does not count as one
-    of your copies — the thing the app exists to remove.
-26. The spec holds vision, invariants, and path; for shipped behavior the code
-    is the source of truth.
-27. A date the file states can still be impossible; say so where it shows, and
+18. A moved folder is repointed, never re-copied.
+19. Preferences live in ⌘,; the working screens show the archive itself.
+20. A date the file states can still be impossible; say so where it shows, and
     change nothing.
-28. A discovery scan only ever adds; something has to notice what left. A
+21. A discovery scan only ever adds; something has to notice what left. A
     deleted export part is a copy the archive no longer has, and the catalog
     row that outlives it must stop counting as one — but only ever from a
     target that was reachable at the time, because an unplug makes every
     check fail at once.
-29. The sidebar is the user's questions, not the app's mechanisms. A name
+22. The sidebar is the user's questions, not the app's mechanisms. A name
     like "Violations" tells somebody who already knows the model where to
     click, and tells everyone else nothing.
-30. Put it back where it was. The catalog already records where content
+23. Put it back where it was. The catalog already records where content
     lived, so restoring a copy to a folder of the app's own choosing invents
     a second location for one file; a part delivered to complete an export
     belongs beside that export, wherever the user keeps it. What the app
     writes that has nowhere of its own goes in one folder with the app's name
     on it, so the user can see at a glance what is theirs.
-31. A migration that has run everywhere it will ever run is weight, not
+24. A migration that has run everywhere it will ever run is weight, not
     safety. With one install, "everywhere" is checkable: confirm against the
     catalog that each one applied, then delete it — and report what has not
     applied rather than deleting the code that would have done it.
-32. A repair belongs where the damage is made. The same function called at
+25. A repair belongs where the damage is made. The same function called at
     startup arrives a launch late, after the wrong total has already been
     shown; called where the row is written, it prevents. Ask what can create
     the bad state before deciding a repair is one-time — the fix that closed
     the obvious cause may not have closed the only one.
-33. A question already answered is not asked again. "Don't ask again" that
-    cannot be undone is a trapdoor, not a preference — remembering and
-    revoking are one feature, and shipping the first without the second is
-    how a user ends up unable to re-adopt their own drive.
-34. Show the path even when the disk is not here. A path is the answer to
+26. Show the path even when the disk is not here. A path is the answer to
     "where is my stuff", and that question is asked most often precisely when
     the thing is unreachable; hiding the answer exactly then leaves the reveal
     button useful only when it is not needed.
-35. The host device is a device. Treating this device as a corridor and never a
-    destination meant a fresh install with no drive attached protected
-    nothing, while a boot disk with room to spare sat unused.
-36. A source is not only where content came from; it is somewhere that content
+27. A source is not only where content came from; it is somewhere that content
     still is. An export knew which drives held it and a folder did not, and
     that asymmetry was in the rendering, not in the model — the replica states
     were there the whole time.
-37. A number the whole archive shares cannot answer a question each source
-    asks separately. The copies slider survived three model revisions by
-    looking harmless — it bound nothing once sources carried their own count,
-    so it read as a default while contradicting every source under it.
-38. An `UPDATE` cannot find a row that has not been inserted yet. The import
+28. An `UPDATE` cannot find a row that has not been inserted yet. The import
     claimed its assets for their source before writing them, so the claim
     matched nothing, and the reload at the end of every import replaced the
     in-memory answer with the empty one from disk — placement was right and
     the record of why was gone.
-39. Unmeasured is not full. A device nobody can reach reports unknown free
+29. Unmeasured is not full. A device nobody can reach reports unknown free
     space, and reading that as zero made the archive refuse to owe anything to
     an unplugged drive — including, for one scan's worth of time, a drive that
     had just been registered.
-40. A device that was never asked to hold something does not owe it. Export
+30. A device that was never asked to hold something does not owe it. Export
     parts were graded against every registered device rather than the ones
     their export names, so a device holding none of the zips owed a copy of all of
     them for ever — and no change to the export's settings could clear it,
     because its settings were never consulted.
-41. Withdrawing the task is not withdrawing the intention. Archive-level
+31. Withdrawing the task is not withdrawing the intention. Archive-level
     redundancy cancelled the queued copy for every asset an export covered, on
     every device, but only rewrote the pending replica rows on devices holding
     a part — leaving 15,345 rows on a device reporting work that nothing would
     ever do.
-42. Two facts in one row is one fact too many. A source recorded both where
+32. Two facts in one row is one fact too many. A source recorded both where
     photos came from and where they should be kept; the first cannot change and
     the second must, and the moment a group is made by hand there is no history
     to put in it. Splitting them cost a migration and removed a whole class of
     question with no answer.
-43. Complete means "holds what it was asked to hold", not "holds everything".
+33. Complete means "holds what it was asked to hold", not "holds everything".
     A device no group names fell through to `.complete` on the Drives map and
     read "Complete copy" while the card beneath it said "Nothing to hold yet" —
     the same screen contradicting itself, in the voice of the model that was
     replaced two revisions ago.
-44. A source does not own a group; its photos merely happen to be in one. The
+34. A source does not own a group; its photos merely happen to be in one. The
     source's card offered "change where these are kept" whenever a group could
     be found, so once photos had moved, editing one export's settings reached a
     group holding a different export's photos and changed those too. Membership
     moves and ids do not, so resolving a group by the id it was created with
     goes wrong exactly when it matters.
-45. Two doors into one room is the whole cost. The elaborate rule about when a
+35. Two doors into one room is the whole cost. The elaborate rule about when a
     source's card could safely edit a group existed only because the card could
     edit at all; deleting that affordance deleted the rule, the question "does
     this override that?", and the class of bug underneath both. One setting,
     one place to change it.
-46. Policy needs an object to hang on. Per-asset storage sounds like the
+36. Policy needs an object to hang on. Per-asset storage sounds like the
     simplest model right up to the first question about a *set* of photos —
     what do these want, why, and what else shares that answer — at which point
     there is nothing to ask. A group of one costs nothing and keeps the
     question answerable.
-47. One thing at first contact, two when the second one exists. Sources and
+37. One thing at first contact, two when the second one exists. Sources and
     their groups are 1:1 until something is regrouped, and showing both from
     the start taught a distinction nobody had made yet — down to a Policies row
     reading "Recovered import (Google Takeout) — from Recovered import (Google
     Takeout)". A concept introduced before it does any work is a concept read
     as noise.
-48. Requiring two drives at once is requiring a second cable. The export
+38. Requiring two drives at once is requiring a second cable. The export
     comparison checks filtered for parts whose every copy was readable, which
     on a one-cable setup is no part, ever — so an archive could sit for years
     reporting "not checked against the other copy yet" with no way to ever
     check it, and the message read as pending rather than impossible.
-49. Copies and photos are two numbers, and the gap between them is the size of
+39. Copies and photos are two numbers, and the gap between them is the size of
     the archive. Counting replica rows and calling the total "assets" told a
     user with 24,639 photos that 49,236 had been checked — twice their whole
     archive. Nothing false was claimed about the checking; the label was simply
     on the wrong noun, which under invariant 2 is the same defect.
-50. `unzip` cannot read a real Google export. It mangles every non-ASCII byte
+40. `unzip` cannot read a real Google export. It mangles every non-ASCII byte
     to a literal `?` — in its listing as well as on disk — then aborts
     mid-archive with a "disk full" error that has nothing to do with the disk,
     taking every entry after it. One Mac screenshot exported with a narrow
@@ -743,24 +716,24 @@ Earned against a real 248 GB archive; the stories are in git history.
     the same archive correctly. Reading entries to stdout does not rescue it:
     the only name to ask for comes from the same mangled listing, and the `?`
     it contains is unzip's own wildcard.
-51. A partial read is worth more than no read. The extraction discarded
+41. A partial read is worth more than no read. The extraction discarded
     everything it had already written whenever the tool exited non-zero, so a
     failure two thirds of the way through a part produced nothing at all — the
     status was treated as the answer, when the answer was on disk.
-52. A capture date and a provider's timestamp are not the same clock. Google
+42. A capture date and a provider's timestamp are not the same clock. Google
     writes `photoTakenTime` in UTC; a date read from a photo's own EXIF carries
     no timezone at all, so the two differ by whatever the camera was set to.
     Matching them exactly looked right, passed its tests, and missed every
     photo whose clock was not on UTC — on a real archive, most of them.
     Anything within fourteen hours is explicable as a timezone rather than as a
     different photograph.
-53. An album is a selection, not a screen. The photos in one are the same
+43. An album is a selection, not a screen. The photos in one are the same
     photos shown the same way, so albums and people are filters on the Library
     rather than a second grid — which would have duplicated the thumbnails, the
     hover previews, the protection marks and the selection mode, and given them
     somewhere to drift apart.
 
-54. A provider's day is the provider's day. Google timestamps an album in UTC
+44. A provider's day is the provider's day. Google timestamps an album in UTC
     and prints the UTC day beside it; rendering that instant in the viewer's
     timezone moved it, so an album titled "Wednesday night in Northgate" came
     out as Thursday, and would have read differently again on a device
@@ -768,7 +741,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     this archive does not reinterpret dates — see the timeline banner, which
     promises the same thing about capture dates it knows to be wrong.
 
-55. Unknown kinds are skipped, never guessed at. Google's `enrichments` is a
+45. Unknown kinds are skipped, never guessed at. Google's `enrichments` is a
     list of single-key objects and `locationEnrichment` was the only kind the
     first cut knew; the real archive also had `mapEnrichment`, a trip rather
     than a pin. Reading it as two more places would have said a weekend was
@@ -776,7 +749,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     for a projection that understands it, which is the whole reason payloads
     are kept verbatim.
 
-56. A backup is not complete because the photos are in it. Snapshot
+46. A backup is not complete because the photos are in it. Snapshot
     verification checked `integrity_check` and the asset count, which was the
     whole catalog when it was written. A snapshot taken later held all 24,639
     assets and none of the 24,417 provider payloads captured beside them —
@@ -787,7 +760,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     tables legitimately shrink, and a whole category going missing is the
     failure that matters.
 
-57. A row is withdrawable because nobody asked for it. Withdrawal of copies to
+47. A row is withdrawable because nobody asked for it. Withdrawal of copies to
     revoked devices was gated on `pending`, the state a revoked copy starts in.
     But a scan reaching the row first looks where it claims, finds nothing, and
     marks it `missing` — after which withdrawal could never see it again.
@@ -799,7 +772,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     disk (`present`, `drift`, never forgotten — releasing them is a separate
     decision the user makes).
 
-58. Do not offer a choice whose right answer the app already knows. Four of the
+48. Do not offer a choice whose right answer the app already knows. Four of the
     five actions on a drive were its own bookkeeping wearing a menu — confirm
     your own consistency, clear a queue, sweep folders a sweep already sweeps
     after every sync, and one that was the button it was listed inside. None is
@@ -808,7 +781,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     already has" is right when a drive is plugged in and pointless as a menu
     item months later.
 
-59. A reassurance that fails open is worse than no reassurance. The dialog for
+49. A reassurance that fails open is worse than no reassurance. The dialog for
     forgetting a Takeout download counted the photos that would be left with no
     copy — and built its lookup from the export's set id while replicas record
     the part's file name. Nothing matched, so it reported zero and said the
@@ -817,7 +790,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     assumption. When a number exists to stop somebody, check it against the
     real shape and assert that the wrong shape finds nothing.
 
-60. One decision, one rule, wherever it is applied. The device picker counted
+50. One decision, one rule, wherever it is applied. The device picker counted
     devices and the screen that judges the result counted drives, so choosing a
     drive and this device satisfied "two copies" in silence and came back as an
     orange warning. The app let somebody build the arrangement it goes on to
@@ -825,7 +798,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     judged, the same question has to be asked the same way — and the place to
     say something is where the choice is made, not only afterwards.
 
-61. Check the slogan against the code. "This device is the device your drives
+51. Check the slogan against the code. "This device is the device your drives
     exist to survive" sounded like a reason and was used as one, to discount a
     copy on the host and to warn somebody off choosing it. It does not survive
     reading: a copy on a registered host target is written to the same replica
@@ -835,14 +808,14 @@ Earned against a real 248 GB archive; the stories are in git history.
     placement still prefers drives, for the reason that is true: a boot disk
     rarely has room. A sensible default is not the same claim as a lesser copy.
 
-62. A test written from the code's assumption confirms the assumption. Four
+52. A test written from the code's assumption confirms the assumption. Four
     times in one day: the truncated content hash, the export set id, the
     `zipmember:` prefix, and the host-is-not-a-place split. Each had a passing
     test asserting exactly what the code already believed. A test earns its
     keep by being written from the *shape of the real data* — which means
     looking at the data — or by asserting that the wrong shape finds nothing.
 
-63. A subset is counted in the units of the set it sits under. Keep safe led
+53. A subset is counted in the units of the set it sits under. Keep safe led
     with "Every photo is in 2 places", totalling 21,401, and said directly
     underneath that "24,618 of them are inside your Google Takeout files" — a
     subset larger than the set it was drawn from, printed one line apart. Both
@@ -852,7 +825,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     are right to. Where two numbers appear in one sentence, they are counted
     by one rule.
 
-64. A walk of the whole archive must not hide behind a computed property.
+54. A walk of the whole archive must not hide behind a computed property.
     `photoCountByStorageGroup` looked like a field and walked 24,639 assets on
     every read. That was survivable while one list read it once, and became a
     ten-second freeze when the grid read it per cell — and from inside a sort
@@ -862,7 +835,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     below it opened instantly. Cost that scales with the archive belongs where
     the archive changes, not where it is drawn.
 
-65. Verify against an idle app, or verify nothing. The same freeze was being
+55. Verify against an idle app, or verify nothing. The same freeze was being
     caused a second way — the Takeout pipeline and the volume scan run on the
     main actor after a drive connects — so for the first minute after launch
     every click appeared to be ignored and every screenshot showed the state
@@ -870,7 +843,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     the same symptom. Watch the process settle before believing what the
     screen says about a click.
 
-66. A draft is where illegal states are allowed to exist. A sheet of checkboxes
+56. A draft is where illegal states are allowed to exist. A sheet of checkboxes
     could only offer legal moves, so it never needed the idea. Direct
     manipulation cannot: picking a group's last placement up off a device is
     half of putting it down somewhere else, and turning the copy count past the
@@ -882,7 +855,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     the drag hides the rule and leaves somebody guessing why the app fought
     them.
 
-67. A control with two ways in needs testing both ways. The cell that accepts a
+57. A control with two ways in needs testing both ways. The cell that accepts a
     dragged placement also accepts a click to add one. `dropDestination`
     silently swallows `onTapGesture`, so the drop worked and the click did
     nothing — and the reverse arrangement, a `Button`, takes the mouse-down a
@@ -892,7 +865,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     underneath, which is why it lives in `StoragePlacementDraft` and not in a
     view.
 
-68. Reload what changed, not everything. Three places wrote a little and re-read
+58. Reload what changed, not everything. Three places wrote a little and re-read
     the whole catalog: queueing forty background verification reads, recording
     archive-level redundancy that recorded nothing, and the Takeout pipeline's
     closing refresh after a drive turned out to hold exactly what was expected.
@@ -901,7 +874,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     narrow reload, and make the wide one conditional on having done something to
     justify it.
 
-69. Version both layers, and know which one you are in. Reading a provider
+59. Version both layers, and know which one you are in. Reading a provider
     export happens twice over: **capture** takes bytes out of the export and
     keeps them verbatim, **projection** decides what those bytes mean. Only
     projection was versioned. That is the cheap half — being wrong about
@@ -917,7 +890,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     by definition, and treating silence as current would exempt every existing
     archive from the one check this exists to make.
 
-70. Moving a file moves everything that names it. An export can be relocated
+60. Moving a file moves everything that names it. An export can be relocated
     into the app's folder on the drive it already sits on — a same-volume
     rename, instant however large. The bytes are the easy part. On a real
     archive 42,754 recorded copies name their export by its *stem*, which no
@@ -932,7 +905,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     string, inside the zip's own entry list, where it is an album and not a
     location.
 
-71. State the fact whether or not the drive is here; gate only the doing. The
+61. State the fact whether or not the drive is here; gate only the doing. The
     line saying a drive holds an export twice was first shown only for
     connected drives, which is the rule the *button* needs, not the rule the
     *sentence* needs. 254 GB that disappears from the screen when somebody
@@ -940,7 +913,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     the catalog knows it either way. What needs the drive present is removing
     something from it, and that gates itself.
 
-72. Name a button after what it does, not after what it is for. "Copy them out
+62. Name a button after what it does, not after what it is for. "Copy them out
     of the download" unpacked a zip into a folder beside it — and a photo in
     that folder is still counted as being inside a download, so the one thing
     the name promised was the one thing it did not do. What it actually buys is
@@ -948,7 +921,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     the same bytes again, which the name never mentioned. Both belong in the
     label.
 
-73. A check that reads nothing may not set the field that means "read". The
+63. A check that reads nothing may not set the field that means "read". The
     background patrol exists because reading bytes is the only thing that finds
     rot. For a copy counted inside an export part there are no bytes of its own
     to read, so it was confirmed by looking for a file with the right name — and
@@ -961,7 +934,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     walk of the disk each. Ask what a check proves before deciding what it is
     allowed to record.
 
-74. Ranking by staleness is not the same as knowing something is stale. The
+64. Ranking by staleness is not the same as knowing something is stale. The
     patrol sorted candidates by how long since their freshest copy was read and
     took the top forty, without ever asking whether the top one was old enough
     to be worth reading. On a large archive that is invisible — something is
@@ -972,7 +945,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     belongs to the *background* pass only: somebody who asks for a check is
     never answered with "I looked this morning".
 
-75. Two copies in different shapes are still two copies. A part held as a zip
+65. Two copies in different shapes are still two copies. A part held as a zip
     on one drive and as the folder unpacked from it on another cannot be
     compared by size or hash — they are different encodings of the same photos,
     so the numbers will never match and no amount of checking will make them.
@@ -985,7 +958,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     bytes are in. Two subsystems reading different tables can disagree, and the
     one drawing a conclusion is the one to doubt.
 
-76. A detail panel accretes, because every feature adds a line and none removes
+66. A detail panel accretes, because every feature adds a line and none removes
     one. The group panel ended a day's work with four stacked sentences saying
     overlapping things, a caption naming the row the reader had just clicked,
     per-device photo counts already printed in the cell directly above, and six
@@ -997,14 +970,14 @@ Earned against a real 248 GB archive; the stories are in git history.
     goes behind the mark, one verb stays visible and the housekeeping goes in a
     menu.
 
-77. Do not reach for a layout container that measures what you have already
+67. Do not reach for a layout container that measures what you have already
     decided. The table's widths are constants, so `Grid` was aligning columns
     it did not need to measure — and a cell spanning every column, inside a
     grid, inside a horizontally scrolling view, sized itself hundreds of points
     taller than its contents and pushed every row below it off the screen.
     Stacks with explicit frames do the same job and cannot do that.
 
-78. Two controls that look redundant may mean different things — say which.
+68. Two controls that look redundant may mean different things — say which.
     Naming devices and asking for a number of copies look like the same
     question asked twice, and are not: the devices are *n*, the count is *k*,
     and the planner walks the named devices in order and stops at k, so a third
@@ -1015,7 +988,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     but to write the arrangement out: *every photo on all three*, or *two
     copies — A and B first, and C when one of those cannot take it*.
 
-79. Preserve the arrangement somebody is already in. Ticking another device
+69. Preserve the arrangement somebody is already in. Ticking another device
     almost always means "and this one too", so if every named device held a
     copy, the new one does; if spares were already in use, it becomes another
     spare. Removing one works the same way, which also stops the app answering
@@ -1023,13 +996,13 @@ Earned against a real 248 GB archive; the stories are in git history.
     neither leaves the count quietly meaning something else than it did a
     moment ago, and nobody notices until a drive is emptier than expected.
 
-80. Weight a control by the size of what it does. Renaming a group sat in a
+70. Weight a control by the size of what it does. Renaming a group sat in a
     menu beside removing one — the lightest change in the app and the heaviest,
     two clicks each, indistinguishable. A name is renamed by double-clicking
     it, the way a name is everywhere else, and the menu keeps the thing that
     deserves a menu.
 
-81. A way out that the framework can route away is not a way out. Escape was
+71. A way out that the framework can route away is not a way out. Escape was
     supposed to abandon an in-place rename and simply did nothing: neither
     `onExitCommand` nor `onKeyPress(.escape)` reached a focused `TextField`.
     That mattered more than a missing shortcut, because clicking away *commits*
@@ -1039,14 +1012,14 @@ Earned against a real 248 GB archive; the stories are in git history.
     invisible one is the only thing standing between somebody and an
     irreversible-looking change.
 
-82. Move the files first, then the catalog. A catalog told about a move that
+72. Move the files first, then the catalog. A catalog told about a move that
     did not happen describes an archive nobody has, and nothing will ever
     correct it. A file that moved with the catalog not yet updated is found
     again by the path repair that already runs on every connect. Only one of
     those two is recoverable by doing nothing, and that is the one to fail
     towards.
 
-83. A rule named after a place stops being the rule it meant when the place
+73. A rule named after a place stops being the rule it meant when the place
     gains a second purpose. `ExportSetLayout.home` excluded the whole of the
     app's folder, on the reasoning that a part parked there is waiting rather
     than living — true while the only thing in that folder was the waiting
@@ -1057,7 +1030,7 @@ Earned against a real 248 GB archive; the stories are in git history.
     delivery away from a silent no-op. Exclude the thing the reason is about —
     the waiting room — not the folder it happened to be the only occupant of.
 
-84. Stamping every column of a write is row-scoped last-writer-wins in
+74. Stamping every column of a write is row-scoped last-writer-wins in
     disguise. Every upsert here rewrites the whole row, so the obvious
     implementation has each write claim authorship of every field — and a device
     that changed one column overwrites another device's edit with the stale
@@ -1066,47 +1039,47 @@ Earned against a real 248 GB archive; the stories are in git history.
     reading the row before and after, because an upsert cannot say which values
     it changed.
 
-85. A coverage test at the wrong granularity is worse than none, because it is
+75. A coverage test at the wrong granularity is worse than none, because it is
     believed. "Every shared table records something" passed while eleven
     separate statements wrote to those same tables and recorded nothing —
     assigning a photo to a group, pointing it at a source, repointing a copy
     that moved, deleting a photo. Test the write *paths*, not the tables.
 
-86. A sync test that creates and modifies in one breath passes with the bug
+76. A sync test that creates and modifies in one breath passes with the bug
     still in it. A new row's creation stamp expands to every column at send
     time, reading current values — so an unrecorded change to a row the other
     device has never seen travels anyway, carried by the creation. It only bites
     once the row is known elsewhere. Sync first, then change, then sync again;
     and prove the test fails without the fix.
 
-87. Measure the path nobody is watching, not only the one they are. An import is
+77. Measure the path nobody is watching, not only the one they are. An import is
     slow in front of somebody who asked for it; a first sync is slow on a device
     that has just had a drive plugged in. That one was five and a half minutes
     and nobody would have known until it happened to them.
 
-88. Assert in seconds against a real archive, not in multiples of a baseline.
+78. Assert in seconds against a real archive, not in multiples of a baseline.
     The import baseline is a bare INSERT at ten microseconds, so any bookkeeping
     at all looks like a large multiple while costing nothing anybody can feel.
     A threshold should fail when a person would notice.
 
-89. Anything stored and later compared must have a defined encoding, or the
+79. Anything stored and later compared must have a defined encoding, or the
     language quietly supplies one. Swift dictionaries have no iteration order,
     so re-saving an asset whose EXIF had not changed produced different text
     every time — invisible while the column was only written and read back, and
     with a journal it would have made every routine rescan look like the whole
     archive being rewritten.
 
-90. Sorting is an encoding. Swift's `String` ordering is Unicode collation, not
+80. Sorting is an encoding. Swift's `String` ordering is Unicode collation, not
     bytes; Rust, Kotlin and C# each do something else, and the differences only
     appear outside ASCII — so the mistake ships, and surfaces years later on one
     person's archive. Found three times in this codebase before it bit anything.
 
-91. A protocol earns its place when a second implementation is real and when
+81. A protocol earns its place when a second implementation is real and when
     failure is otherwise untestable. One seam — a place that lists, reads and
     appends files — bought the drive, the future courier, and the ability to
     test a yanked drive without a drive. Everything else stayed concrete.
 
-92. Interrupting a write is not the whole failure; resuming after one is. A
+82. Interrupting a write is not the whole failure; resuming after one is. A
     torn tail cost the records inside it, which was expected. What was not: the
     writer believed it had sent them, so nobody would ever offer them again —
     and appending after a half-written line splices onto it, which a reader stops
