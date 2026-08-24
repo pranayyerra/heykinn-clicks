@@ -148,12 +148,12 @@ Principles, not explanations. Each is a rule the app must keep and a name to
 cite it by; the defect that taught it is in the appendix, and the argument is in
 git. Where a test holds the rule, it is named.
 
-1. Exactly one residency domain in steady state; overlap is legal only inside
-   an active migration job; violations are surfaced, never auto-fixed.
+1. **Exactly one residency domain in steady state.** Overlap is legal only
+   inside an active migration job; violations are surfaced, never auto-fixed.
 2. **Never claim more than you checked.** A copy nobody read back is not
    verified, a sampled check says it sampled, and a check that reads no bytes
    may not set the field meaning "read".
-3. Cloud evidence is `none | verified`. Nothing writes `verified` without a
+3. **Cloud evidence is `none | verified`.** Nothing writes `verified` without a
    connected account, and the user is never asked to assert presence — asking
    once whether a library syncs is topology, not evidence about a photograph.
 4. **Redundancy is configured per storage group**: its own copy count, and
@@ -162,18 +162,19 @@ git. Where a test holds the rule, it is named.
    when each drive was last seen** so every device reaches the same answer
    (`StorageGroup.automaticDestinations`). A group never switches from named
    back to worked-out on its own.
-5. Never stage or copy what a target already holds; moved content is repointed,
-   never re-copied. **The app deletes only what it wrote** — with one exception
-   somebody has to ask for: a folder they imported from can be cleared of files
+5. **The app deletes only what it wrote**, never stages or copies what a target
+   already holds, and repoints moved content rather than re-copying it. One
+   exception, and somebody has to ask for it: a folder they imported from can be cleared of files
    the archive holds and has read back (`SourceFolderReclaim`).
-6. No destructive cleanup without explicit job state and confirmation, or proof
-   stronger than a prompt. The working copy needs no switch: it goes once every
+6. **No destructive cleanup without explicit job state and confirmation**, or
+   proof stronger than a prompt. The working copy needs no switch: it goes once every
    copy exists and has been read back.
-7. Interrupted work resumes; a crash or an unplug never corrupts the catalog.
-8. Defects are fixed in the code path that produces them, never by hand against
-   one catalog.
-9. A grant is remembered until it is taken back, and everything remembered is
-   listed somewhere it can be taken back from.
+7. **Interrupted work resumes**; a crash or an unplug never corrupts the
+   catalog.
+8. **Defects are fixed in the code path that produces them**, never by hand
+   against one catalog.
+9. **A grant is remembered until it is taken back**, and everything remembered
+   is listed somewhere it can be taken back from.
 10. **This device is a device like any other**, registered by default and given
     the share that fits. Forgetting it is how an archive stays off the boot
     disk. The number of devices is not capped.
@@ -226,6 +227,7 @@ git. Where a test holds the rule, it is named.
     off the archive (`AppStore.startingDestinations`). A photo in no group falls
     back to those defaults rather than to nothing, and is surfaced under Keep
     safe.
+
 ---
 
 ## The path
@@ -369,8 +371,8 @@ numbers it cost, because the number is what makes it memorable — and a lesson
 compressed past its evidence is a slogan.
 
 Rules that must not regress are invariants, above; these are the findings that
-produced them and the ones too specific to be rules. Ten were removed for
-saying what an invariant already says.
+produced them and the ones too specific to be rules. Anything that says only
+what an invariant says belongs there, not here.
 1. Cloud presence cannot be assumed — record evidence or nothing.
 2. Replication has a unit; for a split export it is the part, not the asset.
 3. Verification needs grades — an honest cheap check beats a proof too
