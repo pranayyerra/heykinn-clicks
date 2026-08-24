@@ -146,9 +146,16 @@ raw-SQL reader reaching the same answer about safety that the app does.
 
 1. Exactly one residency domain in steady state; overlap is legal only inside
    an active migration job; violations are surfaced, never auto-fixed.
-2. **Never claim more than you checked.** Sampled checks say they sampled;
-   matching Merkle roots never prove bytes; a copy nobody read back is not
-   verified.
+2. **Never claim more than you checked.** Sampled checks say they sampled; a
+   copy nobody read back is not verified; and a check that reads no bytes may
+   not set the field that means "read" — which is how 21,117 photographs came
+   to be reported as all read back by a check incapable of earning it.
+
+   The tree comparison this used to cite went for the same reason and is worth
+   remembering rather than naming: both its sides took their digests from the
+   catalog, so a shared asset matched *by construction* however far the bytes
+   had rotted. It is withdrawn (`SPEC-hashing.md` §4); ask what a check's
+   inputs are derived from before asking how clever it is.
 3. Cloud evidence is `none | verified`, and nothing writes `verified` without
    a connected account. The user is never asked to assert presence — a
    one-time question about their *setup* (does this library sync?) is

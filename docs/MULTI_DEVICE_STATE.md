@@ -62,7 +62,7 @@ a format only `NSKeyedArchiver` can read. Those turn "we used the platform" into
 │  replication planning · import · policy · projections     │
 ├──────────────────────────────────────────────────────────┤
 │  Conformance kernel                     portable by SPEC   ← §3
-│  hashing · Merkle · HLC · segment codec · merge rules ·    │
+│  hashing · HLC · segment codec · merge rules ·              │
 │  catalog schema · path normalisation                      │
 └──────────────────────────────────────────────────────────┘
 ```
@@ -171,7 +171,7 @@ implementation on every platform. The hashing half now exists:
 
 | | |
 |---|---|
-| [`docs/SPEC-hashing.md`](SPEC-hashing.md) | content hash, quick checksum, Merkle, schema fingerprint, string ordering |
+| [`docs/SPEC-hashing.md`](SPEC-hashing.md) | content hash, quick checksum, schema fingerprint, string ordering |
 | `Tests/…/HashingConformanceTests.swift` | 17 vectors, the executable form of it |
 | [`docs/SPEC-format.md`](SPEC-format.md) §1 | the hybrid logical clock — value, ordering, encoding, drift bound |
 | `Tests/…/HybridLogicalClockTests.swift` | 16 vectors |
@@ -181,9 +181,9 @@ Everything in the vectors is a **fixed expected value**, never a round trip. A
 test that hashes something and compares it to itself passes on every platform
 and proves nothing.
 
-The Merkle root vector was derived independently — by applying the written rules
-with `shasum` in a shell — rather than copied out of the Swift. That is what
-makes it a check of the implementation against the specification instead of
+The vectors were derived independently — by applying the written rules with
+`shasum` in a shell — rather than copied out of the Swift. That is what
+makes them a check of the implementation against the specification instead of
 against itself, and it is the standard the remaining vectors should meet.
 
 Deliberately covered: the 55/56/57-byte SHA-256 padding boundary, agreement
@@ -214,17 +214,12 @@ Lowercase hex. Reads that run short at EOF contribute what they got. The
 constants are the specification, not tuning parameters — changing one
 invalidates every stored checksum.
 
-**Merkle tree.**
-
-- `leaf = SHA-256("leaf:" ‖ key ‖ 0x1F ‖ digest)`, key and digest as UTF-8
-- `node = SHA-256(0x01 ‖ left ‖ right)` over raw 32-byte digests
-- an odd node at a level is **promoted unchanged**, never paired with itself
-- leaves sorted by key — **to be specified as bytewise over UTF-8** (H2), which
-  matches today's behaviour for the ASCII keys in use
-- root rendered lowercase hex only at the boundary
-
-The domain separation (`"leaf:"`, `0x01`) is already right and should be stated
-as required, not incidental.
+**Merkle tree — withdrawn**, and not part of the kernel a second implementation
+has to match. The construction is in git history and the reasoning is in
+[`SPEC-hashing.md`](SPEC-hashing.md) §4: both sides of the comparison took their
+digests from the catalog, so a shared asset matched by construction however far
+the bytes had rotted. H2 — its leaf ordering — was fixed before it went, which
+is why the hazard table above records it as addressed rather than moot.
 
 ### Which language for the kernel
 
