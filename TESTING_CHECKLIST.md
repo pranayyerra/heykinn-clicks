@@ -343,4 +343,4 @@ Restore.
 - [ ] Every section above passed on a clean machine
 - [ ] `swift test` green, including the DMG tests with the flag set
 - [ ] Walked once against the real archive, read-only where possible
-- [ ] Known gaps in `PRODUCTION_READINESS.md` still accurate
+- [ ] Known gaps in `docs/KNOWN-GAPS.md` still accurate
