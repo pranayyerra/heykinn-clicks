@@ -366,9 +366,9 @@ somebody reading it and drawing the wrong conclusion.
 
 ## Appendix: lessons
 
-Earned against a real 248 GB archive. Each is a defect that shipped, with the
-numbers it cost, because the number is what makes it memorable — and a lesson
-compressed past its evidence is a slogan.
+Earned against a real archive. Each is a defect that shipped, with the scale it
+cost, because the scale is what makes it memorable — and a lesson compressed
+past its evidence is a slogan.
 
 Rules that must not regress are invariants, above; these are the findings that
 produced them and the ones too specific to be rules. Anything that says only
@@ -498,9 +498,10 @@ what an invariant says belongs there, not here.
     check it, and the message read as pending rather than impossible.
 39. Copies and photos are two numbers, and the gap between them is the size of
     the archive. Counting replica rows and calling the total "assets" told a
-    user with 24,639 photos that 49,236 had been checked — twice their whole
-    archive. Nothing false was claimed about the checking; the label was simply
-    on the wrong noun, which under invariant 2 is the same defect.
+    user that nearly twice as many things had been checked as they had
+    photographs at all. Nothing false was claimed about the checking; the
+    label was simply on the wrong noun, which under invariant 2 is the same
+    defect.
 40. `unzip` cannot read a real Google export. It mangles every non-ASCII byte
     to a literal `?` — in its listing as well as on disk — then aborts
     mid-archive with a "disk full" error that has nothing to do with the disk,
@@ -545,9 +546,9 @@ what an invariant says belongs there, not here.
 
 46. A backup is not complete because the photos are in it. Snapshot
     verification checked `integrity_check` and the asset count, which was the
-    whole catalog when it was written. A snapshot taken later held all 24,639
-    assets and none of the 24,417 provider payloads captured beside them —
-    `asset_tags` was not even present — and was logged as verified. The test is
+    whole catalog when it was written. A snapshot taken later held every asset
+    and none of the provider payloads captured beside them — `asset_tags` was
+    not even present — and was logged as verified. The test is
     now the general one: no table the live catalog holds rows in may be empty
     or absent in the copy, with the tables read from the schema so one added
     later is covered without anybody remembering to. Counts are not compared;
@@ -579,8 +580,9 @@ what an invariant says belongs there, not here.
     forgetting a Takeout download counted the photos that would be left with no
     copy — and built its lookup from the export's set id while replicas record
     the part's file name. Nothing matched, so it reported zero and said the
-    download could be forgotten safely, on an archive where 21,380 photos live
-    only inside it. The test agreed, because it had been written from the same
+    download could be forgotten safely, on an archive where nearly every
+    photo lived only inside it. The test agreed, because it had been written
+    from the same
     assumption. When a number exists to stop somebody, check it against the
     real shape and assert that the wrong shape finds nothing.
 
@@ -610,9 +612,9 @@ what an invariant says belongs there, not here.
     looking at the data — or by asserting that the wrong shape finds nothing.
 
 53. A subset is counted in the units of the set it sits under. Keep safe led
-    with "Every photo is in 2 places", totalling 21,401, and said directly
-    underneath that "24,618 of them are inside your Google Takeout files" — a
-    subset larger than the set it was drawn from, printed one line apart. Both
+    with "Every photo is in 2 places" over a total, and said directly underneath
+    that a *larger* number of them were inside Google Takeout files — a subset
+    bigger than the set it was drawn from, printed one line apart. Both
     numbers came off the same pass over replicas; only one of them had been
     filtered to photos, because a Live Photo is one photo and two files. A
     reader who notices that stops believing the rest of the screen, and they
@@ -620,7 +622,7 @@ what an invariant says belongs there, not here.
     by one rule.
 
 54. A walk of the whole archive must not hide behind a computed property.
-    `photoCountByStorageGroup` looked like a field and walked 24,639 assets on
+    `photoCountByStorageGroup` looked like a field and walked every asset on
     every read. That was survivable while one list read it once, and became a
     ten-second freeze when the grid read it per cell — and from inside a sort
     comparator, where every comparison paid for a full pass. What made it hard
@@ -719,10 +721,10 @@ what an invariant says belongs there, not here.
     background patrol exists because reading bytes is the only thing that finds
     rot. For a copy counted inside an export part there are no bytes of its own
     to read, so it was confirmed by looking for a file with the right name — and
-    then stamped `lastVerifiedAt` anyway. That is how 21,117 photos came to be
+    then stamped `lastVerifiedAt` anyway. That is how a whole archive came to be
     reported as *all read back*: the reassurance the patrol exists to earn,
     awarded for the one check incapable of earning it. Worse, finding that name
-    meant enumerating a 2 TB volume from its mount point, once per photo, to
+    meant enumerating an entire volume from its mount point, once per photo, to
     rediscover a path the catalog already held — so the forty files read every
     half hour were almost never files, almost never read, and cost a recursive
     walk of the disk each. Ask what a check proves before deciding what it is

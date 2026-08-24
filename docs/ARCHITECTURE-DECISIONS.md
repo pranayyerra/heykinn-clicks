@@ -282,8 +282,8 @@ the comparison is against one full segment, so a small archive never writes one.
 
 **A related compression, already built:** creating a row is recorded as a single
 whole-row stamp rather than one per column, and expands again on the way out.
-Per-column stamping measured 16× slower on import and 620,000 journal rows for
-this archive; as one per row it is 21,400.
+Per-column stamping measured 16× slower on import and wrote 29 journal rows per
+asset; as one per row it is one.
 
 **Status:** decided and built. `SPEC-format.md` §4, `CheckpointSyncTests`.
 

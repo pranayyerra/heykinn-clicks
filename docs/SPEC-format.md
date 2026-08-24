@@ -229,9 +229,8 @@ into one record per column, so what travels is unchanged either way.
 This is a storage compression, not a coarsening of the merge: updates after
 creation still write per-column entries, and per-field resolution is unaffected.
 It exists because it was measured. Stamping each column separately made a
-2,000-asset import **16× slower** and wrote 29 entries per asset — 620,000 for a
-21,400-asset archive, on the one path a user waits for. As one entry per new
-row it is 5.5× and 21,400 entries.
+2,000-asset import **16× slower** and wrote 29 entries per asset, on the one path
+a user waits for. As one entry per new row it is 5.5× and one entry per asset.
 
 ### 2.4 Merge
 

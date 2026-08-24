@@ -43,7 +43,7 @@ final class VolumeEventsTests: XCTestCase {
 
         var warnedAbout: [URL?] = []
         monitor.volumeWillUnmount = { warnedAbout.append($0) }
-        let leaving = URL(fileURLWithPath: "/Volumes/Nina's Back")
+        let leaving = URL(fileURLWithPath: "/Volumes/Owner's Back")
         events.onVolumeWillUnmount?(leaving)
         await Task.yield()
         try? await Task.sleep(nanoseconds: 50_000_000)

@@ -164,7 +164,7 @@ neither was reachable from a test: a sentence built inside a view, and a badge
 whose colour disagreed with the screen next door.
 
 - [ ] **Adding photos states its plan rather than asking.** Choosing a folder
-      gives one sentence — *"Every photo on Nina's Back and My Passport"* — with
+      gives one sentence — *"Every photo on Owner's Back and My Passport"* — with
       `Change…` beside it, not a form. The form is still there behind the link,
       and opens by itself if the set already names its own drives
 - [ ] **The reason is only given when there was a choice.** Two drives and two

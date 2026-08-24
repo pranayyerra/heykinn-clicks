@@ -3,8 +3,8 @@
 Three levels, cheapest first. Do them in order — each one rules out a class of
 problem before the next one costs you a drive plug.
 
-**Start on a spare USB stick, not on Nina's Back or My Passport.** Everything
-here writes to a drive. The writes are confined to `HeykinnClicks/Sync/` and
+**Start on a spare USB stick, not on the drives holding your archive.**
+Everything here writes to a drive. The writes are confined to `HeykinnClicks/Sync/` and
 touch no photographs, but a first run on the drives holding your only copies is
 not the moment to find that out.
 
@@ -100,9 +100,9 @@ rule. What should *not* happen is being asked twice on the same device.
 
 ## What "working" looks like on your archive
 
-A first sync of 21,400 photographs is around **10 seconds** on the receiving
-device and adds about **2.5 seconds** to an import. Both are measured by
-`ChangeJournalCostTests` against those numbers, so if either is wildly different
+A first sync of 20,000 photographs is around **10 seconds** on the receiving
+device and adds about **2.3 seconds** to an import. Both are measured by
+`ChangeJournalCostTests` against that reference size, so if either is wildly different
 on real hardware, that is worth knowing and worth reporting back.
 
 ---

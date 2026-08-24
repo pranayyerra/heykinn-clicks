@@ -438,10 +438,11 @@ runs the zero-button pipeline: **scan → reconcile → extract → import**.
 
 ### Export-part replication, spot checks, and the transfer corridor
 
-A 248 GB export is **12 zips holding 24,626 photos**. Replicating it means
-having those 12 zips on both drives — modelling it per-asset turns 12 file
-copies into 24,618 pointless operations and hides that a second drive already
-carrying the same zips is *already compliant*. So the archive is modelled as
+A Google export is **a handful of zips holding tens of thousands of photos**.
+Replicating it means having those zips on both drives — modelling it per-asset
+turns a dozen file copies into tens of thousands of pointless operations, and
+hides that a second drive already carrying the same zips is *already
+compliant*. So the archive is modelled as
 `ExportPart`s, and an asset is present on a drive because that drive holds
 **its own** part (not because the drive holds any satisfied part — that would
 claim redundancy that evaporates the moment the drives hold different subsets).

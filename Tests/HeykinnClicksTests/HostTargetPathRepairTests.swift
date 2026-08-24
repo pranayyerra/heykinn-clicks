@@ -88,7 +88,7 @@ final class HostTargetPathRepairTests: XCTestCase {
 
     /// A drive is not this device, and its absence means it is unplugged.
     func testAnExternalDriveIsNeverRepointedIntoTheArchive() {
-        var drive = host(at: "/Volumes/Nina's Back")
+        var drive = host(at: "/Volumes/Owner's Back")
         drive.kind = .externalVolume
         XCTAssertNil(HostTargetPathRepair.repairedPath(
             for: drive,

@@ -4,14 +4,14 @@ import XCTest
 /// What the journal costs on the path that matters.
 ///
 /// `storage_groups` has six columns and a handful of rows, so stamping it is
-/// free by inspection. `assets` has twenty-nine and this archive holds 21,400 of
-/// them, all written in one go during an import — the one path a user actually
-/// waits for.
+/// free by inspection. `assets` has twenty-nine, and a reference archive of
+/// 20,000 of them is written in one go during an import — the one path a user
+/// actually waits for.
 ///
 /// These were written before the code they measure, and twice earned it. The
-/// first run said a per-column stamp cost 16× and 620,000 rows, which is why
-/// creations are recorded as one whole-row entry. The first-sync case said a new
-/// device meeting this archive would take **five and a half minutes**, which is
+/// first run said a per-column stamp cost 16× and 29 rows per asset, which is
+/// why creations are recorded as one whole-row entry. The first-sync case said a
+/// new device meeting that archive would take **over five minutes**, which is
 /// how the missing transaction and a quadratic scan in the merge were found.
 ///
 /// Kept as absolute seconds against a real archive size rather than as ratios,
@@ -104,9 +104,9 @@ final class ChangeJournalCostTests: XCTestCase {
           without journal : \(String(format: "%.3f", baseline))s
           with journal    : \(String(format: "%.3f", withJournal))s  (\(String(format: "%.1f", ratio))×)
           stamp rows      : \(stampRows)  (\(stampRows / Int64(count)) per asset)
-          extrapolated to 21,400 assets: \
-        \(String(format: "%.1f", withJournal / Double(count) * 21_400))s, \
-        \(stampRows / Int64(count) * 21_400) stamp rows
+          extrapolated to 20,000 assets: \
+        \(String(format: "%.1f", withJournal / Double(count) * 20_000))s, \
+        \(stampRows / Int64(count) * 20_000) stamp rows
         ────────────────────────────────────────────────────────────
 
         """)
@@ -126,7 +126,7 @@ final class ChangeJournalCostTests: XCTestCase {
         // a user nothing. What a person actually experiences is the extra
         // seconds on an import they asked for, so that is what this holds to.
         XCTAssertLessThan(
-            withJournal / Double(count) * 21_400, 15.0,
+            withJournal / Double(count) * 20_000, 15.0,
             "Journalling would add real time to an import of this archive"
         )
     }
@@ -157,15 +157,15 @@ final class ChangeJournalCostTests: XCTestCase {
         ── first sync, \(count) assets ──────────────────────────────
           records         : \(records.count)
           merge           : \(String(format: "%.3f", elapsed))s
-          extrapolated to 21,400 assets: \
-        \(String(format: "%.1f", elapsed / Double(count) * 21_400))s
+          extrapolated to 20,000 assets: \
+        \(String(format: "%.1f", elapsed / Double(count) * 20_000))s
         ────────────────────────────────────────────────────────────
 
         """)
 
         XCTAssertEqual(try destination.fetchAssets().count, count, "The archive did not arrive")
         XCTAssertLessThan(
-            elapsed / Double(count) * 21_400, 60.0,
+            elapsed / Double(count) * 20_000, 60.0,
             "A first sync of this archive would take over a minute"
         )
     }

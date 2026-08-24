@@ -116,7 +116,7 @@ final class StatusReaderConformanceTests: XCTestCase {
     /// SQLite reaches the same answer the app puts on its own front screen.
     func testAForeignReaderCountsTheSamePlacesTheAppDoes() throws {
         let (store, path) = try makeArchive()
-        let a = try addDrive(store, "Nina's Back")
+        let a = try addDrive(store, "Owner's Back")
         let b = try addDrive(store, "My Passport")
         for name in ["one.jpg", "two.jpg", "three.jpg"] {
             let asset = try addPhoto(store, name)
@@ -145,7 +145,7 @@ final class StatusReaderConformanceTests: XCTestCase {
     /// photograph held in fewer places drags the answer down for everybody.
     func testAForeignReaderSeesThePhotographThatIsShort() throws {
         let (store, path) = try makeArchive()
-        let a = try addDrive(store, "Nina's Back")
+        let a = try addDrive(store, "Owner's Back")
         let b = try addDrive(store, "My Passport")
 
         let safe = try addPhoto(store, "safe.jpg")
@@ -172,7 +172,7 @@ final class StatusReaderConformanceTests: XCTestCase {
     /// rows instead of present ones would call the archive safe.
     func testARecordedButAbsentCopyIsNotCounted() throws {
         let (store, path) = try makeArchive()
-        let a = try addDrive(store, "Nina's Back")
+        let a = try addDrive(store, "Owner's Back")
         let b = try addDrive(store, "My Passport")
         let asset = try addPhoto(store, "one.jpg")
         try store.catalog.upsertReplicaState(TargetReplicaState(

@@ -47,7 +47,7 @@ The split falls where it does because of two facts:
 - **The catalog already holds the answers.** Photo rows, copy records, group
   membership and risk are all plain columns. A reader needs no clock, no device
   identity, no journal, no merge and no segment codec.
-- **21,380 of 21,401 photographs live inside zips**, so displaying one requires
+- **Nearly every photograph lives inside a zip**, so displaying one requires
   O1. Thumbnails do not help — they live in a local `Caches` directory and never
   travel on the drive.
 

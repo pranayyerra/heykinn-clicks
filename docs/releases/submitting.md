@@ -84,8 +84,11 @@ The tag is the only reliable answer to "what was actually in that build", since
 
 ## 5. Build and upload
 
+The signing identity is whatever `security find-identity -v -p codesigning`
+lists as `Apple Distribution: …`, team `344B87D3CV`.
+
 ```bash
-./Packaging/bundle.sh --release --appstore --sign "Apple Distribution: PRANAY HASAN YERRA (344B87D3CV)" --build-number 153
+./Packaging/bundle.sh --release --appstore --sign "$(security find-identity -v -p codesigning | grep -o 'Apple Distribution: [^"]*' | head -1)" --build-number 155
 ./Packaging/make-pkg.sh
 ```
 

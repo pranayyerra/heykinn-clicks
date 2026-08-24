@@ -78,9 +78,9 @@ An earlier draft listed these as work. They exist.
 - **"At least 2 external drives required"** reached the onboarding copy and was
   wrong. A target is a *device*: this Mac, or an external drive. Mac plus one
   drive is an ordinary setup.
-- **"248 GB / 24,626 photos"** used two different measurements as one. 248 GB is
-  the downloaded Google export — twelve zips — and the archive built from it is
-  smaller. Say which of the two a number is.
+- **A download size and a photo count printed as one fact** were two different
+  measurements. The bytes are the downloaded Google export — a set of zips — and
+  the archive built from it is smaller. Say which of the two a number is.
 - **Staging is not user-choosable.** It is the `Staging` folder inside the
   resolved archive directory: transit, not a library.
 - **Sandbox entitlements alongside `app-sandbox = false` are inert**, and

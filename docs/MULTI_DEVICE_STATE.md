@@ -110,10 +110,8 @@ unwritten rule. That is why these were done first rather than at porting time.
 ### H3, and why it turned out to be smaller than it looked
 
 It was load-bearing rather than a corner: all but a couple of dozen photographs
-in this archive live inside Takeout zips on the drives, so a client that cannot
-read them sees almost nothing. (21,380 of 21,401, when it was counted in
-August 2026 — a reading of one archive on one day, which is what the benchmark
-tables below extrapolate from and the only reason a figure appears at all.) And it could not be a shim — what a second
+in a real archive live inside Takeout zips on the drives, so a client that cannot
+read them sees almost nothing. And it could not be a shim — what a second
 platform needs is entry contents that are **byte-identical**, because the hash of
 those bytes is a recorded fact.
 
@@ -472,20 +470,20 @@ same values, which is no change and therefore no news.
 One stamp row per changed field is free for storage groups. On `assets` it was
 not, and the number decided the design rather than the schedule:
 
-| | fresh 2,000-asset import | extrapolated to 21,400 |
+| | fresh 2,000-asset import | extrapolated to 20,000 |
 |---|---|---|
-| One entry per column | 29 entries/asset | 7.8 s, 620,600 entries |
-| One entry per new row | 1 entry/asset | **2.5 s**, 21,400 entries |
+| One entry per column | 29 entries/asset | 7.3 s, 580,000 entries |
+| One entry per new row | 1 entry/asset | **2.3 s**, 20,000 entries |
 
 And the path that had never been measured at all — a new device meeting a full
 archive for the first time, which is what happens when a drive is plugged into a
 second device:
 
-| | 2,000 assets (58,000 records) | extrapolated to 21,400 |
+| | 2,000 assets (58,000 records) | extrapolated to 20,000 |
 |---|---|---|
-| As first written | 31.6 s | **5 min 38 s** |
-| One transaction for the batch | 2.0 s | 21.3 s |
-| …and the quadratic scan removed | **1.0 s** | **10.7 s** |
+| As first written | 31.6 s | **5 min 16 s** |
+| One transaction for the batch | 2.0 s | 19.9 s |
+| …and the quadratic scan removed | **1.0 s** | **10.0 s** |
 
 Three causes, in order of size. **No transaction**, so every one of 58,000
 records committed separately. **A quadratic scan**: building a row searched the
@@ -787,10 +785,10 @@ reader reaching the app's own answer. What remains is choosing a platform.
 - **Does the zip-as-replica feature survive cross-platform?** H3 is not just
   `/usr/bin/unzip` — it implies every client needs a zip reader that agrees
   byte-for-byte on entry extraction. Given that all but a handful of the photos
-  on these drives live inside Takeout zips, this is load-bearing, not a corner.
+  on a real drive live inside Takeout zips, this is load-bearing, not a corner.
 - **Segment size cap and checkpoint cadence.** Both want measuring against a real
-  archive — the one in front of us, roughly 21,400 assets and 43,000 replica
-  rows when the tables above were measured, is a reasonable yardstick.
-- **What does the UI say about staleness?** "Last synced from Nina's Back, three
+  archive; the 20,000 assets and twice as many replica rows the tables above
+  extrapolate to is a reasonable yardstick.
+- **What does the UI say about staleness?** "Last synced from Owner's Back, three
   days ago" is honest and useful. Less clear what to say when devices are known
   to have diverged and no drive has bridged them yet.
