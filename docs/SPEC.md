@@ -144,303 +144,88 @@ raw-SQL reader reaching the same answer about safety that the app does.
 
 ## Invariants — never regress
 
+Principles, not explanations. Each is a rule the app must keep and a name to
+cite it by; the defect that taught it is in the appendix, and the argument is in
+git. Where a test holds the rule, it is named.
+
 1. Exactly one residency domain in steady state; overlap is legal only inside
    an active migration job; violations are surfaced, never auto-fixed.
-2. **Never claim more than you checked.** Sampled checks say they sampled; a
-   copy nobody read back is not verified; and a check that reads no bytes may
-   not set the field that means "read" — which is how 21,117 photographs came
-   to be reported as all read back by a check incapable of earning it.
-
-   The tree comparison this used to cite went for the same reason and is worth
-   remembering rather than naming: both its sides took their digests from the
-   catalog, so a shared asset matched *by construction* however far the bytes
-   had rotted. It is withdrawn (`SPEC-hashing.md` §4); ask what a check's
-   inputs are derived from before asking how clever it is.
-3. Cloud evidence is `none | verified`, and nothing writes `verified` without
-   a connected account. The user is never asked to assert presence — a
-   one-time question about their *setup* (does this library sync?) is
-   topology, not presence, and may not be stretched into one. An unavailable
-   or empty source yields a refusal, never a negative.
-
-   That one question survives because PhotoKit cannot answer it and there is no
-   supported signal that can. `PHCloudIdentifier` works on an account signed out
-   of iCloud Photos; `PHImageResultIsInCloudKey` means "not on this device",
-   true of any optimised library; `PHAssetSourceType.cloudShared` is Shared
-   Albums. Inferring it anyway would write false residency, which is the failure
-   this invariant exists to prevent.
-4. **Redundancy is configured per storage group.** Whether a group is *shown*
-   is invariant 21's business, not this one's. Each group carries its own
-   copy count and a destination mode: let the app work out the required devices
-   deterministically, or name specific devices — "this export: 2 copies, on
-   Archive Drive and the NAS". Chosen mode places copies only on those devices;
-   automatic mode takes the drives with the most room, breaking ties on which
-   was registered first, and takes as many as the copy count asks for
-   (`StorageGroup.automaticDestinations`). The figure it sorts on is the free
-   space **recorded when each drive was last seen**, not measured live — so a
-   drive plugged into another device still counts, and every device reaches the
-   same answer from the same recorded facts. Measuring live would have each
-   device answer from whatever it could see, and a group's destinations would
-   flip at every sync. A source never silently switches from
-   chosen back to automatic: where a person's photos live is a decision they
-   are entitled to make, and an archive that quietly
-   redistributes itself is one nobody can reason about.
-
-   The number of registered devices is not capped, and devices are *expected*
-   to hold different content — one source's destinations have nothing to do
-   with another's. One device still holds at most one copy of an asset, and
-   identity is still the marker file, never a mount path.
-
-   **Ask what the person wanted to decide before deciding it well on their
-   behalf.** Two earlier models were wrong here and are worth naming so neither
-   returns.
-   The first capped devices at the copy count and replicated everything to
-   every device, which made "this device holds the archive" and "this photo
-   has enough copies" the same sentence. The second let the app choose
-   destinations by free space, which fixed the cap and took the decision away
-   from the user in the same move.
-
-   **The second is not what automatic mode does today, and the difference is
-   the whole of it.** That version ran inside `PlacementPlanner`, per asset,
-   over devices the user had *named* — it overruled them. Today's rule runs one
-   layer up, only for a group where nobody has named anything, and it produces
-   a named list the planner then honours in order. Free space is still never
-   policy inside the planner: a destination without room is a reported
-   shortfall, never a silent substitution. What changed is what a group
-   resolves to when the user has expressed no preference at all — previously
-   registration order, which knew nothing about anything.
-5. Never stage or copy what a target already holds; never delete
-   archive-backed content. **A folder somebody imported from is read and never
-   written, with one exception they have to ask for**: once the archive holds a
-   file's exact bytes on the devices its set names, and has read one of those
-   copies back, the folder's copy can be moved to the Trash on request. Never
-   automatically, never a file the app did not import, and never on the strength
-   of copies nothing has read (`SourceFolderReclaim`). Everything else the app
-   deletes is its own — the working copy in staging, a spare form of an export
-   it put on a drive.
-   Beyond that: moved content is repointed, never re-copied. **The
-   host device is not exempt in principle** — a folder on this device's own disk
-   is content the host target already holds, and copying it into the managed
-   folder writes a second copy on one disk, which is not a second copy of
-   anything. It *is* exempt in fact today, and that gap is named in the path
-   below rather than papered over: the `volume:` replica form resolves
-   relative to a target's root, so recording an arbitrary device path in it would
-   name a file that does not exist. Honouring this for the host device needs
-   an absolute-path replica form first.
-6. No destructive cleanup without explicit job state and confirmation — or,
-   for future reclamation, the listed proof, which is stronger than a prompt.
-   The working copy on this device follows the same rule and has no switch: it
-   goes once every copy exists *and* has been read back, so a switch could only
-   ever have kept a duplicate the app does not count as one of your copies.
+2. **Never claim more than you checked.** A copy nobody read back is not
+   verified, a sampled check says it sampled, and a check that reads no bytes
+   may not set the field meaning "read".
+3. Cloud evidence is `none | verified`. Nothing writes `verified` without a
+   connected account, and the user is never asked to assert presence — asking
+   once whether a library syncs is topology, not evidence about a photograph.
+4. **Redundancy is configured per storage group**: its own copy count, and
+   devices either named or worked out. Worked out means the drives with the
+   most room, ties broken by registration order, from free space **recorded
+   when each drive was last seen** so every device reaches the same answer
+   (`StorageGroup.automaticDestinations`). A group never switches from named
+   back to worked-out on its own.
+5. Never stage or copy what a target already holds; moved content is repointed,
+   never re-copied. **The app deletes only what it wrote** — with one exception
+   somebody has to ask for: a folder they imported from can be cleared of files
+   the archive holds and has read back (`SourceFolderReclaim`).
+6. No destructive cleanup without explicit job state and confirmation, or proof
+   stronger than a prompt. The working copy needs no switch: it goes once every
+   copy exists and has been read back.
 7. Interrupted work resumes; a crash or an unplug never corrupts the catalog.
-8. Defects are fixed in the code path that produces them — the import path,
-   the scan, startup reconciliation — so every install benefits, and so the
-   fix runs before the wrong answer is shown rather than a launch after it.
-   Never by hand against one catalog.
-
+8. Defects are fixed in the code path that produces them, never by hand against
+   one catalog.
 9. A grant is remembered until it is taken back, and everything remembered is
-   listed somewhere it can be taken back from. Re-asking a question the user
-   has already answered is a defect, not caution — and a decision with no way
-   to reverse it is worse than one the app never offered.
-10. **This device is a device like any other.** It is registered as a target
-    by default, and placement gives it a share sized by what fits — not the
-    whole archive. Under the old every-device-holds-everything model the host
-    had to be all-or-nothing, because a boot disk that could not take the full
-    archive could not be a target at all; `k`-of-`n` removes that cliff. A
-    full boot disk simply stops being chosen for new content, and the drives
-    take it. Forgetting the host target remains the way to keep the archive
-    off this device entirely.
+   listed somewhere it can be taken back from.
+10. **This device is a device like any other**, registered by default and given
+    the share that fits. Forgetting it is how an archive stays off the boot
+    disk. The number of devices is not capped.
 11. **Devices are compared only where they overlap, and only by reading.**
-    Nothing may infer damage from two devices holding different content: that
-    is the normal steady state. A cross-device check whose inputs are both
-    derived from the catalog compares the catalog to itself and proves
-    nothing, however elaborate the structure it uses to do it — so ask what a
-    check's inputs are derived from before asking how clever it is.
-
-12. **No operation may require two devices connected at once.** One cable and
-    two drives is the ordinary setup, not an exotic one. Work that needs both
-    is work that never runs: it does not fail, it reports "nothing to do" for
-    ever, which is the most expensive kind of wrong. Everything is per-device
-    and resumable, and anything comparative reads what is here, records it, and
-    meets the other reading in a later session — which is a fact about drives,
-    not a weakening of the evidence (invariant 2 still applies: two readings
-    are still two readings, whenever they were taken).
-13. **A marker naming another archive is never overwritten silently.**
-    Registration reads the marker before writing one, and where it names a
-    different archive it stops and asks (`DriveMarkerConflict`,
-    `MarkerConflictTests`). It applies to every archive equally — the real one
-    must not be able to quietly claim a test archive's drive either.
-
-    Found by doing it: setting up a throwaway archive for screenshots, with a
-    real drive mounted, registered that drive and overwrote the real archive's
-    marker. Nothing was lost — the volume UUID is a fallback and it held — but
-    the archive was relying on its backup identity for a drive plugged into the
-    device, and nothing said so.
-
-    Two archives on one device is not exotic; the app itself offers a test
-    archive beside the real one. And the rule reaches further than registration:
-    a folder is adopted because it carries a marker naming *this* target, never
-    because it sits where one would expect, which is what lets
-    `HostTargetPathRepair` find this device's own copy again after the archive
-    directory moves without risking somebody else's.
-
-14. **Two devices given the same changes reach the same answers.** Including
-    which of two conflicting edits won. If two devices resolve one conflict
-    differently they never converge again, and nothing afterwards can detect it
-    — so the merge is order-independent, idempotent, and total: every tie breaks
-    on device id, and no device is authoritative.
-
-15. **No cloud, account, or network may ever be required.** Metadata travels on
-    the drives that already carry the photographs. A courier may be *offered*,
-    never depended on, and the test is that deleting it entirely loses nothing.
-    A device is allowed to be offline for a year and then catch up from a drive.
-
-16. **What is true of a device never travels.** Mount paths, place handles,
-    the archive lock, the local work queue, caches. A `/Volumes` path from
-    another device is not a weaker fact, it is a meaningless one, and recording it
-    as though it meant something is the same failure as claiming an unverified
-    copy. `CatalogScope` is the list, and it is enforced by a test rather than by
-    memory.
-
-17. **Anything recorded and later compared is defined by specification, not by
-    implementation.** Hashes, orderings, encodings, the on-drive format. Swift's
-    `String` ordering is not Rust's, Kotlin's or C#'s; JSON object key order is
-    not stable unless it is made so; an integer and a float are one JSON number
-    and two SQLite values. Each of those was a live defect found by writing the
-    rules down. A value whose definition is "whatever the Swift does" cannot be
-    reproduced by a second implementation, and the archive is meant to outlive
-    this one.
-
+    Holding different content is the normal state, not damage — and a check
+    whose two inputs both come from the catalog compares it to itself.
+12. **No operation may require two devices connected at once.** Anything
+    comparative reads what is here, records it, and meets the other reading
+    later; two readings are two readings whenever they were taken.
+13. **A marker naming another archive is never overwritten silently**
+    (`DriveMarkerConflict`). A folder is adopted because it carries a marker
+    naming *this* target, never because it sits where one would expect.
+14. **Two devices given the same changes reach the same answers**, including
+    which of two conflicting edits won. Order-independent, idempotent, total;
+    ties break on device id and no device is authoritative.
+15. **No cloud, account, or network may ever be required.** A courier may be
+    offered, never depended on: delete it entirely and nothing is lost.
+16. **What is true of a device never travels** — mount paths, handles, locks,
+    caches. `CatalogScope` is the list, enforced by a test.
+17. **Anything recorded and later compared is defined by specification**, not by
+    what one language happens to do (`SPEC-hashing.md`, `SPEC-format.md`).
 18. **A newer catalog, or a newer drive, is refused rather than downgraded.**
-    An older build must not open what a newer one wrote, because every upsert
-    rewrites whole rows and would silently discard the columns it does not know.
-    Version parity across devices and app stores is not achievable, so the
-    failure is made loud instead: refusing costs somebody a sync, and the
-    alternative costs them data they will not notice losing.
-
-19. **Nothing on screen uses a word the app invented.** Enforced by
-    `DocumentedRulesTests`, because it had been swept by hand once and declared
-    finished while the photo library's filter still read *All domains* and
-    registering a drive still promised to queue "all existing Local assets for
-    replication". The person using this is
-    not technical and should never have to become so. They own *drives*,
-    *photos*, *copies*, and the question *are my photos safe* — and every screen,
-    prompt, error and log line answers in those terms.
-
-    A *target*, a *replica*, a *catalog*, a *marker*, a *residency domain*, a
-    *checkpoint*, a *merge*, a *journal* — these are our words for our problems.
-    They may live in the code and in these documents, where they are precise and
-    earn their keep, and they may not cross into the interface. The test is not
-    whether a sentence is accurate; it is whether somebody who has never read
-    this document knows what to do next.
-
-    **Renaming a concept and removing it are different acts**, and the five that
-    follow are the second. They were argued out separately and are recorded here
-    because each is a thing that must not come back.
-
-20. **The app states what it is about to do rather than asking.** Adding photos
-    gives one sentence — *"Every photo on Nina's Back and My Passport"* — with
-    `Change…` beside it, not a form whose answers are already correct. The whole
-    form is still there behind the link, and opens by itself for a set that
-    already names its own devices.
-
-    This became possible only when placement acquired a reason worth showing.
-    While the answer was "whichever drives were registered first", there was
-    nothing to say and the controls were the only honest way to show the
-    arrangement. **A control is often a missing explanation**, and the reverse
-    holds: the app may only decide for somebody where it can say why in one
-    sentence they could check, and it may only claim a reason where one exists —
-    naming both of two drives is not a judgement about room.
-
-21. **A row, a prompt or a control appears where something differs.** The
-    storage screen shows one line while every set of photos is kept the same
-    way, because a set exists per import and six identical rows answer "where
-    did this come from", which is provenance, on the screen asked "are my photos
-    safe" (`StorageGroup.sharedRule`). A drive nobody has claimed asks one
-    question with two named buttons; a drive already in use, or carrying another
-    archive's ID file, asks nothing, because the answer is already known.
-
-    This is also what protects the case that cannot be automated. Somebody who
-    keeps one set off the drive they travel with has a set that differs, so it
-    does not collapse — no rule has to detect the intention, because the
-    difference *is* the intention.
-
-22. **Where a photograph is kept is observed, never set.** A control whose only
-    effect is to make the app start reporting a discrepancy is a trap however
-    well it is worded. Moving content is a job with a confirmation, and it is
-    the only thing that changes where a photograph lives; the app's record
-    follows the bytes. `ResidencyIsObservedTests` fails if a hand-set path
-    returns.
-
-23. **The answer comes first, and it is the worst true thing.** Every screen
-    that reports safety leads with one sentence, ordered: nothing yet, no drive,
-    damaged, in no place at all, asking for more copies than there are drives,
-    behind, in one place only, safe (`SafetyAnswer`). One archive has one answer
-    — two screens working it out separately is how a damaged copy came to be
-    described as still copying on the screen people open first.
-
+    An older build would rewrite whole rows and discard the columns it never
+    heard of.
+19. **Nothing on screen uses a word the app invented.** Target, replica,
+    catalog, marker, residency, domain, asset — ours for our problems, and they
+    may not cross into the interface (`DocumentedRulesTests`).
+20. **The app states what it is about to do rather than asking**, and may only
+    decide where it can say why in one sentence somebody could check. It claims
+    a reason only where one exists.
+21. **A row, a prompt or a control appears where something differs.** Identical
+    things are said once (`StorageGroup.sharedRule`); a drive whose answer is
+    already known is not asked about. This is also what keeps the case nothing
+    can automate sayable — a set kept differently differs.
+22. **Where a photograph is kept is observed, never set.** Moving it is a job
+    with a confirmation, and the record follows the bytes
+    (`ResidencyIsObservedTests`).
+23. **The answer comes first, and it is the worst true thing** (`SafetyAnswer`).
+    One archive has one answer, on every screen that reports safety.
 24. **A photograph in one place is never called safe**, even where one copy is
-    all its set asked for. Meeting a one-copy policy is reported as met; it is
-    not reported as safety, because the archive's own definition needs two
-    places and a green tick beside a warning is the app contradicting itself one
-    click apart.
-
+    all its set asked for.
 25. **Where photos came from and how they are kept are two rows.**
-    `PhotoArchiveSource` records where photos came from and never changes; `StorageGroup` records how they are kept
-    and is the user's to change. Every asset points at one of each, and
-    membership on the group side is a strict partition — a policy needs one
-    answer, and "this photo is in three groups naming three devices" has none. A
-    group made by hand has policy and no provenance, which is the case the
-    single-row model could not represent without inventing a history.
-
-    **A source is its own first group.** Adding a folder or an export creates
-    one group carrying the source's id and name, so a person meets *one* thing —
-    a name, where it came from, and a rule — rather than two rows that happen to
-    agree. "Group" only becomes a separate idea when a second one exists, which
-    is the moment it is worth learning. Every route that makes a source does
-    this; it was true of the migration and of exports and coincidental for
-    folders, which is the worst of the three states to be in.
-
-    The two stay distinct in what they *mean*, and diverge the moment anything
-    is regrouped or renamed. Sharing an id is not sharing a row: provenance is
-    still immutable, policy is still the user's to change, and a group can
-    outlive the source it was named after or belong to no source at all.
-
-    **Policy is a storage group's, and nothing else's.** Not the archive's, not
-    a source's, and never an asset's: `Asset` carries no copy count and no
-    destinations, and must not gain them. Per-asset storage was considered and
-    refused — it makes "what does this photo want" answerable as many ways as
-    there are photos, with no object to read the answer off, and no way to say
-    what a set of photos is for. A group is the smallest thing policy may attach
-    to, and a group of one is still a group.
-
-    The one exception is a stop-gap and is treated as one: a photo in *no* group
-    follows the add-sheet defaults, because placing nothing would stop protecting
-    content that was protected yesterday. That state is reachable (an import
-    through no source flow names no group), so it is surfaced under Keep safe
-    and fixable there — never left as a silent answer nobody can see.
-
-26. **There is no archive-wide copy count**, and no remembered answer standing
-    in for one. Not as a policy, and not as a default that binds anything: the
-    only surviving global is
-    `newSourceDefaults`, and it is **derived, never stored**: a new set of photos
-    starts from the count most of the archive already keeps, and from devices
-    worked out through the one call every new group starts from
-    (`AppStore.startingDestinations`). It governs nothing once a source exists.
-
-    Both halves used to be remembered and both went stale. The device list froze
-    new groups onto whatever was plugged in the first time anybody touched it, so
-    a drive bought later was never proposed again — and the Google export path
-    reached the same state by another route, omitting the mode and inheriting
-    `chosen` from `StorageGroup`'s own default. The count then drifted on its
-    own: one real archive had a stored answer of one copy while every set of
-    photos in it kept two, so the app stood ready to propose less protection than
-    it was already providing. A remembered answer is a second source of truth
-    about something the archive can be asked directly. Every protection
-    verdict, every placement and every reclamation precondition reads the
-    number off the asset's own source, through
-    `AppStore.placementPolicy(forAsset:)`, and an asset with no source recorded
-    falls back to the same defaults as a photo in no group, above.
-
+    `PhotoArchiveSource` never changes; `StorageGroup` is the user's to change.
+    Every asset points at one of each, and group membership is a strict
+    partition. A source is its own first group, so "group" becomes a separate
+    idea only when a second one exists.
+26. **Policy belongs to a storage group and nothing else** — not the archive,
+    not a source, never an asset. There is no archive-wide copy count and no
+    remembered answer standing in for one: what a new set starts from is read
+    off the archive (`AppStore.startingDestinations`). A photo in no group falls
+    back to those defaults rather than to nothing, and is surfaced under Keep
+    safe.
 ---
 
 ## The path
@@ -1092,3 +877,13 @@ saying what an invariant already says.
     and appending after a half-written line splices onto it, which a reader stops
     at, blocking everything written afterwards for ever. Three fixes, and the
     first two alone left it broken.
+
+83. Automating a decision is not the same as fixing the bug that made it hard.
+    Removing the device cap was correct; replacing it with free-space balancing
+    solved the mechanics and took from the user the one thing they had asked
+    for by name — saying where their photos go. Ask what the person wanted to
+    decide before deciding it well on their behalf.
+84. Ask what a check's inputs are derived from before asking how clever it is.
+    The tree comparison read convincingly, had tests, and shipped; both its
+    sides took their digests from the catalog, so a shared asset matched by
+    construction however far the bytes had rotted.
