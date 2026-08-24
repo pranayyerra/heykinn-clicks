@@ -21,6 +21,41 @@ Also here:
 
 ---
 
+## 1.2 (155) — submitted 24 August 2026
+
+Tag `v1.2.0`. Twenty-nine commits since 1.1, of which four change what anybody
+sees; the rest are seams, tests and documents.
+
+**Your own Mac could go missing from its own archive, silently.** When the
+archive moved into the app-group container, the folder holding this device's
+copy moved with it — and the path recorded for that device did not. The app then
+looked for it where it used to be, so the device read *away* for ever while
+being the machine the app was running on. Its photographs stopped counting
+toward safety and nothing new was ever copied to it, with nothing on screen
+saying anything was wrong.
+
+Found on a real archive where it had been true for sixteen days. Fixed at
+launch, and the folder is re-adopted only because it still carries the ID file
+naming that device — never because it sits where one would expect. The audit log
+records what was found and that nothing was copied.
+
+**Clearing out a folder you imported from.** Photographs the archive holds on
+your drives, and has read back, leave a duplicate behind in the folder they came
+from. The folder's card now offers to move those to the Trash — recoverable,
+never unlinked. It refuses on anything it did not import, on copies nothing has
+read yet, and on a file edited since. This is the only place the app offers to
+delete something that is yours.
+
+**A photograph in one place is no longer called safe.** Its badge read *"Safe on
+one copy"* in green while the archive warned about the same photographs in
+orange, one click away. One copy now uses the same words everywhere.
+
+### Known problem, fixed after 1.1
+
+The device-path fault above affects anyone still on 1.1.
+
+---
+
 ## 1.1 (154) — approved 19 August 2026
 
 Tag `v1.1.0`. Thirty-nine commits since 1.0.
