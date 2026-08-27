@@ -461,7 +461,7 @@ final class StorageGroupSplitTests: XCTestCase {
 
     /// An `Asset` has no copies and no destinations of its own. Policy is a
     /// group's, and only a group's — per-asset storage would make "what does
-    /// this photo want" answerable 24,639 different ways.
+    /// this photo want" answerable one way per photograph.
     func testAnImportThatNamesNoGroupIsSurfacedRatherThanSilentlyDefaulted() async throws {
         let (store, _) = try makeStoreReturningDirectory()
         let folder = try makeDirectory("photos")

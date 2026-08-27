@@ -153,7 +153,7 @@ final class MetadataBackfillTests: XCTestCase {
         )
     }
 
-    /// A re-run does the work it has not done. A 127 GB read is not something
+    /// A re-run does the work it has not done. A whole-archive read is not something
     /// anybody can promise not to interrupt.
     func testARerunSkipsWhatIsAlreadyHeld() throws {
         let staging = try makeDirectory()

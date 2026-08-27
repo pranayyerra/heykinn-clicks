@@ -57,7 +57,7 @@ final class DerivedCountsTests: XCTestCase {
     // MARK: - Counted total
 
     /// A Live Photo is one photograph. Counting its motion half again is how
-    /// "24,618 of them" ended up larger than the set it was drawn from.
+    /// "N of them" ended up larger than the set it was drawn from.
     func testCountedTotalCountsALivePhotoOnce() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(

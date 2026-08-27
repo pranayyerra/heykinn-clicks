@@ -74,9 +74,9 @@ enum ReplicationService {
     /// Bytes that live inside a .zip rather than as a file of their own.
     ///
     /// Two of the four prefixes mean this, and code that knew about only one of
-    /// them under-reported the risk by 6,482 copies on a real archive — it read
-    /// `zipmember:` as a file the photo owned, when it is a photo the app never
-    /// wrote out and can only reach by opening the download. `volume:` really
+    /// them under-reported the risk by thousands of copies on a real archive —
+    /// it read `zipmember:` as a file the photo owned, when it is a photo the app
+    /// never wrote out and can only reach by opening the download. `volume:` really
     /// is a file of its own; it just is not one the app put there.
     ///
     /// Named once because the question is asked in four places and the answer
@@ -340,7 +340,7 @@ enum ReplicationService {
             //
             // It means "the bytes of this copy were read back and matched",
             // and confirming that an export part is still on the disk reads
-            // none of them. Stamping it here is how 21,117 photos came to be
+            // none of them. Stamping it here is how a whole archive came to be
             // reported as "all read back" on the strength of a file existing
             // with the right name — the reassurance the whole patrol exists to
             // earn, awarded for the one check that cannot earn it.
@@ -355,7 +355,7 @@ enum ReplicationService {
             //
             // This used to enumerate the volume from its mount point looking
             // for a file whose *name* matched the stem — a recursive walk of a
-            // 2 TB disk, run once per photo, to rediscover a path already
+            // whole disk, run once per photo, to rediscover a path already
             // recorded. Forty of those is the background patrol, on a drive
             // that is marked in-use for the duration.
             if let path = archivePathsByStem[stem], FileManager.default.fileExists(atPath: path) {

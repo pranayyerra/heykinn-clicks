@@ -175,7 +175,7 @@ preferences:
 HEYKINN_ARCHIVE_DIRECTORY=/tmp/scratch-archive swift run
 ```
 
-Use it. Looking at a screen otherwise means looking at 24,000 real photos on
+Use it. Looking at a screen otherwise means looking at a whole real archive on
 real drives, and any check of a change is a change to an archive somebody
 depends on.
 
@@ -369,7 +369,7 @@ the external archive drive:
   (parallel writes there seek-thrash and lose to serial), unknown media gets a
   conservative 4. **No `unzip` subprocess** — that is what made buckets
   *patterns* rather than names, because an argument list has a length limit and
-  6,660 names do not fit in one; a worker is now handed the exact entries it
+  thousands of names do not fit in one; a worker is now handed the entries it
   owns and nothing has to be escaped, quoted or matched. `ditto` remains as the
   fallback if the reader fails, and the reason it fell back is recorded rather
   than swallowed (`TakeoutExtractor.lastFallbackReason`).

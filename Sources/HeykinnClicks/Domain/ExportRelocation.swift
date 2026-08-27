@@ -40,8 +40,8 @@ struct ExportRelocation: Equatable, Identifiable {
     ///
     /// The reason this is on the plan rather than hidden in the doing: a photo
     /// counted inside a zip records that zip's path, so moving the zip without
-    /// rewriting them orphans every one of those copies — 6,482 of them on a
-    /// real archive, all reading as present on a drive at a path with nothing
+    /// rewriting them orphans every one of those copies — thousands of them on
+    /// a real archive, all reading as present on a drive at a path with nothing
     /// there. It is the largest thing this operation does and the least
     /// visible, so it is stated.
     var replicaPathsToRewrite: Int

@@ -383,8 +383,8 @@ final class RealVolumeSyncTests: XCTestCase {
     /// append is all-or-nothing — measured, byte-identical before and after.
     /// Killing the writing process does not tear one either: the app appends a
     /// whole batch in a single write, so a dying process leaves the file at a
-    /// line boundary — measured too, 11,600 lines and every checksum good after
-    /// a SIGKILL mid-publish.
+    /// line boundary — measured too, over ten thousand lines and every checksum
+    /// good after a SIGKILL mid-publish.
     ///
     /// A real disconnect can still do it, because the size can be recorded
     /// while the data is still in flight. What lands then is not a short file

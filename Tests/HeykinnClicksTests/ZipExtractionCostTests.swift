@@ -4,7 +4,7 @@ import XCTest
 /// What extracting in process costs against the subprocesses it replaces.
 ///
 /// The correctness case for removing `unzip`, `tar` and `ditto` is settled — they
-/// do not exist on Windows or Android, and 21,380 of 21,401 photographs arrive
+/// do not exist on Windows or Android, and nearly every photograph arrives
 /// through extraction. The open question was speed: `unzip` is decades of
 /// tuning, and a rewrite that is three times slower on a 10 GB Takeout part is
 /// not obviously a good trade. This answers it with numbers rather than hope.

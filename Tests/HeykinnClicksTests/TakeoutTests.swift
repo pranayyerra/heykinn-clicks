@@ -192,7 +192,7 @@ final class TakeoutTests: XCTestCase {
 
     /// A folder somebody made to keep their exports *in* is not an export. It
     /// used to be treated as one because its name began with "takeout" — which
-    /// registered the container of a whole 254 GB archive as a single archive
+    /// registered the container of a whole multi-part archive as a single archive
     /// of its own, double-counting everything inside it.
     func testAFolderNamedAfterTakeoutIsNotItselfATakeout() {
         for collisionName in ["Takeout", "Takeout 2", "Takeout (1)", "takeout-3", "Takeout2", "TAKEOUT_4"] {

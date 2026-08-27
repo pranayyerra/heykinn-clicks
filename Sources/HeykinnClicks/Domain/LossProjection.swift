@@ -21,8 +21,8 @@ enum ArchiveLoss: Hashable {
 /// What the archive would be left with afterwards.
 ///
 /// Built because "how many photos does this drive hold" is the wrong question
-/// and the only one the app could answer. A device holding 21,389 of 21,401
-/// photos sounds indispensable and is expendable; one holding 12 sounds
+/// and the only one the app could answer. A device holding all but twelve
+/// photographs sounds indispensable and is expendable; one holding 12 sounds
 /// trivial and is a catastrophe if those 12 are nowhere else. Only counting
 /// what would have *no surviving copy* separates them.
 struct LossProjection: Equatable {
@@ -88,7 +88,7 @@ extension LossProjection {
     ///
     /// Not a convenience: the chips that offer these are labelled with what
     /// each would cost, so all of them are wanted at once, on every redraw.
-    /// Asking `project` four times means four walks of 21,401 photos, which is
+    /// Asking `project` four times means four walks of every photo, which is
     /// the shape of cost this screen has already been slow from once.
     ///
     /// It is also the reason there is one implementation rather than two — a

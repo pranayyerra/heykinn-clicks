@@ -193,11 +193,11 @@ extension CatalogBackupTests {
 
     /// The failure this was written for, reproduced.
     ///
-    /// A snapshot taken on a real archive held every one of its 24,639 assets
-    /// and not one of the 24,417 provider payloads captured beside them. It
+    /// A snapshot taken on a real archive held every one of its assets and not
+    /// one of the provider payloads captured beside them. It
     /// passed `integrity_check`, it passed the asset count, and it went into
     /// the audit log as "verified" — while missing the only part of the catalog
-    /// that cannot be rebuilt without re-reading 127 GB of export zips.
+    /// that cannot be rebuilt without re-reading every export zip.
     ///
     /// A backup is not complete because the photos are in it.
     func testASnapshotMissingCapturedMetadataIsNotVerified() throws {

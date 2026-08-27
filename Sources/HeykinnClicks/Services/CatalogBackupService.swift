@@ -145,11 +145,11 @@ enum CatalogBackupService {
     ///
     /// "Complete" once meant the right number of assets, which was true when the
     /// catalog was assets and replicas. It stopped being true. A real snapshot
-    /// passed this check today holding all 24,639 assets and **none** of the
-    /// 24,417 provider payloads captured beside them — the `asset_tags` table
+    /// passed this check today holding every asset and **none** of the
+    /// provider payloads captured beside them — the `asset_tags` table
     /// was not even present — and was written into the audit log as verified.
     /// The one part of the catalog that cannot be rebuilt without re-reading
-    /// 127 GB of export zips was the part nobody was checking for.
+    /// every export zip was the part nobody was checking for.
     ///
     /// So the test is now the general one: **no kind of knowledge may go
     /// missing.** Any table the live catalog holds rows in must hold rows here

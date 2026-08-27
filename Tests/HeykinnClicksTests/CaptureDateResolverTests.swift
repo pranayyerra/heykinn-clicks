@@ -151,7 +151,7 @@ final class CaptureDateResolverTests: XCTestCase {
 
     // MARK: - Recovering provenance for a date already held
 
-    /// The 16,284-row case: the date was read from EXIF at import, but the
+    /// The bulk case: the date was read from EXIF at import, but the
     /// provenance column did not exist yet, so the row says `unknown` and the
     /// UI demotes a to-the-second timestamp to "(approximate)". The raw string
     /// is still in the catalog, so no drive is needed to settle it.
@@ -167,7 +167,7 @@ final class CaptureDateResolverTests: XCTestCase {
 
     /// EXIF carries no timezone, so a device that has changed zones since the
     /// import reparses the same string to a different instant. On the real
-    /// catalog that is 2,091 rows, all at half-hour offsets. Asserting
+    /// catalog that is thousands of rows, all at half-hour offsets. Asserting
     /// `fileMetadata` there would attach the camera's authority to a date the
     /// camera did not give — invariant 2 — so it must decline.
     func testAStringThatNoLongerReproducesTheStoredDateIsDeclined() {

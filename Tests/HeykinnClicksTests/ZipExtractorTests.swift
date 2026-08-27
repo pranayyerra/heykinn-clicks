@@ -5,7 +5,7 @@ import XCTest
 ///
 /// This is hazard H3 — the last thing standing between the archive format and a
 /// second platform, because `unzip`, `tar` and `ditto` exist on none of them and
-/// 21,380 of the 21,401 photographs in this archive arrive through extraction.
+/// nearly every photograph in a real archive arrives through extraction.
 ///
 /// Two things have to hold, and only one of them was somebody else's problem
 /// before: the bytes must come out exactly, and an archive is untrusted input.
@@ -89,7 +89,7 @@ final class ZipExtractorTests: XCTestCase {
     }
 
     /// An entry the archive does not hold is reported, not thrown: the caller's
-    /// other 6,659 entries are still worth extracting.
+    /// other entries are still worth extracting.
     func testAnUnknownEntryIsReportedRatherThanFatal() throws {
         let zip = try makeZip(["a/one.txt": Data("1".utf8)])
         let out = try makeDirectory()

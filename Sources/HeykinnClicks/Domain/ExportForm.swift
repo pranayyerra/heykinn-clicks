@@ -4,12 +4,12 @@ import Foundation
 ///
 /// A part arrives as a zip. Unpacking it produces a folder beside it and does
 /// not remove the zip, so a drive can end up holding the same 10 GB twice —
-/// which on a real archive it did, twelve times over, for 254 GB of one export.
+/// which on a real archive it did, twelve times over, across a whole export.
 /// Nothing told anybody, because from the storage model's point of view either
 /// form is simply "the part is here".
 ///
 /// Both are legitimate. The zip is the artefact Google produced, byte for byte;
-/// the folder is what a re-read walks without decompressing 127 GB first. What
+/// the folder is what a re-read walks without decompressing it all first. What
 /// is not legitimate is holding both by accident and never being asked.
 enum ExportForm: String, Hashable, CaseIterable {
     case zip

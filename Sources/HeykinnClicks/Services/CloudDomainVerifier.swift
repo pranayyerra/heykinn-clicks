@@ -7,8 +7,8 @@ import Foundation
 /// credentials, and makes no network calls. Until a real verifier exists, the
 /// catalog records no cloud presence at all — an unconnected domain yields
 /// `CloudVerificationError.notConnected`, and there is no weaker grade to fall
-/// back to, because the user cannot be asked to assert presence for 24,000
-/// photos and an export is not evidence about now.
+/// back to, because the user cannot be asked to assert presence for every
+/// photo and an export is not evidence about now.
 ///
 /// Building this out is the work that makes presence knowable: the app's own
 /// index is the source of truth, and this is where it meets the provider.

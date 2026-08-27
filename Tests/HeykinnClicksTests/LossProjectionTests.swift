@@ -4,7 +4,7 @@ import XCTest
 /// What the archive would be left with if something went.
 ///
 /// Every test here runs against a deliberately awkward archive, because the
-/// real one cannot prove any of this: all 21,401 of its photos are in exactly
+/// real one cannot prove any of this: every one of its photos is in exactly
 /// two places, so every projection over it returns nothing or everything, and
 /// a rule that has only ever produced those two answers has not been tested.
 /// The fixture holds one photo of each shape the model has to tell apart.

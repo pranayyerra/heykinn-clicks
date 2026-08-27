@@ -430,7 +430,7 @@ final class PluralisationTests: XCTestCase {
     }
 
     func testLargeNumbersAreGrouped() {
-        XCTAssertEqual(Formatters.count(21397, "photo"), "21,397 photos")
+        XCTAssertEqual(Formatters.count(12345, "photo"), "12,345 photos")
     }
 }
 

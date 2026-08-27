@@ -107,7 +107,7 @@ enum CloudPresenceEvidence { case none; case verified }
 
 No `userAsserted` and no `inferred`. Either the app checked against a
 connected account, or it records nothing: an export proves where content
-*was*, and nobody reviews 24,000 photos to assert where it *is*.
+*was*, and nobody reviews a whole archive to assert where it *is*.
 
 ---
 
@@ -457,8 +457,8 @@ what an invariant says belongs there, not here.
 31. Withdrawing the task is not withdrawing the intention. Archive-level
     redundancy cancelled the queued copy for every asset an export covered, on
     every device, but only rewrote the pending replica rows on devices holding
-    a part — leaving 15,345 rows on a device reporting work that nothing would
-    ever do.
+    a part — leaving thousands of rows on a device reporting work that nothing
+    would ever do.
 32. Two facts in one row is one fact too many. A source recorded both where
     photos came from and where they should be kept; the first cannot change and
     the second must, and the moment a group is made by hand there is no history
@@ -506,7 +506,7 @@ what an invariant says belongs there, not here.
     to a literal `?` — in its listing as well as on disk — then aborts
     mid-archive with a "disk full" error that has nothing to do with the disk,
     taking every entry after it. One Mac screenshot exported with a narrow
-    no-break space in its name cost 4,673 of 6,660 sidecars from a single part,
+    no-break space in its name cost most of the sidecars from a single part,
     silently, down a code path that returned success. `tar` (libarchive) reads
     the same archive correctly. Reading entries to stdout does not rescue it:
     the only name to ask for comes from the same mangled listing, and the `?`
@@ -689,10 +689,10 @@ what an invariant says belongs there, not here.
 60. Moving a file moves everything that names it. An export can be relocated
     into the app's folder on the drive it already sits on — a same-volume
     rename, instant however large. The bytes are the easy part. On a real
-    archive 42,754 recorded copies name their export by its *stem*, which no
-    move can disturb, and 6,482 name it by its **path inside the mount**: a
+    archive most recorded copies name their export by its *stem*, which no move
+    can disturb, and thousands name it by its **path inside the mount**: a
     photo counted inside a zip records that zip's location. Moving the folder
-    without rewriting those leaves 6,482 copies reading as present, on a
+    without rewriting those leaves every one of them reading as present, on a
     connected drive, at a path with nothing there — the worst kind of wrong,
     because every check that only consults the catalog agrees the archive is
     fine. So the rewrite happens with the move, the count is on the preview
@@ -704,8 +704,8 @@ what an invariant says belongs there, not here.
 61. State the fact whether or not the drive is here; gate only the doing. The
     line saying a drive holds an export twice was first shown only for
     connected drives, which is the rule the *button* needs, not the rule the
-    *sentence* needs. 254 GB that disappears from the screen when somebody
-    unplugs a drive is 254 GB nobody ever gets round to deciding about — and
+    *sentence* needs. A duplicated export that disappears from the screen when
+    somebody unplugs a drive is storage nobody ever decides about — and
     the catalog knows it either way. What needs the drive present is removing
     something from it, and that gates itself.
 
@@ -713,7 +713,7 @@ what an invariant says belongs there, not here.
     of the download" unpacked a zip into a folder beside it — and a photo in
     that folder is still counted as being inside a download, so the one thing
     the name promised was the one thing it did not do. What it actually buys is
-    a copy that can be re-read without decompressing 127 GB; what it costs is
+    a copy that can be re-read without decompressing it all; what it costs is
     the same bytes again, which the name never mentioned. Both belong in the
     label.
 

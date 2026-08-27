@@ -64,7 +64,7 @@ final class MetadataCaptureTests: XCTestCase {
 
     /// The whole point: what the importer ignores is still there afterwards.
     /// `imageViews`, `url` and `googlePhotosOrigin` are read by nothing and
-    /// must survive anyway — recovering them otherwise means the 127 GB
+    /// must survive anyway — recovering them otherwise means going back to the
     /// download the archive exists to stop depending on.
     func testEverythingTheImporterIgnoresIsStillThere() throws {
         let catalog = try makeCatalog()
@@ -241,7 +241,7 @@ final class MetadataCaptureTests: XCTestCase {
     }
 
     /// And bumping the version makes every payload stale again — one number
-    /// changed, and 24,639 rows queue themselves for re-reading.
+    /// changed, and every row queues itself for re-reading.
     func testBumpingTheVersionRequeuesEverything() throws {
         let catalog = try makeCatalog()
         let sourceID = UUID()
@@ -397,7 +397,7 @@ final class MetadataCaptureTests: XCTestCase {
 
     // MARK: - Staying out of the way
 
-    /// It must not be reachable from the bulk asset read. ~24,600 payloads in
+    /// It must not be reachable from the bulk asset read. A payload per photo in
     /// the struct the Library rebuilds while scrolling is the difference
     /// between an archive that opens and one that does not.
     func testPayloadsAreNotLoadedWithAssets() throws {

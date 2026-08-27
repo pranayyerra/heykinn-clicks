@@ -35,7 +35,7 @@ final class AppStore: ObservableObject {
     /// catalog again.
     @Published private(set) var protectionCountsByState: [ProtectionState: Int] = [:]
     /// Photographs in the archive, counting a Live Photo once rather than
-    /// twice. What "21,401 photos" means everywhere it is printed.
+    /// twice. What the printed photo total means everywhere it appears.
     @Published private(set) var countedPhotoTotal: Int = 0
     /// Whether every photo in the archive lives in the same residency domain —
     /// the normal state, and the one where a per-photo badge is pure
@@ -926,8 +926,8 @@ final class AppStore: ObservableObject {
         // one the app wrote itself carries it exactly — `archivepart:` plus the
         // stem and nothing else. Both shortcuts matter: this used to run a
         // substring search for each of the export's stems against each of the
-        // archive's replicas, which on real numbers is 26 searches over 49,278
-        // paths — 1.3 million of them — twice per drive connect.
+        // archive's replicas, which on real numbers is a search per export stem
+        // over every replica path — millions of them — twice per drive connect.
         //
         // The scan is kept as a fallback rather than removed, because a zip
         // member records the zip's name and its entry, and the stem is in the
@@ -952,7 +952,7 @@ final class AppStore: ObservableObject {
 
     /// Cancels per-asset copies for content whose export part is already on
     /// two targets, and records the second copy. Twelve zips existing twice is
-    /// the policy being met; re-copying 24,000 files into a drive that already
+    /// the policy being met; re-copying every file into a drive that already
     /// holds them is not work, it is waste.
     func applyArchiveLevelRedundancy() {
         let managedIDs = Set(targets.map(\.id))
@@ -1034,7 +1034,7 @@ final class AppStore: ObservableObject {
     /// with the other drive and it does what is left — or nothing, if each
     /// drive holds the whole export, which is the usual case.
     ///
-    /// Resumable, because a 127 GB read is not something anybody can promise
+    /// Resumable, because a whole-archive read is not something anybody can promise
     /// not to interrupt. Progress is the records themselves: a sidecar already
     /// held is skipped, and `(source_id, origin_path)` uniqueness means a
     /// re-run cannot double anything even if the skip list is stale.
@@ -1189,8 +1189,8 @@ final class AppStore: ObservableObject {
         // belong to. Restricting to the source missed exactly the deduplicated
         // ones, which is the case worth catching.
         //
-        // Indexed rather than filtered per record: 24,417 payloads against
-        // 24,639 photos is a scan nobody should do 24,417 times.
+        // Indexed rather than filtered per record: one payload per photo means
+        // a full scan nobody should run once per payload.
         var candidatesByName: [String: [(id: UUID, filename: String, captureDate: Date?)]] = [:]
         for asset in assets {
             candidatesByName[asset.originalFilename, default: []].append(
@@ -1490,9 +1490,9 @@ final class AppStore: ObservableObject {
     ///
     /// Two numbers because they are two facts and the difference is large. A
     /// part held on two drives confirms two copies of each photo inside it, so
-    /// counting rows and calling the total "assets" reported an archive of
-    /// 24,639 photos as 49,236 of them — twice its own size, which is the sort
-    /// of number a reader either disbelieves or, worse, believes.
+    /// counting rows and calling the total "assets" reported an archive as
+    /// twice its own size — the sort of number a reader either disbelieves
+    /// or, worse, believes.
     struct PartVerification {
         var copies = 0
         var assetIDs: Set<UUID> = []
@@ -1580,8 +1580,8 @@ final class AppStore: ObservableObject {
         // 2. Two different repairs, deliberately separated. A row with no date
         //    needs one found; a row that has a date but does not say where it
         //    came from needs only its provenance settled, and must keep the
-        //    date it already has. Lumping them together is what left 16,284
-        //    assets displaying an EXIF timestamp as an approximate year: they
+        //    date it already has. Lumping them together is what left thousands
+        //    of assets displaying an EXIF timestamp as an approximate year: they
         //    were selected as needing work and then skipped for having a date.
         let needingDate = assets.filter { $0.captureDate == nil }
         let needingProvenance = assets.filter {
@@ -1910,8 +1910,8 @@ final class AppStore: ObservableObject {
     ///
     /// Two groups can ask for the same copies on the same drives and be in very
     /// different situations. On a real archive all three said "two copies on
-    /// Owner's Back and My Passport" while one was twelve real files, one had
-    /// 17,964 photos living inside .zip files, and one — named after the Photos
+    /// Owner's Back and My Passport" while one was twelve real files, one held
+    /// most of its photos inside .zip files, and one — named after the Photos
     /// library — was mostly held by a Google download, because the same picture
     /// arrived from both places and the archive keeps a single row for it.
     ///
@@ -1927,15 +1927,15 @@ final class AppStore: ObservableObject {
     }
 
     /// Counted in photos, not files — a Live Photo is one photo though it is a
-    /// still and a movie on disk. Counting files here put "24,355 counted
-    /// inside a Google download" directly under "21,117 photos", which reads as
-    /// the app contradicting itself on one line.
+    /// still and a movie on disk. Counting files here put a file total counted
+    /// inside a Google download directly under a smaller photo total, which
+    /// reads as the app contradicting itself on one line.
     /// Everything a group's storage view needs, worked out once per catalog
     /// load instead of once per redraw.
     ///
-    /// These four answers each used to walk all 49,278 replica rows, and the
-    /// group detail asked for all four from its `body` — so opening the 21,117
-    /// photo group re-scanned the archive five times over, and again on every
+    /// These four answers each used to walk every replica row, and the group
+    /// detail asked for all four from its `body` — so opening a large group
+    /// re-scanned the archive five times over, and again on every
     /// redraw while it was open. It took visibly long enough to look broken.
     /// One pass builds them all.
     @Published private(set) var storageFormByGroup: [UUID: StorageForm] = [:]
@@ -2164,7 +2164,7 @@ final class AppStore: ObservableObject {
     /// Ranked rather than listed in device order, because the point of putting
     /// them side by side is that on a real archive they are wildly unequal: no
     /// drive here is the sole holder of anything, and the download files hold
-    /// 21,380 photos hostage.
+    /// most of the archive hostage.
     var rankedFailures: [(loss: ArchiveLoss, projection: LossProjection)] {
         lossByFailure
             .map { (loss: $0.key, projection: $0.value) }
@@ -2239,7 +2239,7 @@ final class AppStore: ObservableObject {
             if entry.1 > 0, var folder = locations[targetID] {
                 // The download folder holds however many are counted inside it.
                 // Dropping this line in the rewrite left every download folder
-                // reading "0" beside a device reporting 21,117 photos.
+                // reading "0" beside a device reporting the whole archive.
                 folder.photos = entry.1
                 where_.append(folder)
             }
@@ -2286,13 +2286,13 @@ final class AppStore: ObservableObject {
     /// How many photos sit on how many drives, keyed by the number of drives.
     ///
     /// The distribution rather than a total, because a total cannot say whether
-    /// the archive is safe: "49,278 copies" is the same number whether every
+    /// the archive is safe: a bare copy total is the same number whether every
     /// photo has two or half of them have three and the rest one.
     @Published private(set) var copyCoverage: [Int: Int] = [:]
 
     /// Photos whose every copy is inside a Takeout file.
     ///
-    /// These are not short of copies — on a real archive all 21,380 of them sit
+    /// These are not short of copies — on a real archive nearly all of them sit
     /// on both drives — which is exactly why nothing flagged them. What they
     /// share is a way of being lost: the copies are the *same* zip files on
     /// each drive, so deleting those, or one of them going bad in the same way,
@@ -2309,7 +2309,7 @@ final class AppStore: ObservableObject {
     /// Everything else on this screen counts what a device has. That is the
     /// wrong half of the question. Nobody opens Keep safe wondering how many
     /// photos are on My Passport; they wonder what happens when it dies. A
-    /// device holding 21,389 of 21,401 photos sounds vital and is in fact
+    /// device holding all but twelve photographs sounds vital and is in fact
     /// expendable, because every one of those photos is somewhere else too —
     /// and a device holding 12 sounds trivial and would be a catastrophe if
     /// those 12 were nowhere else. Held count cannot tell those two apart.
@@ -2379,7 +2379,7 @@ final class AppStore: ObservableObject {
     /// A snapshot offered as a way back, with what it turns out to hold.
     ///
     /// The count matters more than the date. Two snapshots an hour apart are
-    /// the same decision; one holding 24,000 assets and one holding 900 are
+    /// the same decision; one holding the whole archive and one holding 900 are
     /// not, and the second is what a catalog going wrong looks like from the
     /// outside.
     struct RestorableSnapshot: Identifiable {
@@ -2694,11 +2694,11 @@ final class AppStore: ObservableObject {
         // Motion halves are excluded for the same reason `driveBreakdowns`
         // excludes them a few lines up: every sentence built from these counts
         // says "photo". Counting them made the two halves of this screen
-        // contradict each other in print — "every photo is in 2 places",
-        // totalling 21,401, directly above "24,618 of *them* are inside your
-        // Google Takeout files". A subset larger than the set it is drawn from
+        // contradict each other in print — "every photo is in 2 places" over a
+        // total, directly above a *larger* number of *them* said to be "inside
+        // your Google Takeout files". A subset larger than the set it is drawn from
         // is the sort of thing a reader notices and then stops believing the
-        // rest of the screen. The Takeout figure is 21,380.
+        // rest of the screen. The Takeout figure is the smaller of the two.
         var placesHolding: [UUID: Set<UUID>] = [:]
         var outsideAnArchive: Set<UUID> = []
         for replica in replicaStates where replica.state == .present {
@@ -4371,7 +4371,7 @@ final class AppStore: ObservableObject {
     /// the archive, which was survivable while one list read it once and became
     /// a ten-second freeze when the grid started reading it per cell — and,
     /// worse, from inside a sort comparator, where each comparison paid for a
-    /// full pass over 24,639 assets. Recomputed with the rest of the storage
+    /// full pass over every asset. Recomputed with the rest of the storage
     /// picture instead, which is the only time it can change.
     @Published private(set) var photoCountByStorageGroup: [UUID: Int] = [:]
 
@@ -6408,10 +6408,10 @@ final class AppStore: ObservableObject {
     /// What each drive holds of this export, by form — plugged in or not.
     ///
     /// Deliberately not filtered to connected drives. Holding the same export
-    /// twice is a fact the catalog knows either way, and 254 GB that vanishes
-    /// from the screen when somebody unplugs the drive is 254 GB nobody will
-    /// ever get round to deciding about. Only the *removal* needs the drive to
-    /// be here, and that is gated on its own.
+    /// twice is a fact the catalog knows either way, and a duplicated export that
+    /// vanishes from the screen when somebody unplugs the drive is storage
+    /// nobody will ever get round to deciding about. Only the *removal* needs
+    /// the drive to be here, and that is gated on its own.
     func exportFormAudits(forSet setID: String) -> [ExportFormAudit] {
         targets
             .map { ExportFormRemoval.audit(forSet: setID, target: $0, archives: takeoutArchives) }
@@ -7338,7 +7338,7 @@ final class AppStore: ObservableObject {
     }
 
     /// Describes the drive's pending work by action and estimated bytes, so
-    /// the UI can say "22,880 to verify (~120 GB)" instead of a bare number.
+    /// the UI can say "N to verify (~120 GB)" instead of a bare number.
     func backlogSummary(for targetID: UUID) -> BacklogSummary {
         var summary = BacklogSummary()
         for task in replicationTasks where task.targetID == targetID && task.state == .queued {
@@ -7675,7 +7675,7 @@ final class AppStore: ObservableObject {
                 // part is still there, which `checkArchivePresence` already
                 // does for every part on every connect, in one stat each.
                 // Patrolling them per photo spent the whole budget rediscovering
-                // that, and on this archive that is 42,754 of 49,278 copies —
+                // that, and on a real archive that is most of the copies —
                 // so the forty files read every half hour were almost never
                 // files, and almost never read.
                 //

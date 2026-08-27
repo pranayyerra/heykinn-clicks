@@ -51,7 +51,7 @@ final class CopyCoverageTests: XCTestCase {
         ))
     }
 
-    /// The distribution, not the total. "49,278 copies" is the same number
+    /// The distribution, not the total. A bare copy total is the same number
     /// whether every photo has two or half have three and the rest have one,
     /// so a total cannot say whether an archive is safe.
     func testCoverageCountsPhotosByHowManyDrivesHoldThem() throws {
@@ -101,8 +101,9 @@ final class CopyCoverageTests: XCTestCase {
 
     /// The screen printed a subset larger than the set it came from.
     ///
-    /// Keep safe led with "Every photo is in 2 places", totalling 21,401, and
-    /// then said "24,618 of them are inside your Google Takeout files". Both
+    /// Keep safe led with "Every photo is in 2 places" over a total, and then
+    /// said a *larger* number of them were "inside your Google Takeout files".
+    /// Both
     /// numbers came from here; only one of them counted photos. A Live Photo is
     /// one photo and two files, and the coverage pass was walking replicas
     /// without asking which of them were the motion halves — so every sentence
@@ -136,9 +137,9 @@ final class CopyCoverageTests: XCTestCase {
 
     /// What a device's failure would cost, which no held count can say.
     ///
-    /// A device with 21,389 of 21,401 photos sounds indispensable and is
-    /// expendable; one with 12 sounds trivial and is a catastrophe if those 12
-    /// are nowhere else. The two are indistinguishable by size.
+    /// A device with all but twelve photographs sounds indispensable and is
+    /// expendable; one with those twelve sounds trivial and is a catastrophe if
+    /// they are nowhere else. The two are indistinguishable by size.
     func testSoleCustodyCountsWhatEachPlaceWouldTakeWithIt() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(
@@ -217,8 +218,8 @@ extension CopyCoverageTests {
     /// "Stop tracking this download (deletes nothing)" was true about files and
     /// badly wrong about photos. The app counts photos *inside* the Takeout
     /// files rather than copying them out, so on a real archive that button
-    /// would have dropped 18,136 photos to no copy at all while promising the
-    /// opposite.
+    /// would have dropped most of the archive to no copy at all while promising
+    /// the opposite.
     func testPhotosHeldOnlyInsideADownloadAreCounted() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(
@@ -232,7 +233,7 @@ extension CopyCoverageTests {
         // recorded under its file name and the set id is the token inside it.
         // The first version of this test built the path out of the set id, so
         // it agreed with a lookup that matched nothing on a real archive — and
-        // the dialog it backs said 18,136 photos could be forgotten safely.
+        // the dialog it backs said most of the archive could be forgotten safely.
         let set = "20260710T081521Z-2"
         try catalog.upsertTakeoutArchive(archive(named: "takeout-\(set)-001.zip", set: set))
         let part = ReplicationService.archivePartPrefix + "takeout-\(set)-001.zip"
@@ -286,8 +287,8 @@ extension CopyCoverageTests {
     /// different situations, and the row said the same sentence for both.
     ///
     /// On a real archive all three read "two copies on Owner's Back and My
-    /// Passport" while one was twelve real files and another had 17,964 photos
-    /// living inside .zip files.
+    /// Passport" while one was twelve real files and another held most of its
+    /// photos inside .zip files.
     func testStorageFormSplitsCountedInsideADownloadFromCopiedOut() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(
@@ -322,8 +323,8 @@ extension CopyCoverageTests {
         // and they have to be exclusive or the bar claims a set is bigger than
         // it is. `insideDownload` overlaps `copiedOut` by design — a photo can
         // be counted inside a download on one drive and written out on another
-        // — which is what made the first version print 21,117 and 5,658 under
-        // a total of 21,117.
+        // — which is what made the first version print two overlapping counts
+        // that summed past their own total.
         XCTAssertEqual(
             form.onlyInsideDownload + form.copiedOut, 3,
             "the split adds up to the photos it describes"
@@ -336,8 +337,8 @@ extension CopyCoverageTests {
 
     /// Counted in photos, like every other number the app shows. A Live Photo
     /// is one photo though it is a still and a movie on disk, and counting
-    /// files here printed "24,355 counted inside a Google download" directly
-    /// under "21,117 photos" — the same screen contradicting itself.
+    /// files here printed a file count "inside a Google download" directly
+    /// under a smaller photo total — the same screen contradicting itself.
     func testStorageFormCountsPhotosNotFiles() throws {
         let directory = try makeDirectory()
         let catalog = try CatalogStore(
@@ -467,8 +468,8 @@ extension CopyCoverageTests {
 
     /// A `zipmember:` replica is a photo the app never wrote out: the bytes are
     /// inside the .zip and can only be reached by opening it. Reading it as a
-    /// file of the photo's own under-reported the risk by 6,482 copies on a
-    /// real archive, and told somebody 100 photos "would survive" when they
+    /// file of the photo's own under-reported the risk by thousands of copies on
+    /// a real archive, and told somebody 100 photos "would survive" when they
     /// were in the same .zip as the ones that would not.
     func testAFileInsideAZipIsNotAFileOfItsOwn() {
         XCTAssertTrue(ReplicationService.isInsideADownload(
@@ -581,7 +582,7 @@ extension CopyCoverageTests {
 
     /// Each folder says how many of the group's photos are in it. Precomputing
     /// the holdings dropped the line that set this, and every download folder
-    /// read "0" beside a device reporting 21,117 photos — a number wrong in a
+    /// read "0" beside a device reporting the whole archive — a number wrong in a
     /// way that looks like a real answer.
     func testEachFolderCarriesItsOwnCount() throws {
         let directory = try makeDirectory()

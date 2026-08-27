@@ -91,7 +91,7 @@ struct OverviewView: View {
 
     /// The newest few, without sorting the archive to find them.
     ///
-    /// Fourteen thumbnails used to cost a full sort of all 24,000 photographs,
+    /// Fourteen thumbnails used to cost a full sort of every photograph,
     /// paid twice per redraw — once to ask whether there were any and once to
     /// draw them. A photograph that cannot displace the oldest of the fourteen
     /// already held is dropped where it stands, so this is one walk and a
@@ -134,7 +134,7 @@ struct OverviewView: View {
                     // corrected because it did not measure what it claimed; a
                     // legend restating the sentence beside it; a drives card
                     // that is Keep safe in miniature; a residency card that
-                    // reads "all 21,401 photos are in Local" and will until the
+                    // reads "all your photos are in Local" and will until the
                     // app has a cloud connector; and a "Nothing needs you" card
                     // shown when the line above already said so.
                     theAnswer

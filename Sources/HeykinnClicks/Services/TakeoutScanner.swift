@@ -102,7 +102,7 @@ enum TakeoutScanner {
     /// evidence of anything. The rule used to be "starts with takeout, and the
     /// next character is not a letter", which swallowed `Takeout_Archive_2026`
     /// — a folder somebody made to keep their export *in*. That registered the
-    /// container of a whole 254 GB archive as a single archive of its own:
+    /// container of a whole multi-part archive as a single archive of its own:
     /// double-counted in every total, shown as an export belonging to no set,
     /// and reporting that it imported nothing, because everything in it had
     /// already been imported as the parts it is made of.

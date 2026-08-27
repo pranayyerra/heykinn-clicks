@@ -169,7 +169,7 @@ struct StorageMatrix: View {
     ///
     /// The cost is on the chip rather than behind it on purpose. A row of bare
     /// names is a toy nobody touches; a row that already says *my Google
-    /// downloads · 21,380* and *Owner's Back · nothing* is a ranked answer to
+    /// downloads · thousands* and *Owner's Back · nothing* is a ranked answer to
     /// "what should I worry about" that happens to also be clickable. It reads
     /// without being used, which is the property a status has and a simulator
     /// does not.
@@ -332,7 +332,7 @@ struct StorageMatrix: View {
     private var grid: some View {
         // Horizontally scrollable rather than compressed: a cell narrower than
         // its number is a cell that cannot be read, and there is no useful
-        // abbreviation of "21,117".
+        // abbreviation of a five-figure count.
         ScrollView(.horizontal, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 6) {
                 HStack(alignment: .bottom, spacing: 6) {
@@ -638,13 +638,13 @@ struct StorageMatrix: View {
     ///
     /// The second line is the only thing on this screen that answers the
     /// question people actually arrive with. Held counts cannot: a device with
-    /// 21,389 of 21,401 photos sounds indispensable and is expendable, and one
+    /// all but twelve photographs sounds indispensable and is expendable, and one
     /// with 12 sounds trivial and is a catastrophe if those 12 are nowhere
     /// else. Only sole custody separates them.
     @ViewBuilder
     private func columnFooter(_ place: ArchivePlace) -> some View {
         VStack(alignment: .leading, spacing: 1) {
-            // Under a hypothesis this has to answer the hypothesis. "21,401
+            // Under a hypothesis this has to answer the hypothesis. "Every photo
             // held · nothing only here" is true of the archive that exists and
             // false of the one being drawn above it, and the two sitting in one
             // column is precisely the confusion a what-if mode risks.

@@ -14,8 +14,8 @@ import Foundation
 /// often not its own file. On a target holding a Google Takeout export,
 /// thousands of replicas are backed by a handful of zips or whole export parts,
 /// and one stat covers all of them: on the archive this was measured against,
-/// one target's 24,635 replicas resolve to thirteen files, and the other's
-/// 24,618 loose files sit in 177 directories.
+/// one target's replicas resolved to thirteen files, and the other's loose
+/// files sat in 177 directories.
 ///
 /// The gate never records damage. It has established that a file changed, not
 /// that its bytes are wrong — so it aims a read and lets the read make the

@@ -36,8 +36,8 @@ enum ZipTools {
     /// Returns the extracted file paths relative to `destination`, so the caller
     /// can reconstruct where each sat inside the archive. Whatever landed is
     /// worth having — an entry that fails is skipped and the rest still arrive,
-    /// because a Takeout part with one unreadable entry is still worth the other
-    /// 6,659.
+    /// because a Takeout part with one unreadable entry is still worth all the
+    /// others.
     @discardableResult
     static func extractEntries(
         matching pattern: String, inZip zipURL: URL, to destination: URL

@@ -53,7 +53,7 @@ enum ResidencyAssignmentSource: String, Codable, Hashable {
 /// exists there is nothing to record.
 ///
 /// There are deliberately only two levels. The app never asks the user to
-/// assert presence — nobody reviews 24,000 photos to confirm each is still in
+/// assert presence — nobody reviews a whole archive to confirm each is still in
 /// Google, and an answer collected that way is a guess wearing the user's
 /// authority. Nor is presence inferred from an export, which proves content was
 /// in Google *at export time* and nothing about now. A middle grade would only

@@ -60,7 +60,7 @@ enum ParallelZipExtraction {
     ///
     /// **No subprocess.** This used to run `unzip` once per bucket, which is why
     /// buckets used to be *patterns* rather than names: an argument list has a
-    /// length limit and 6,660 names do not fit in one. Reading the archive in
+    /// length limit and thousands of names do not fit in one. Reading it in
     /// process removes both the limit and the pattern language, so a worker is
     /// handed the exact entries it owns and nothing has to be escaped, quoted or
     /// matched. It also removes the reason a name could ever be misunderstood

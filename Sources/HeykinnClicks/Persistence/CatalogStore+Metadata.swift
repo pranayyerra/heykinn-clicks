@@ -8,7 +8,7 @@ extension CatalogStore {
     /// shapes it has arrived in.
     ///
     /// Two tables rather than one. `metadata_records` is bulk — one row per
-    /// sidecar, ~24,600 of them on a real archive — and is read only when
+    /// sidecar, one per photo on a real archive — and is read only when
     /// somebody looks at a photo. `metadata_schemas` is a handful of rows that
     /// answer "has the format changed?" without scanning the bulk.
     func createMetadataSchema() throws {
@@ -100,7 +100,7 @@ extension CatalogStore {
     /// Bump this when the reader learns to take something it used to walk
     /// past: a sidecar kind it ignored, a field it dropped, a folder it did
     /// not descend into. Parts below it are worth re-reading; parts at it are
-    /// not, and a 127 GB read that would find nothing is worth not offering.
+    /// not, and a whole-archive read that would find nothing is worth not offering.
     static let currentCaptureVersion = 1
 
     /// Withdraws a read-back claim that was never earned.
@@ -108,7 +108,7 @@ extension CatalogStore {
     /// A copy counted inside an export *part* was confirmed by looking for a
     /// file with the right name, and then stamped `lastVerifiedAt` — the field
     /// that means the bytes were read and matched. On a real archive that made
-    /// 21,117 photos report as "all read back" on the strength of a filename.
+    /// a whole archive report as "all read back" on the strength of a filename.
     /// Fixing the stamping stops it happening again; this is the part already
     /// on record.
     ///
@@ -236,8 +236,8 @@ extension CatalogStore {
 
     /// Every tag in the archive.
     ///
-    /// Loaded whole, unlike the payloads they came from: 8,722 rows of two
-    /// short strings is nothing, and browsing needs all of them at once to
+    /// Loaded whole, unlike the payloads they came from: a few thousand rows of
+    /// two short strings is nothing, and browsing needs all of them at once to
     /// answer "which photos are in this album" without a query per redraw.
     func fetchAllTags() throws -> [AssetTag] {
         try database.query("SELECT asset_id, kind, value FROM asset_tags;") { row in
@@ -338,7 +338,7 @@ extension CatalogStore {
 
     /// How many photos carry at least one description.
     ///
-    /// One query. Asking per asset is 24,639 of them for a number nobody needs
+    /// One query. Asking per asset is one apiece for a number nobody needs
     /// that badly.
     func photosCarryingMetadata() throws -> Int {
         try database.query(
@@ -443,7 +443,7 @@ extension CatalogStore {
         // `projected_version` only records that *this* device has read the
         // payload with *this* version of the reader, which is a fact about the
         // work rather than about the archive. Deliberately left out: syncing it
-        // over 24,000 records would cost a stamp each to save the other device
+        // over every record would cost a stamp each to save the other device
         // re-deriving something it can derive from rows it already has — and
         // when it does, it writes the same values, which produces no change and
         // therefore no news.
@@ -452,7 +452,7 @@ extension CatalogStore {
     /// Payloads the current projection logic has not been over.
     ///
     /// The re-derivation queue. Batched rather than fetched whole: the point of
-    /// keeping raw is that a re-read of 24,639 payloads is *possible*, not that
+    /// keeping raw is that a re-read of every payload is *possible*, not that
     /// it should happen in one allocation.
     func fetchMetadataRecordsNeedingProjection(
         below version: Int = CatalogStore.currentProjectionVersion,

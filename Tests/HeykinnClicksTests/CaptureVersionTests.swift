@@ -6,7 +6,7 @@ import XCTest
 /// The exports are kept permanently so a reader that learns something new can
 /// be run over them again. That decision is only actionable if the app records
 /// what read what — otherwise "re-run in case we missed something" means
-/// re-reading 127 GB on the chance it matters.
+/// re-reading every export zip on the chance it matters.
 final class CaptureVersionTests: XCTestCase {
 
     private var roots: [URL] = []

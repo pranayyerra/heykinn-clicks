@@ -71,7 +71,7 @@ struct DrivesView: View {
 
     /// Two copies that can be lost by one action.
     ///
-    /// The photos here are not short of anything — on a real archive all 21,380
+    /// The photos here are not short of anything — on a real archive nearly all
     /// of them sit on both drives, and every check the app runs says so. What
     /// they share is *how* they would go: their copies are the same Takeout
     /// files on each drive, so deleting those files, on both, loses photos that

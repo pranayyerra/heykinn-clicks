@@ -489,8 +489,8 @@ final class ChangeJournal {
     ///
     /// **One pass per table, not one query per row.** The stamps for a table are
     /// read once into memory and each row is matched against them as it goes
-    /// past. The alternative — reading each row by key — is 21,400 queries for
-    /// this archive to produce a file it will write once. The stamps are small
+    /// past. The alternative — reading each row by key — is one query per row
+    /// in the archive to produce a file it will write once. The stamps are small
     /// because creating a row records a single whole-row entry rather than one
     /// per column.
     ///

@@ -6,14 +6,14 @@ import XCTest
 ///
 /// Written while `ParallelZipExtraction` still ran `unzip`, to settle whether it
 /// suffered the name mangling that had forced `ZipTools.extractEntries` off
-/// `unzip` — a real Google part there lost 4,673 of 6,660 sidecars with an exit
+/// `unzip` — a real Google part there lost most of its sidecars with an exit
 /// status that looked like success. **It did not**: with a fixture in Google's
 /// exact shape (UTF-8 names, the UTF-8 flag *unset*), covering both the
 /// ASCII-wildcard and the literal-escaped-name paths, every entry round-tripped.
 ///
 /// Kept now that extraction happens in process, because the property it checks
-/// is the one that matters and is easy to lose quietly: 21,380 of the 21,401
-/// photographs in this archive arrive this way, and a name that does not survive
+/// is the one that matters and is easy to lose quietly: nearly every
+/// photograph in a real archive arrives this way, and a name that does not survive
 /// is a photograph the app reports as absent from the drive holding it.
 final class BulkExtractionNameTests: XCTestCase {
 

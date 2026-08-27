@@ -1080,8 +1080,8 @@ final class AppStoreOrchestrationTests: XCTestCase {
         return asset
     }
 
-    /// The defect this fixes: 16,284 assets whose date was read from EXIF at
-    /// import displayed as an approximate year, because the backfill selected
+    /// The defect this fixes: thousands of assets whose date was read from EXIF
+    /// at import displayed as an approximate year, because the backfill selected
     /// them as needing work and then skipped every row that already had a
     /// date. No drive is connected here — the evidence is in the catalog.
     func testProvenanceIsRecoveredWithoutTouchingTheDateOrTheDisk() async throws {
@@ -1105,8 +1105,8 @@ final class AppStoreOrchestrationTests: XCTestCase {
     }
 
     /// Invariant 2 at the row level. The EXIF string is there, but it no longer
-    /// reparses to the stored instant — on the real catalog, 2,091 rows whose
-    /// import happened under a different timezone. Declining is the correct
+    /// reparses to the stored instant — on a real catalog, the rows whose import
+    /// happened under a different timezone. Declining is the correct
     /// outcome, not a shortfall to paper over.
     func testAnUnreproducibleDateKeepsItsUnknownSource() async throws {
         let (store, directory) = try makeStore()

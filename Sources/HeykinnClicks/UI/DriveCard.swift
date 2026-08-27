@@ -137,7 +137,7 @@ struct DriveCard: View {
         VStack(alignment: .leading, spacing: 5) {
             SegmentedBar(segments: contentSegments, height: 10)
             HStack(spacing: 10) {
-                // A full bar, "24,626 of 24,626" and a "Complete" badge were
+                // A full bar, "all N of N" and a "Complete" badge were
                 // three ways of saying one thing. When the target holds
                 // everything, say so once.
                 Text(coverageSummary)

@@ -6,7 +6,7 @@ import Foundation
 /// sidecar per photo and a `metadata.json` per album, and the importer reads
 /// four fields out of them — capture time, description, latitude, longitude —
 /// and drops the rest on the floor. Everything dropped is only recoverable by
-/// going back to a 127 GB download, which is precisely what the archive exists
+/// going back to the whole download, which is precisely what the archive exists
 /// to stop depending on.
 ///
 /// So the payload is stored **verbatim and unparsed**. A field Google adds next
@@ -15,9 +15,10 @@ import Foundation
 /// keys it does not know, so the typed decoder is unaffected either way.
 ///
 /// This is deliberately its own table. It is never joined into `fetchAssets()`,
-/// never loaded by `loadAll()`, and never `@Published`: ~24,600 payloads of
-/// 600-odd bytes is fine on disk and ruinous in a struct the Library rebuilds
-/// while scrolling. It is read on asset detail, on search, and on export.
+/// never loaded by `loadAll()`, and never `@Published`: one payload per photo
+/// at 600-odd bytes is fine on disk and ruinous in a struct the Library
+/// rebuilds while scrolling. It is read on asset detail, on search, and on
+/// export.
 struct MetadataRecord: Identifiable, Hashable {
 
     /// What the payload is about. An album's JSON describes a set, not a photo,
@@ -54,8 +55,8 @@ struct MetadataRecord: Identifiable, Hashable {
     /// The JSON exactly as it was on disk.
     ///
     /// Text, not a blob, and uncompressed. These payloads ride in every catalog
-    /// snapshot — three per drive — and ~24,600 sidecars is about 15 MB, which
-    /// is small enough that squeezing it would buy little and cost the one
+    /// snapshot — three per drive — and a sidecar per photo runs to megabytes,
+    /// small enough that squeezing it would buy little and cost the one
     /// property worth more than the bytes: the archive is meant to outlive the
     /// app, and `sqlite3 catalog.sqlite 'select payload …'` should show a
     /// person their own data without a decoder.

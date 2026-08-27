@@ -10,8 +10,8 @@ import Foundation
 ///
 /// Deliberately shallow. It stores payloads and where they sat; it does not
 /// interpret them. Working out what a field means is a projection, versioned
-/// and re-runnable, and doing it here would tie a 127 GB read to whatever the
-/// app happened to understand on the day it ran.
+/// and re-runnable, and doing it here would tie a whole-archive read to
+/// whatever the app happened to understand on the day it ran.
 enum TakeoutMetadataBackfill {
 
     /// What one part yielded.
@@ -54,8 +54,8 @@ enum TakeoutMetadataBackfill {
         }
 
         // Only the JSON. One process for the whole part: a part holds ~2,000
-        // sidecars of a few hundred bytes, so a process each would be 24,000
-        // spawns and a re-seek of a 10 GB archive every time.
+        // sidecars of a few hundred bytes, so a process each would be tens of
+        // thousands of spawns and a re-seek of a 10 GB archive every time.
         let entries = ZipTools.extractEntries(matching: "*.json", inZip: zipURL, to: scratch)
 
         for entry in entries {

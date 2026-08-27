@@ -95,7 +95,7 @@ final class ExportRelocationTests: XCTestCase {
         )
     }
 
-    /// The one that orphans 6,482 copies if it is wrong.
+    /// The one that orphans thousands of copies if it is wrong.
     func testCopiesRecordedInsideAZipFollowItToItsNewFolder() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("heykinn-relocate-\(UUID().uuidString)", isDirectory: true)

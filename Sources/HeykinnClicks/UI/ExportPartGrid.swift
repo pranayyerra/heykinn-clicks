@@ -4,7 +4,7 @@ import SwiftUI
 ///
 /// A download is a dozen large zips and its state is per-file: nine on both
 /// drives, two on one, one missing. Prose can only summarise that — "12 files ·
-/// 127.2 GB · on every drive, copies match on a spot check" is four facts
+/// 120 GB · on every drive, copies match on a spot check" is four facts
 /// averaged into a sentence, and the moment they stop agreeing it becomes
 /// "Files 3, 4 and 7 of this download are not on Desk Drive yet", which is a
 /// sentence the reader has to reassemble into a picture.

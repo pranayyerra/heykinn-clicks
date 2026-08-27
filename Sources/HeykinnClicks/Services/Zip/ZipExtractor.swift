@@ -3,8 +3,8 @@ import Foundation
 /// Writes entries out of a zip onto disk, without running another program.
 ///
 /// **Why this is the last piece rather than a tidy-up.** `unzip`, `tar` and
-/// `ditto` do not exist on Windows or Android, and 21,380 of the 21,401
-/// photographs in this archive arrive through this path — a client that cannot
+/// `ditto` do not exist on Windows or Android, and nearly all of the
+/// photographs in a real archive arrive through this path — a client that cannot
 /// extract sees almost nothing. It is hazard H3 in `MULTI_DEVICE_STATE.md`, the
 /// one thing standing between the format and a second platform.
 ///
@@ -25,7 +25,7 @@ enum ZipExtractor {
     }
 
     /// What one extraction did. Reported rather than thrown, because a Takeout
-    /// part with one unreadable entry is still worth the other 6,659.
+    /// part with one unreadable entry is still worth all the others.
     struct Outcome {
         /// Paths written, relative to the destination.
         var written: [String] = []

@@ -45,7 +45,7 @@ final class StagingPruneTests: XCTestCase {
     }
 
     /// Two assets can share a bucket — the first two hex characters of a UUID
-    /// collide often enough at 24,000 files. Removing one must not take the
+    /// collide often enough at archive scale. Removing one must not take the
     /// folder the other still lives in.
     func testABucketStillHoldingAnotherFileIsKept() throws {
         let staging = try makeStaging()

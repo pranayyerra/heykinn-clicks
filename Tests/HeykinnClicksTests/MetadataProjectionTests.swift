@@ -3,9 +3,9 @@ import XCTest
 
 /// Working out what a captured payload is about, once a filename has run out.
 ///
-/// The shape here is the real one: on a 24,639-photo archive, 9,561 photos had
-/// a filename some other photo also used, and `IMG_2905.HEIC` alone belonged to
-/// five different pictures.
+/// The shape here is the real one: on a full archive, well over a third of
+/// photos had a filename some other photo also used, and `IMG_2905.HEIC`
+/// alone belonged to five different pictures.
 final class MetadataProjectionTests: XCTestCase {
 
     private func payload(takenAt seconds: Int, title: String = "IMG_2905.HEIC") -> String {

@@ -184,7 +184,7 @@ struct StorageGroupDetail: View {
             //
             // The exports are kept so an evolved reader can be run over them
             // again; this is the line that makes that a decision rather than a
-            // guess. Silent when every part is current, because a 127 GB read
+            // guess. Silent when every part is current, because a whole-archive read
             // that would find nothing is not worth offering.
             // Where a drive is holding the same export twice.
             ForEach(store.exportFormAudits(forSet: setID), id: \.targetID) { held in

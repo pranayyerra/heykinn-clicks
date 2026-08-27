@@ -202,7 +202,7 @@ struct DriveContentBreakdown: Equatable {
     ///
     /// A count the drive screen had no way to show, which let *held* and
     /// *proven* be the same number on screen when they are very different
-    /// facts. A drive holding 24,639 photos of which 90 have ever been verified
+    /// facts. A drive holding a whole archive of which 90 have ever been verified
     /// is not the drive it looks like beside one where all of them have.
     var neverChecked = 0
     var neverCheckedPhotos = 0

@@ -1,8 +1,9 @@
 import XCTest
 @testable import HeykinnClicks
 
-/// The archive is twelve zips, not 24,000 photos. Replication is satisfied
-/// when those zips exist twice — not by copying every file inside them.
+/// The archive is twelve zips, not tens of thousands of photos. Replication
+/// is satisfied when those zips exist twice — not by copying every file
+/// inside them.
 final class ArchiveReplicationTests: XCTestCase {
 
     private func archive(
@@ -346,9 +347,9 @@ final class ArchiveReplicationTests: XCTestCase {
     /// an archive as twice its own size.
     ///
     /// A part held on two drives confirms two copies of each photo inside it.
-    /// Counting replica rows and calling the total "assets" told a user with
-    /// 24,639 photos that 49,236 had been checked — a number they either
-    /// disbelieve or, worse, believe.
+    /// Counting replica rows and calling the total "assets" told a user that
+    /// nearly twice as many things had been checked as they had photographs —
+    /// a number they either disbelieve or, worse, believe.
     func testCopiesAndPhotosAreCountedSeparately() {
         let here = UUID(), away = UUID()
         let photo = UUID()

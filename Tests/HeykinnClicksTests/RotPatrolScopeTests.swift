@@ -31,7 +31,7 @@ final class RotPatrolScopeTests: XCTestCase {
     }
 
     /// A part-backed copy confirmed present has not been read, so it must not
-    /// come away claiming it was. This is what let 21,117 photos be reported as
+    /// come away claiming it was. This is what let a whole archive be reported as
     /// "all read back" on the strength of a file existing with the right name.
     func testConfirmingAPartIsThereDoesNotCountAsReadingTheBytes() throws {
         let drive = ReplicationTarget(

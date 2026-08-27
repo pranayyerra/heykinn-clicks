@@ -24,7 +24,7 @@ struct AppEnvironment {
     ///
     /// A test can already build a whole store over a temporary archive, but a
     /// *running* app could only ever open the user's own — so looking at the
-    /// app meant looking at 24,000 real photos on real drives, and any check of
+    /// app meant looking at a whole real archive on real drives, and any check of
     /// a screen's behaviour was a change to the archive somebody depends on.
     /// Redirecting `HOME` does not work: Application Support resolves through
     /// the user domain, not the environment. This is the seam that was missing.

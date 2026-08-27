@@ -17,7 +17,7 @@ struct LibraryView: View {
     @State private var tagFilter: AppStore.TagKey?
     /// Selecting is a mode rather than a modifier chord. A thumbnail's ordinary
     /// click opens the photo, and quietly turning that into "select" the moment
-    /// a key is held is how somebody loses their place in a 24,000-photo scroll
+    /// a key is held is how somebody loses their place in a long scroll
     /// without knowing what they pressed.
     @State private var isSelecting = false
     @State private var selection: Set<UUID> = []
@@ -52,7 +52,7 @@ struct LibraryView: View {
     ///
     /// Each figure here used to be its own computed property, and a computed
     /// property is recomputed at every mention: `filteredAssets` was mentioned
-    /// four times per redraw and walked all 24,000 photographs each time.
+    /// four times per redraw and walked every photograph each time.
     /// Typing a letter into the search field paid all of it on the main thread
     /// before a single character appeared.
     ///
@@ -102,7 +102,7 @@ struct LibraryView: View {
         of assets: [Asset]
     ) -> [(month: String, assets: [Asset], impossibleCount: Int)] {
         // Read once rather than twice per photograph. Worth about a tenth of
-        // the grouping at 24,000 — measured, because the shape of it suggests
+        // the grouping on a full archive — measured, because the shape suggests
         // more: the date arithmetic itself is the expensive part, and hoisting
         // the calendar does not touch that.
         let calendar = Calendar.current
@@ -133,7 +133,7 @@ struct LibraryView: View {
                         Section {
                             // Selection is off inside the grid. Every `Text`
                             // in the window became selectable, and here that
-                            // is a caption under each of 24,639 thumbnails —
+                            // is a caption under every thumbnail in the grid —
                             // enough hit-testing that the I-beam took a
                             // noticeable moment to appear anywhere on the
                             // screen. Nobody copies a filename out of a grid;
@@ -452,7 +452,7 @@ struct LibraryView: View {
             HStack(spacing: 4) {
                 // Only where it says something. On an archive that is entirely
                 // Local — which is every archive until a cloud is involved —
-                // this drew the same badge on all 21,000 tiles, so the one
+                // this drew the same badge on every tile in the grid, so the one
                 // place the badge matters, a photo that is somewhere else, had
                 // nothing to stand out from.
                 if showsResidency {

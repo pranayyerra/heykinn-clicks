@@ -31,7 +31,7 @@ final class ExportFormTests: XCTestCase {
         )
     }
 
-    /// The state a real archive was in, unremarked, for 254 GB.
+    /// The state a real archive was in, unremarked, across a whole export.
     func testHoldingBothFormsIsNoticed() {
         let archives = (1...12).flatMap { [archive($0, .zip), archive($0, .folder)] }
         let audit = ExportFormRemoval.audit(forSet: "set", target: drive, archives: archives)
@@ -92,10 +92,10 @@ final class ExportFormTests: XCTestCase {
         let archives = (1...12).flatMap { [archive($0, .zip), archive($0, .folder)] }
         let plan = ExportFormRemoval.plan(
             removing: .zip, setID: "set", target: drive,
-            archives: archives, replicasPointingIntoZips: 6482
+            archives: archives, replicasPointingIntoZips: 2500
         )
         XCTAssertFalse(plan.isAllowed)
-        XCTAssertTrue(plan.refusals[0].contains("6,482 photos"), plan.refusals[0])
+        XCTAssertTrue(plan.refusals[0].contains("2,500 photos"), plan.refusals[0])
         XCTAssertTrue(
             plan.refusals[0].contains("Unpack them first"),
             "and it says the way out, because there is one"
@@ -105,7 +105,7 @@ final class ExportFormTests: XCTestCase {
         XCTAssertTrue(
             ExportFormRemoval.plan(
                 removing: .unpacked, setID: "set", target: drive,
-                archives: archives, replicasPointingIntoZips: 6482
+                archives: archives, replicasPointingIntoZips: 2500
             ).isAllowed
         )
     }

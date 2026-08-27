@@ -14,14 +14,14 @@ enum MetadataProjection {
     /// Which photo a sidecar is about.
     ///
     /// Capture matches on filename and gives up where a name is shared, which
-    /// on a real archive is most of the hard cases: 9,561 of 24,639 photos
+    /// on a real archive is most of the hard cases: well over a third of photos
     /// there had a name that some other photo also used, and `IMG_2905.HEIC`
     /// alone belonged to five different pictures.
     ///
     /// The payload settles it, but **not by exact agreement**. `photoTakenTime`
     /// is UTC; a photo whose date came from its own EXIF carries no timezone at
     /// all, and the two then differ by whatever offset the camera was set to.
-    /// On a real archive that was most of them — only 11,814 of 18,509 matched
+    /// On a real archive that was most of them — well under half of the matched
     /// records agreed to the second, and `IMG_2891.HEIC` missed by exactly the
     /// hour and a half its clock was out.
     ///

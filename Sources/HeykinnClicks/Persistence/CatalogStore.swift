@@ -281,7 +281,7 @@ final class CatalogStore {
         CREATE INDEX IF NOT EXISTS idx_assets_hash ON assets(content_hash);
 
         -- `asset_variants` was here and is gone. Nothing ever inserted a row:
-        -- it was empty on every catalog, including one with 24,000 assets in
+        -- it was empty on every catalog, including full ones with plenty in
         -- it. Not dropped, only no longer created — an empty table on an
         -- existing catalog costs nothing, and a DROP is a destructive migration
         -- run for tidiness, which is the wrong trade against somebody's
