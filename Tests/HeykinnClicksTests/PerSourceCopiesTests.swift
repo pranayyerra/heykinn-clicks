@@ -475,6 +475,101 @@ final class PerSourceCopiesTests: XCTestCase {
         )
     }
 
+    /// Photos arriving from a place the archive already knows must join that
+    /// source, not start a second one. The backfill minted a new source every
+    /// time, so a Photos library the user had set to two copies on two drives
+    /// gained a second "Photos library" source whose copy count was read off
+    /// wherever the new bytes happened to be — one drive. The photos were then
+    /// kept to a standard nobody chose.
+    func testPhotosFromAKnownSourceJoinItRatherThanStartingASecondOne() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let keep = try makeDirectory("keep")
+        store.registerHostDeviceTarget(at: keep, name: "Keeper")
+        let keepID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        let folder = try makeDirectory("scans")
+        try Data("first".utf8).write(to: folder.appendingPathComponent("one.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans", desiredCopies: 2, destinationTargetIDs: [keepID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let known = try XCTUnwrap(store.sources.first { $0.label == "Scans" })
+        let knownGroup = try XCTUnwrap(store.storageGroupIDByAsset[
+            try XCTUnwrap(store.assets.first).id
+        ])
+        let sourcesBefore = store.sources.count
+
+        // A photo from the same folder, recorded with no source — what an
+        // import that predates sources, or an indexing pass, leaves behind.
+        let db = try catalog(at: directory)
+        let batch = try XCTUnwrap(store.importBatches.first { $0.isFolderImport })
+        var orphan = asset()
+        orphan.importBatchID = batch.id
+        try db.upsertAsset(orphan)
+        store.loadAll()
+
+        store.backfillSources()
+
+        XCTAssertEqual(store.sources.count, sourcesBefore, "no second source for the same folder")
+        XCTAssertEqual(store.sourceIDByAsset[orphan.id], known.id)
+        XCTAssertEqual(
+            store.storageGroupIDByAsset[orphan.id], knownGroup,
+            "and it is kept the way that source is already set to keep things"
+        )
+        XCTAssertEqual(store.desiredCopies(forAsset: orphan.id), 2)
+    }
+
+    /// A second source for one place is folded back into the first, and its
+    /// photos take the settings the user actually chose there — not the ones
+    /// the backfill guessed from wherever the newer bytes happened to sit.
+    func testASecondSourceForOnePlaceIsFoldedIntoTheFirst() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let keep = try makeDirectory("keep")
+        store.registerHostDeviceTarget(at: keep, name: "Keeper")
+        let keepID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        let folder = try makeDirectory("scans")
+        try Data("first".utf8).write(to: folder.appendingPathComponent("one.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans", desiredCopies: 2, destinationTargetIDs: [keepID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let keeper = try XCTUnwrap(store.sources.first { $0.label == "Scans" })
+        let keeperGroup = try XCTUnwrap(
+            store.storageGroupIDByAsset[try XCTUnwrap(store.assets.first).id]
+        )
+
+        // The duplicate the backfill used to mint: same kind, same label, added
+        // later, with a weaker policy read off one drive.
+        let db = try catalog(at: directory)
+        let later = PhotoArchiveSource(
+            id: UUID(), kind: keeper.kind, label: keeper.label,
+            originPath: keeper.originPath, exportSetID: keeper.exportSetID,
+            addedAt: keeper.addedAt.addingTimeInterval(3600)
+        )
+        try db.upsertSource(later)
+        let weak = try XCTUnwrap(store.createStorageGroup(label: "Scans"))
+        store.applyStorageGroupSettings(weak, desiredCopies: 1, destinations: [keepID])
+        let stray = asset()
+        try db.upsertAsset(stray)
+        try db.assignSource(later.id, toAssets: [stray.id])
+        try db.assignStorageGroup(weak.id, toAssets: [stray.id])
+        store.loadAll()
+        XCTAssertEqual(store.desiredCopies(forAsset: stray.id), 1, "kept to a policy nobody chose")
+
+        XCTAssertEqual(store.mergeDuplicateSources(), 1)
+
+        XCTAssertEqual(store.sources.filter { $0.label == "Scans" }.count, 1)
+        XCTAssertEqual(store.sourceIDByAsset[stray.id], keeper.id, "the older source wins")
+        XCTAssertEqual(store.storageGroupIDByAsset[stray.id], keeperGroup)
+        XCTAssertEqual(store.desiredCopies(forAsset: stray.id), 2)
+        XCTAssertFalse(
+            store.storageGroups.contains { $0.id == weak.id },
+            "the emptied group goes with it"
+        )
+        XCTAssertEqual(store.mergeDuplicateSources(), 0, "and running again finds nothing to do")
+    }
+
     // MARK: - Fixtures
 
     private func asset() -> Asset {
