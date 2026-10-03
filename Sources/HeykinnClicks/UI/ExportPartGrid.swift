@@ -108,13 +108,23 @@ struct ExportPartGrid: View {
         // count as a copy — the app has always treated them alike and never
         // said which one you actually have, which is the difference between
         // "I can hand this to the other drive" and "I can browse it".
-        let holders = archives
-            .filter {
-                $0.partNumber == part.partNumber && $0.exportSetID == part.setID
-                    && $0.holdsBytes && $0.targetID.map(managedTargetIDs.contains) == true
-            }
-            .map { (name: driveNames[$0.targetID!] ?? "a drive", archive: $0) }
-            .sorted { ($0.name, $0.archive.kind == .zip ? 0 : 1) < ($1.name, $1.archive.kind == .zip ? 0 : 1) }
+        let matching: [TakeoutArchive] = archives.filter { candidate in
+            guard candidate.partNumber == part.partNumber,
+                  candidate.exportSetID == part.setID,
+                  candidate.holdsBytes,
+                  let targetID = candidate.targetID
+            else { return false }
+            return managedTargetIDs.contains(targetID)
+        }
+        let named: [(name: String, archive: TakeoutArchive)] = matching.map { archive in
+            (name: driveNames[archive.targetID!] ?? "a drive", archive: archive)
+        }
+        let holders = named.sorted { lhs, rhs in
+            if lhs.name != rhs.name { return lhs.name < rhs.name }
+            let lhsIsZip = lhs.archive.kind == .zip
+            let rhsIsZip = rhs.archive.kind == .zip
+            return lhsIsZip && !rhsIsZip
+        }
         // The devices this export names, not every device registered — a device
         // that was never asked to hold the zips does not owe a copy of them.
         let missing = managedTargetIDs.subtracting(part.targetIDs)
