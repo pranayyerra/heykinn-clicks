@@ -14,6 +14,7 @@ Also here:
 
 | | |
 |---|---|
+| [`release-channels.md`](release-channels.md) | Dev → staging → production: which build goes where, and why production promotes a staging build instead of rebuilding it |
 | [`submitting.md`](submitting.md) | How to build, sign and upload. Read the version-train note before bumping a build number |
 | [`app-review-guideline-2.1.md`](app-review-guideline-2.1.md) | The 1.0 rejection under Guideline 2.1 and the reply that resolved it. Kept because the next review can ask the same thing |
 | [`app-review-notes-1.0.txt`](app-review-notes-1.0.txt) | The reviewer notes submitted with 1.0 |
