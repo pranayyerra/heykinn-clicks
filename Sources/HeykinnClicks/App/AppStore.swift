@@ -34,6 +34,10 @@ final class AppStore: ObservableObject {
     /// line, and every tile under them — and each read used to walk the whole
     /// catalog again.
     @Published private(set) var protectionCountsByState: [ProtectionState: Int] = [:]
+    /// Every derived fact, worked out once — see `ArchiveProjection` and D17.
+    /// Published but not yet read: the screens move onto it a stage at a time,
+    /// and until they have, this is here to be compared against what they use.
+    @Published private(set) var projection = ArchiveProjection.Result()
     /// Photographs in the archive, counting a Live Photo once rather than
     /// twice. What the printed photo total means everywhere it appears.
     @Published private(set) var countedPhotoTotal: Int = 0
@@ -2681,6 +2685,30 @@ final class AppStore: ObservableObject {
         protectionCountsByState = verdictCounts
         residencyIsUniform = uniformResidency
         applePhotosIndexedCount = indexedFromProvider
+
+        // D17, stage one: derived once, published, and read by nothing yet.
+        // The properties above keep their own implementations so the two can be
+        // compared — `ProjectionParityTests` asserts they agree, which is what
+        // makes "no number may change" checkable when the screens move over.
+        //
+        // The policy is resolved per group here rather than per asset: reaching
+        // it through `placementPolicy(forAsset:)` rebuilt a dictionary of every
+        // group on each call, once per photograph.
+        let fallback = newSourceDefaults
+        projection = ArchiveProjection.project(ArchiveProjection.Input(
+            assets: assets,
+            replicaStates: replicaStates,
+            replicationTasks: replicationTasks,
+            groupOfAsset: storageGroupIDByAsset,
+            policyOfGroup: storageGroups.reduce(into: [:]) { policies, group in
+                policies[group.id] = ArchiveProjection.Input.Policy(
+                    wants: group.desiredCopies, named: Set(group.destinationTargetIDs)
+                )
+            },
+            fallbackPolicy: ArchiveProjection.Input.Policy(
+                wants: fallback.desiredCopies, named: Set(fallback.destinationTargetIDs)
+            )
+        ))
 
         var breakdowns: [UUID: DriveContentBreakdown] = [:]
         for replica in replicaStates {
