@@ -15,7 +15,8 @@
 #   ./Packaging/bundle.sh --release --sign "Developer ID Application: Name (TEAMID)"
 #   ./Packaging/bundle.sh --release --build-number 153
 #
-# Notarisation is a separate step and is not done here; see PRODUCTION_READINESS.md.
+# Notarisation is a separate step and is not done here; see Packaging/README.md
+# under "Shipping it to somebody else".
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
