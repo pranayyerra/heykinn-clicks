@@ -139,6 +139,49 @@ final class CoreEngineTests: XCTestCase {
         )
     }
 
+    /// A copy on a drive the group does not name is a real file, but it is not
+    /// where this photo is meant to be — and it is exactly what the app queues
+    /// for deletion once the named copies are proven. Counting it as protection
+    /// had the archive calling a photo safe on the strength of a copy it was
+    /// about to remove, and left the headline count disagreeing with the work
+    /// queue printed directly beneath it.
+    func testACopyOnAnUnnamedDriveDoesNotCountTowardsTheCopiesAskedFor() {
+        let asset = makeAsset()
+        let named = UUID()
+        let stranger = UUID()
+        func replica(_ drive: UUID) -> TargetReplicaState {
+            TargetReplicaState(
+                assetID: asset.id, targetID: drive, state: .present,
+                relativePath: nil, lastVerifiedAt: Date()
+            )
+        }
+
+        XCTAssertEqual(
+            ProtectionEvaluator.protectionState(
+                for: asset, replicaStates: [replica(named), replica(stranger)],
+                desiredCopies: 2, destinations: [named]
+            ),
+            .replicatedToOneDrive,
+            "two files, but only one of them is where the group asked for it"
+        )
+        XCTAssertEqual(
+            ProtectionEvaluator.protectionState(
+                for: asset, replicaStates: [replica(named), replica(stranger)],
+                desiredCopies: 2, destinations: [named, stranger]
+            ),
+            .fullyReplicated,
+            "and once the group names both, both count"
+        )
+        XCTAssertEqual(
+            ProtectionEvaluator.protectionState(
+                for: asset, replicaStates: [replica(named), replica(stranger)],
+                desiredCopies: 2, destinations: []
+            ),
+            .fullyReplicated,
+            "a photo whose group names nowhere is judged on the copies it has"
+        )
+    }
+
     func testProtectionNotApplicableForCloudResidency() {
         let asset = makeAsset(residency: .appleCloud, presence: DomainPresence(local: false, appleCloud: true, googleCloud: false))
         XCTAssertEqual(ProtectionEvaluator.protectionState(for: asset, replicaStates: [], desiredCopies: 2), .notApplicable)

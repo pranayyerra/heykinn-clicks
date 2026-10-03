@@ -426,6 +426,55 @@ final class PerSourceCopiesTests: XCTestCase {
         XCTAssertEqual(store.reuniteLivePhotoHalves(), 0)
     }
 
+    /// The headline sentence counts photographs, so its numerator must too. It
+    /// read its total from the per-photograph counts and its shortfall from the
+    /// raw per-row states, which include Live Photo movie halves — so the app
+    /// said "25 of 23,121 photos" about 25 things the same sentence does not
+    /// call photos. A photograph is only as safe as its worse-off half, so the
+    /// movie's shortfall now lands on the photograph it belongs to.
+    func testAShortLivePhotoMovieMakesItsPhotographShortRatherThanItsOwnRow() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans", desiredCopies: 1, destinationTargetIDs: [driveID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let still = try XCTUnwrap(store.assets.first)
+        store.syncDrive(driveID)
+        try await waitUntil("the sync to drain") { !store.isSyncing }
+        XCTAssertEqual(store.safetyFacts.short, 0, "the photograph is where it belongs")
+
+        // Its movie half arrives, held nowhere yet.
+        var motion = asset()
+        motion.kind = .video
+        motion.originalFilename = "photo.mov"
+        motion.livePhotoStillID = still.id
+        let db = try catalog(at: directory)
+        try db.upsertAsset(motion)
+        try db.assignSource(try XCTUnwrap(store.sourceIDByAsset[still.id]), toAssets: [motion.id])
+        try db.assignStorageGroup(
+            try XCTUnwrap(store.storageGroupIDByAsset[still.id]), toAssets: [motion.id]
+        )
+        store.loadAll()
+
+        XCTAssertEqual(
+            store.countedPhotoTotal, 1,
+            "a Live Photo is one photograph however many files it is made of"
+        )
+        XCTAssertEqual(
+            store.safetyFacts.short, 1,
+            "and it is short, because half of it is — counted against the photograph, not as an extra row"
+        )
+        XCTAssertLessThanOrEqual(
+            store.safetyFacts.short, store.safetyFacts.photos,
+            "the numerator can never exceed the total it is quoted against"
+        )
+    }
+
     // MARK: - Fixtures
 
     private func asset() -> Asset {

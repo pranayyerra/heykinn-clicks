@@ -18,6 +18,7 @@ enum ProtectionEvaluator {
         for assets: [Asset],
         replicaStates: [TargetReplicaState],
         desiredCopies: (UUID) -> Int,
+        destinations: ((UUID) -> [UUID])? = nil,
         now: Date = Date()
     ) -> [UUID: ProtectionState] {
         let byAsset = Dictionary(grouping: replicaStates, by: \.assetID)
@@ -28,6 +29,7 @@ enum ProtectionEvaluator {
                 replicaStates: byAsset[asset.id] ?? [],
                 alreadyFiltered: true,
                 desiredCopies: desiredCopies(asset.id),
+                destinations: destinations?(asset.id),
                 now: now
             )
         }
@@ -36,11 +38,19 @@ enum ProtectionEvaluator {
 
     /// `alreadyFiltered` means `replicaStates` holds only this asset's
     /// replicas, letting batch callers skip the per-asset scan.
+    /// `destinations` are the devices the asset's group actually names. Copies
+    /// anywhere else are real files, but they are not where this photo is meant
+    /// to be kept — and they are precisely the copies the app queues for
+    /// deletion once the named ones are proven. Counting them as protection had
+    /// the archive calling a photo safe on the strength of a copy it was about
+    /// to remove, and put the headline count at odds with the work queue it sat
+    /// above. Nil means "no group names anything", where any copy counts.
     static func protectionState(
         for asset: Asset,
         replicaStates: [TargetReplicaState],
         alreadyFiltered: Bool = false,
         desiredCopies: Int,
+        destinations: [UUID]? = nil,
         now: Date = Date()
     ) -> ProtectionState {
         guard asset.residency == .local else { return .notApplicable }
@@ -59,7 +69,11 @@ enum ProtectionEvaluator {
         // Full replication means as many devices hold the asset as its source
         // asks for. With fewer devices named than that, an asset can never be
         // fully replicated — a truthful statement about the archive, not a bug.
-        let present = states.filter { $0.state == .present }
+        var present = states.filter { $0.state == .present }
+        if let destinations, !destinations.isEmpty {
+            let named = Set(destinations)
+            present = present.filter { named.contains($0.targetID) }
+        }
 
         if present.count >= desiredCopies {
             // Never read back at all is a different claim from read back too

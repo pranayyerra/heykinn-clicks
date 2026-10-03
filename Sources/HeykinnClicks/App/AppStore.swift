@@ -2639,7 +2639,8 @@ final class AppStore: ObservableObject {
         protectionStates = ProtectionEvaluator.protectionStates(
             for: assets,
             replicaStates: replicaStates,
-            desiredCopies: { [self] in desiredCopies(forAsset: $0) }
+            desiredCopies: { [self] in desiredCopies(forAsset: $0) },
+            destinations: { [self] in placementPolicy(forAsset: $0).destinations }
         )
 
         // Off the verdicts just computed, in the one pass that has them.
@@ -2651,13 +2652,28 @@ final class AppStore: ObservableObject {
         var seenResidency: ResidencyDomain?
         var uniformResidency = true
         var indexedFromProvider = 0
+        // A Live Photo is one photograph made of two files, and it is only as
+        // safe as the worse-off half. Counting the still alone reported a
+        // photograph as fully kept while the movie that belongs to it was one
+        // copy short — which is the same under-reporting that let those halves
+        // drift onto a weaker policy unnoticed in the first place.
+        var worstHalfByStill: [UUID: ProtectionState] = [:]
+        for asset in assets where asset.isLivePhotoMotion {
+            guard let stillID = asset.livePhotoStillID,
+                  let state = protectionStates[asset.id], state != .notApplicable
+            else { continue }
+            if let seen = worstHalfByStill[stillID], seen.severity >= state.severity { continue }
+            worstHalfByStill[stillID] = state
+        }
         for asset in assets {
             if let seenResidency, seenResidency != asset.residency { uniformResidency = false }
             if seenResidency == nil { seenResidency = asset.residency }
             if asset.providerLocalID != nil { indexedFromProvider += 1 }
             guard !asset.isLivePhotoMotion else { continue }
             counted += 1
-            guard let state = protectionStates[asset.id], state != .notApplicable else { continue }
+            guard let own = protectionStates[asset.id], own != .notApplicable else { continue }
+            let half = worstHalfByStill[asset.id]
+            let state = (half?.severity ?? -1) > own.severity ? (half ?? own) : own
             verdictCounts[state, default: 0] += 1
         }
         countedPhotoTotal = counted
@@ -7459,13 +7475,18 @@ final class AppStore: ObservableObject {
     /// Both screens used to work this out for themselves and reached different
     /// conclusions — see `SafetyAnswer`.
     var safetyFacts: SafetyAnswer.Facts {
-        let states = protectionStates.values
         let fewest = leastCopiesAnywhere
         return SafetyAnswer.Facts(
             photos: countedPhotoTotal,
             places: targets.count,
-            damaged: states.filter { $0 == .driftDetected }.count,
-            short: states.filter { $0.verdict == .shortOfPolicy }.count,
+            // From the per-photograph counts, not the raw per-row states: those
+            // include Live Photo movie halves, which are not counted in
+            // `photos` — so the sentence read "25 of 23,121 photos" about 25
+            // things the same sentence does not call photos.
+            damaged: protectionCountsByState[.driftDetected] ?? 0,
+            short: protectionCountsByState
+                .filter { $0.key.verdict == .shortOfPolicy }
+                .values.reduce(0, +),
             copiesShort: placementShortfallSummary.copiesShort,
             fewestPlaces: fewest,
             photosAtFewest: fewest.flatMap { copyCoverage[$0] } ?? 0,
