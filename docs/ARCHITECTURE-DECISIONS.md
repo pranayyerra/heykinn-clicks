@@ -6,7 +6,9 @@ cost.*
 Each decision carries a status. **Decided** means the choice is settled and will
 not be revisited without new evidence; **built** means the code matches it.
 Three decisions are settled but not yet built, and the gap is deliberate — the
-measurements that settled them arrived after the first implementation.
+measurements that settled them arrived after the first implementation. D17 is
+settled and unbuilt for a different reason: it reorganises code that works, and
+is staged so that each step ships and is verified on its own.
 
 The working paper that produced D5, D6, D15 and D16 was `ARCHITECTURE-REVIEW.md`,
 deleted once every verdict in it had shipped and been recorded here — it still
@@ -505,11 +507,118 @@ order of magnitude larger makes the first sync uncomfortable.
 
 ---
 
+## D17 · One derived state, computed once
+
+**Requirement:** R0.
+
+Every number on screen is derived: how many photographs there are, how many are
+short of their copies, what a drive holds, what is on its way, what is leaving.
+None of it is stored — all of it is worked out from the assets, the replica rows
+and the groups.
+
+It is worked out in three places. `recomputeDerivedState` builds some eagerly
+and publishes it. Computed properties on `AppStore` — `safetyFacts`,
+`placementShortfall`, `reclamationPlan` — work out more on each access, reading
+the raw arrays again. Views work out the rest for themselves. `AppStore` carries
+61 published derived properties and 19 separate passes over `assets`; eight
+files answer "does this have enough copies" by filtering `state == .present`
+themselves.
+
+Two consequences, both observed rather than predicted.
+
+**The same question gets two answers.** "Is this photograph short?" had two
+implementations. The protection verdict counted copies on any drive at all; the
+placement planner counted only copies on the drives the group names. The
+headline read *25 photos are not yet on all the drives they are meant to be on*
+while the queue printed directly beneath it worked through 294 — and a copy on
+an unnamed drive is exactly what gets deleted once the named ones are proven, so
+the archive was calling photographs safe on the strength of copies it was about
+to remove. This is an R0 failure: a wrong answer, stated confidently.
+
+`SafetyAnswer` is the precedent, and it shows the instinct was right but applied
+one layer too high. It exists because two screens computed the headline
+separately and drifted — one of them, by its own note, "gave the reassuring
+answer to a photograph that was rotting". It settled the wording and the
+ordering, but its `Facts` is still *gathered by the caller*. So the drift moved
+down a layer: `safetyFacts` took `short` from the protection rule and
+`copiesShort` from the placement rule, in one struct literal.
+
+**A guard forgotten is a wrong number.** An `Asset` row is four things: content
+the archive holds, an entry seen in a library whose bytes it does not hold, the
+movie half of a Live Photo, and a photograph. 36 sites across 10 files re-decide
+which, by `isLivePhotoMotion`, `isIndexedOnly` or `providerLocalID != nil`, and
+`contentHash` carries the sentinel `apple-library:<id>` where a hash belongs.
+Miss one and the app queues copies of photographs it holds no bytes of, counts
+movie halves in a numerator whose denominator excludes them, or files a movie
+half as a source of its own — all three of which it did.
+
+**Options:** keep deriving per consumer and add tests pinning each pair of
+numbers together; cache more aggressively in `AppStore`, which moves the
+duplication without removing it; derive once into an immutable value that
+everything downstream reads.
+
+**Chosen:** derive once. One pure function, raw tables in, one value out, and
+nothing downstream touches `assets` or `replicaStates` to answer a derived
+question. The projection is a value, not the store, so it is testable with no
+archive on disk — which is what `SafetyAnswer.Facts` already does for one
+sentence, generalised to the whole derivation layer.
+
+Three properties carry the weight:
+
+*Keyed by photograph, not by row.* The unit is a still plus its optional movie
+half, so a half is not in the top-level collection and cannot be counted as a
+photograph. The numerator-exceeds-denominator bug becomes unwriteable.
+
+*One `Placement` per photograph* — `wants`, `named`, `presentOnNamed`,
+`presentElsewhere`, `pending`, `leaving`, `damaged` — so `isShort` is one field
+read by the verdict, the planner, the grid and the headline. Two definitions
+cannot disagree when there is one. It also gives the grid `leaving`, a state it
+had no way to express, so queued deletions stopped being drawn as arrivals.
+
+*Content as an enum* — `held(hash:size:)` or `indexed(providerID:)` — retiring
+the sentinel, so a planner that takes only `held` cannot queue a copy of
+something with no bytes.
+
+Alongside it, identity where today there is none: a replication task keyed
+`(asset, target, action)` and a source keyed `(kind, identity)`, making enqueue
+and backfill upserts. `AppStore` constructs `id: UUID()` in 12 places and has no
+natural key anywhere, which is why the same removal was queued on every sync and
+why a second `Photos library` source appeared on every scan.
+
+**Staged, in this order, because it puts the risky part last:**
+
+1. Build the projection inside `recomputeDerivedState` from data already loaded.
+   No storage changes. Publish it beside the existing properties.
+2. Re-express those properties as reads off it, deleting the loops. The
+   acceptance test is sharp: no number may change.
+3. Point the views at it, deleting view-level derivation.
+4. Only then change storage — the content enum and the natural keys. By then the
+   projection is the only consumer of the raw tables, so the schema change
+   touches one place.
+
+**Cost:** steps 1–3 are mechanical once the projection exists, but they touch
+most of `AppStore` and every screen, and they buy no feature. Step 4 is a schema
+migration with a repair pass for archives already carrying duplicates. The
+projection is rebuilt on every `loadAll`, so it must stay a single pass over the
+rows — the current work is already O(assets) and must not become O(assets ×
+groups).
+
+**Invariants, as tests rather than prose.** Each is a few lines and each
+corresponds to a bug already shipped: a numerator never exceeds its denominator;
+group photograph counts sum to the archive total; every library item is matched
+or recorded as a duplicate; a movie half's policy equals its still's; no copy is
+queued for a row holding no bytes.
+
+**Status:** decided, not built. The faults above are fixed individually and
+tested; this is the change that stops the class.
+
+---
+
 ## Requirement → decision
 
 | | Met by | State |
 |---|---|---|
-| **R0** Never claim more than you checked | D3, D4, D11 | Held |
+| **R0** Never claim more than you checked | D3, D4, D11, D17 | Held across devices; D17 is the same requirement applied to the numbers one device derives, and is not built |
 | **R1** One archive, several devices | D1, D3, D4, D8, D10, D11 | Built and tested |
 | **R2** Version differences never cause loss | Catalog and sync version stamps; a build refuses a catalog newer than itself | Built. Behaviour still differs by version; only damage is prevented |
 | **R3** Consistent state across devices | D1, D3, D6, D11 | Built |
