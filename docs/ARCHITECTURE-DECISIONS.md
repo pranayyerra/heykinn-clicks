@@ -522,9 +522,8 @@ order of magnitude larger makes the first sync uncomfortable.
 
 ## Still open
 
-Three decisions awaiting a call. Each has been investigated and costed in
-`OPEN-DECISIONS.md`, which carries the evidence and a recommendation; the
-summaries below say only what is being decided.
+Three decisions awaiting a call. Each entry below carries its own evidence and
+recommendation.
 
 ### O1 · How zip members get read — **decided and built**
 

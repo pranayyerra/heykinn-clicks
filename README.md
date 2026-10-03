@@ -237,33 +237,86 @@ Sources/HeykinnClicks/
 │   ├── ArchiveReplication.swift ExportPart, PartRedundancy (graded, not binary),
 │   │                            HeldExportPart, ExportPartTransferPlanner
 │   ├── CloudClaimWithdrawal.swift withdrawing claims the app never verified
+│   ├── CaptureDateResolver.swift date precedence chain, recording which source won
+│   ├── LivePhotoPairer.swift    still ↔ motion matching, tiered by confidence
+│   ├── Portability/             The conformance kernel (docs/MULTI_DEVICE_STATE.md §3)
+│   │                            — bit-identical on every platform, or the archive
+│   │                            silently diverges:
+│   │   ├── Digest256.swift      SHA-256 seam: CryptoKit on Apple, SHA256Reference
+│   │   │                        elsewhere
+│   │   ├── SHA256Reference.swift plain-Swift SHA-256, no platform dependency
+│   │   ├── ByteOrdering.swift   bytewise UTF-8 ordering, not a language's native
+│   │   │                        collation
+│   │   ├── HybridLogicalClock.swift wall time + counter + device id; total order,
+│   │   │                        no server
+│   │   ├── ChangeRecord.swift   one column's value, tagged for exact cross-platform
+│   │   │                        replay
+│   │   ├── CheckpointRecord.swift a whole row as it stands now, not the changes
+│   │   │                        that produced it
+│   │   ├── DeviceIdentity.swift which installation this is; never stored in the
+│   │   │                        catalog
+│   │   ├── ZipContainer.swift   zip's own container structure, parsed with no
+│   │   │                        dependency
+│   │   └── Inflate.swift        DEFLATE via the platform (Compression on Apple)
 │   └── …                        ImportBatch, AuditEvent, DuplicateGroup
 ├── Persistence/
 │   ├── SQLiteDatabase.swift     thin sqlite3 wrapper (WAL, prepared statements)
-│   └── CatalogStore*.swift      schema + repositories for every entity
+│   ├── CatalogStore*.swift      schema + repositories for every entity
+│   ├── ChangeJournal.swift      what this device knows about when each field was
+│   │                            last written, and by whom
+│   ├── ChangeTriggers.swift     SQLite triggers that make capture unforgettable (D5)
+│   └── CatalogScope.swift       which tables are global vs. device-local (§6.1)
 ├── Services/                    Pure/stateless engines where possible:
 │   ├── ImportService.swift      scan → hash → dedupe → classify → stage → catalog
 │   ├── HashingService.swift     streaming SHA-256 + sampled quick checksum
 │   ├── MetadataExtractor.swift  ImageIO EXIF (encapsulated; swappable for exiftool)
-│   ├── CaptureDateResolver.swift date precedence chain, recording which source won
-│   ├── LivePhotoPairer.swift    still ↔ motion matching, tiered by confidence
 │   ├── PolicyEngine.swift       priority-ordered rule evaluation + origin classification
 │   ├── DuplicateDetector.swift  exact hash groups (perceptual matching = later phase)
 │   ├── StagingStore.swift       Mac staging/cache area
+│   ├── StagingReclaimer.swift   decides which staged files are no longer needed
 │   ├── TargetMonitor.swift      volume enumeration, marker identity, mount notifications
+│   ├── TargetBookmarks.swift    security-scoped bookmarks to registered devices
 │   ├── AccessGrants.swift       remembered per-volume decisions + security-scoped
 │   │                            bookmarks; the store behind ⌘, → Access
 │   ├── SourceBookmarks.swift    per-machine access to selected Takeout roots,
 │   │                            retained across deferred import and relaunch
+│   ├── SecurityScopedAccess.swift balanced lease on a URL handed over by a system
+│   │                            file picker
 │   ├── PlacementPlanner.swift   places copies on the devices a group names;
 │   │                            free space validates, never chooses
 │   ├── ReplicationService.swift copy/verify/remove backlog execution (hash-verified,
 │   │                            temp-file + atomic rename; interruption-safe)
+│   ├── ReplicaPathRepair.swift  finds a replica whose recorded path no longer resolves
+│   ├── ReplicaStatGate.swift    stats every replica on connect; only what moved is
+│   │                            re-read
+│   ├── HostTargetPathRepair.swift re-finds this device's own copy after the archive
+│   │                            directory moves
+│   ├── PatrolScheduler.swift    which replicas the background rot patrol reads next
 │   ├── ExportPartRelay.swift    the Mac holding area; verified large-file copy
 │   ├── Takeout*.swift           Scanner, Extractor (adaptive parallel), Importer,
 │   │                            Reconciler — the zero-button drive pipeline
+│   ├── TakeoutMetadataBackfill.swift re-reads Google's sidecars for exports already
+│   │                            imported
+│   ├── MetadataProjection.swift decides what a captured payload means; versioned
+│   │                            separately from capture itself
+│   ├── Zip/                     ZipReader.swift, ZipExtractor.swift — in-process zip
+│   │                            reading and extraction; no shelled-out unzip/tar/ditto
+│   ├── ParallelZipExtraction.swift several concurrent readers, worker count adapted
+│   │                            to cores and disk type
+│   ├── ZipTools.swift           small zip-listing helpers
+│   ├── Sync/                    DriveSync.swift, SegmentCodec.swift, SegmentStore.swift
+│   │                            — carries the change journal between devices on a
+│   │                            drive (docs/MULTI_DEVICE_STATE.md §7)
 │   ├── CloudDomainVerifier.swift seam for account integration; refuses to guess
+│   ├── ApplePhotosConnector.swift the first real CloudDomainVerifier, via PhotoKit
+│   ├── AppleVolumeEvents.swift  mount/unmount events from NSWorkspace
+│   ├── AppleLivePhotoIdentifiers.swift the still ↔ motion identifiers LivePhotoPairer
+│   │                            matches on
+│   ├── AppleMovieDates.swift    a video's own creation date — EXIF's equivalent for
+│   │                            movies
 │   ├── CatalogBackupService.swift VACUUM INTO snapshots, verified before publishing
+│   ├── DiagnosticsReport.swift  plain-text account of what the app believes, for
+│   │                            whoever is helping with a problem
 │   ├── ThumbnailCache.swift     memory + disk tiers, video frames, in-flight dedupe
 │   ├── ProtectionEvaluator.swift batch protection-state computation (per-asset is O(n²))
 │   ├── ViolationScanner.swift   invariant checks incl. migration-overlap exemption
@@ -637,15 +690,19 @@ build uses Apple Distribution signing, a provisioning profile, and the sandbox.
 
 ## Next implementation steps
 
+Core workflow, in order:
+
 1. Duplicate review workflow (keep/supersede, storage reclaim via explicit jobs).
 2. Guided fresh-Takeout comparison for the Google presence checks its API no
    longer exposes for pre-existing libraries.
 3. User-guided cloud reclamation that preserves the same read-back guarantees
    as local-device moves.
-4. Move synchronous catalog work behind an actor if personal-archive scale
+
+Later, once the above land and terminology settles:
+
+4. Move synchronous catalog work behind an actor, if personal-archive scale
    demonstrates a UI bottleneck.
-5. Localize the currently English-only interface after the review-critical
-   workflows and terminology settle.
+5. Localize the currently English-only interface.
 
 ## Contributing
 

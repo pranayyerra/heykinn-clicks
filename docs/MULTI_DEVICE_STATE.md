@@ -368,7 +368,7 @@ Two decisions worth recording:
 
 Device A marks a photo verified on My Passport. Device B, from a copy loaded at
 launch, moves it to a different storage group. Both write whole rows —
-[`CatalogStore.swift:329`](../Sources/HeykinnClicks/Persistence/CatalogStore.swift)
+[`CatalogStore.swift:492`](../Sources/HeykinnClicks/Persistence/CatalogStore.swift)
 rewrites all 27 asset columns on conflict, and fifteen upserts across
 `Persistence/` share the shape. Whoever writes second erases the other silently,
 and the catalog stays perfectly readable while describing something untrue.
