@@ -646,3 +646,14 @@ build uses Apple Distribution signing, a provisioning profile, and the sandbox.
    demonstrates a UI bottleneck.
 5. Localize the currently English-only interface after the review-critical
    workflows and terminology settle.
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for setup, which docs to read first,
+and how to run the opt-in test suites.
+
+## License
+
+GPL-3.0-or-later, plus an additional permission that keeps Mac App Store
+distribution compatible with the license — see
+[LICENSE](LICENSE) and [LICENSE-APPSTORE-EXCEPTION.md](LICENSE-APPSTORE-EXCEPTION.md).
