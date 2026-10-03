@@ -843,6 +843,132 @@ final class AppStoreOrchestrationTests: XCTestCase {
         )
     }
 
+    /// Two library items that are the same photograph as one held asset must
+    /// not both claim it. The first takes the link; the second is counted as a
+    /// duplicate — not silently overwritten, which dropped the first link and
+    /// left the matched total short of the library total with nothing saying
+    /// why, and not added as a row, which would claim a photo was missing.
+    func testASecondLibraryItemMatchingTheSameHeldPhotoIsCountedNotSwapped() throws {
+        let (store, directory) = try makeStore()
+        let held = makeAsset(hash: "held-hash", filename: "IMG_0001.HEIC")
+        try catalog(at: directory).upsertAsset(held)
+        store.loadAll()
+
+        store.mergeLibraryIndex([
+            libraryItem(id: "FIRST"),
+            libraryItem(id: "SECOND", filename: "IMG_0001 (1).HEIC"),
+        ])
+
+        XCTAssertEqual(store.assets.count, 1, "One photograph, one row")
+        XCTAssertEqual(
+            store.assets.first?.providerLocalID, "FIRST",
+            "The first claim stands; the second must not overwrite it"
+        )
+        XCTAssertEqual(store.applePhotosDuplicateCount, 1)
+        XCTAssertEqual(
+            store.applePhotosIndexedCount + store.applePhotosDuplicateCount,
+            store.applePhotosLibraryCount,
+            "Every library item is accounted for — matched or named a duplicate"
+        )
+    }
+
+    /// The same, when the first claim was made by an earlier scan rather than
+    /// earlier in this one. Missing this case was worse than the overwrite it
+    /// replaced: the duplicate was added as a photo of its own, the import
+    /// found its bytes already held and deleted it, and the next scan added it
+    /// straight back — a loop that re-downloaded the same original for ever.
+    func testADuplicateOfAPhotoMatchedByAnEarlierScanIsNotAddedAgain() throws {
+        let (store, directory) = try makeStore()
+        let held = makeAsset(hash: "held-hash", filename: "IMG_0001.HEIC")
+        try catalog(at: directory).upsertAsset(held)
+        store.loadAll()
+
+        store.mergeLibraryIndex([libraryItem(id: "FIRST")])
+        XCTAssertEqual(store.assets.first?.providerLocalID, "FIRST")
+
+        // A second scan meets the duplicate for the first time.
+        store.mergeLibraryIndex(
+            [libraryItem(id: "SECOND", filename: "IMG_0001 (1).HEIC")], libraryCount: 2
+        )
+
+        XCTAssertEqual(store.assets.count, 1, "no row for a photograph already held")
+        XCTAssertEqual(store.assets.first?.providerLocalID, "FIRST")
+        XCTAssertEqual(store.applePhotosDuplicateCount, 1)
+        XCTAssertTrue(
+            store.applePhotosAwaitingImport.isEmpty,
+            "nothing queued to fetch an original the archive already has"
+        )
+    }
+
+    /// The case metadata cannot see: the duplicate's twin has no dimensions
+    /// recorded, so no counterpart match is possible and only the bytes can
+    /// settle it. Once they have, the answer is written down — without that the
+    /// item was rediscovered, re-fetched from iCloud, merged and dropped on
+    /// every single scan, for ever.
+    func testADuplicateProvenByItsBytesIsNotFetchedAgainOnTheNextScan() async throws {
+        let (store, directory) = try makeStore()
+        let hashes = try makeExport(store, still: "original bytes")
+        // Held, with no dimensions and a capture date nowhere near the library
+        // item: nothing but the bytes can match these two.
+        var twin = makeAsset(
+            hash: hashes.still, filename: "IMG_0001.jpg",
+            captureDate: Date(timeIntervalSince1970: 1_000_000)
+        )
+        twin.providerLocalID = "ALREADY-MATCHED"
+        try catalog(at: directory).upsertAsset(twin)
+        store.loadAll()
+
+        store.mergeLibraryIndex([libraryItem(id: "DUPLICATE")])
+        XCTAssertEqual(store.assets.count, 2, "metadata cannot tell these apart yet")
+
+        store.importOriginalsFromApplePhotos()
+        try await waitUntil("the Photos import to finish") { !store.isImportingFromApplePhotos }
+
+        XCTAssertEqual(store.assets.count, 1, "the bytes settle it: one photograph")
+        XCTAssertEqual(
+            store.assets.first?.providerLocalID, "ALREADY-MATCHED",
+            "the first library item keeps the link"
+        )
+
+        // The next scan must leave it alone rather than start the cycle again.
+        store.mergeLibraryIndex([libraryItem(id: "DUPLICATE")], libraryCount: 2)
+
+        XCTAssertEqual(store.assets.count, 1, "no row, no second fetch")
+        XCTAssertTrue(store.applePhotosAwaitingImport.isEmpty)
+        XCTAssertEqual(store.applePhotosDuplicateCount, 1)
+    }
+
+    /// If the photo a duplicate was measured against is gone, the note about it
+    /// must go too — otherwise the app skips a library item on the strength of
+    /// a comparison with something it no longer holds, and the photograph ends
+    /// up in neither place.
+    func testANoteAboutADeletedPhotoIsForgottenSoTheLibraryItemIsLookedAtAgain() async throws {
+        let (store, directory) = try makeStore()
+        let hashes = try makeExport(store, still: "original bytes")
+        var twin = makeAsset(
+            hash: hashes.still, filename: "IMG_0001.jpg",
+            captureDate: Date(timeIntervalSince1970: 1_000_000)
+        )
+        twin.providerLocalID = "ALREADY-MATCHED"
+        let db = try catalog(at: directory)
+        try db.upsertAsset(twin)
+        store.loadAll()
+        store.mergeLibraryIndex([libraryItem(id: "DUPLICATE")])
+        store.importOriginalsFromApplePhotos()
+        try await waitUntil("the Photos import to finish") { !store.isImportingFromApplePhotos }
+        XCTAssertEqual(try db.fetchApplePhotosDuplicateIDs(), ["DUPLICATE"])
+
+        // The photo it was measured against leaves the archive.
+        try db.deleteAsset(id: twin.id)
+        store.loadAll()
+
+        store.mergeLibraryIndex([libraryItem(id: "DUPLICATE")], libraryCount: 1)
+
+        XCTAssertTrue(try db.fetchApplePhotosDuplicateIDs().isEmpty, "the stale note is dropped")
+        XCTAssertEqual(store.assets.count, 1, "and the library item is taken seriously again")
+        XCTAssertEqual(store.assets.first?.providerLocalID, "DUPLICATE")
+    }
+
     /// A photo the archive has never seen becomes a row of its own, carrying
     /// the provider's identifier so re-indexing updates it rather than
     /// duplicating it.
@@ -889,6 +1015,44 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertEqual(indexed.residency, .local)
         XCTAssertFalse(indexed.presence.appleCloud)
         XCTAssertEqual(indexed.cloudPresenceEvidence, .none)
+    }
+
+    /// A library answering the same way it did ten minutes ago is not news. The
+    /// scan runs every ten minutes for as long as the app is open, so writing a
+    /// line each pass filled the log with one repeated sentence and buried
+    /// everything worth reading.
+    func testARepeatedPresenceCheckOnlyWritesToTheLogWhenTheAnswerChanges() async throws {
+        let (store, directory) = try makeStore()
+        let subject = makeAsset(hash: "held", filename: "IMG_0001.HEIC")
+        try catalog(at: directory).upsertAsset(subject)
+        store.loadAll()
+        store.cloudVerifiers.verifiers[.appleCloud] = StubVerifier(present: [subject.id: true])
+
+        store.checkApplePhotosPresence()
+        try await waitUntil("the first check") { !store.isCheckingApplePhotos }
+        let afterFirst = store.auditEvents.filter { $0.message.hasPrefix("Apple Photos check") }.count
+        XCTAssertEqual(afterFirst, 1, "the first answer is new, so it is recorded")
+
+        store.checkApplePhotosPresence()
+        try await waitUntil("the second check") { !store.isCheckingApplePhotos }
+
+        XCTAssertEqual(
+            store.auditEvents.filter { $0.message.hasPrefix("Apple Photos check") }.count,
+            afterFirst,
+            "the same answer again writes nothing"
+        )
+        XCTAssertNotNil(store.lastApplePhotosCheckSummary, "but the status line still says it ran")
+    }
+
+    /// Always connected, and answers whatever it was built with.
+    private struct StubVerifier: CloudDomainVerifier {
+        let domain: ResidencyDomain = .appleCloud
+        var isConnected: Bool { true }
+        var present: [UUID: Bool]
+
+        func verifyPresence(of assets: [Asset]) async throws -> [UUID: Bool] {
+            assets.reduce(into: [:]) { out, asset in out[asset.id] = present[asset.id] ?? false }
+        }
     }
 
     // MARK: - Apple Photos: bringing originals in
@@ -944,6 +1108,100 @@ final class AppStoreOrchestrationTests: XCTestCase {
         XCTAssertTrue(imported.presence.local)
         XCTAssertEqual(store.applePhotosAwaitingImport.count, 0)
         XCTAssertEqual(store.backlogCount(for: targetID), 1, "Held bytes owe the target a copy")
+    }
+
+    /// A photo known only from the Photos library has no file here, so nothing
+    /// may be queued to copy it — that queue entry used to stop a whole sync.
+    func testPhotosNotYetHeldAreNotQueuedForDrives() throws {
+        let (store, _) = try makeStore()
+        store.iCloudPhotosEnabled = false
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        store.mergeLibraryIndex([libraryItem()])
+
+        store.auditPlacement()
+
+        XCTAssertEqual(store.backlogCount(for: targetID), 0)
+    }
+
+    /// Copies queued for such a photo before this was fixed are taken back, and
+    /// bringing its original in then queues exactly one — not a second.
+    func testStaleCopiesOfUnheldPhotosAreWithdrawnAndNotDuplicatedByImport() async throws {
+        let (store, directory) = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Target")
+        let targetID = try XCTUnwrap(store.targets.first?.id)
+        store.mergeLibraryIndex([libraryItem()])
+        let indexed = try XCTUnwrap(store.assets.first)
+        let db = try catalog(at: directory)
+        try db.upsertReplicationTask(ReplicationTask(
+            id: UUID(), assetID: indexed.id, targetID: targetID, action: .copy,
+            state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
+        ))
+        try db.upsertReplicaState(TargetReplicaState(
+            assetID: indexed.id, targetID: targetID,
+            state: .pending, relativePath: nil, lastVerifiedAt: nil
+        ))
+        store.loadAll()
+        XCTAssertEqual(store.backlogCount(for: targetID), 1)
+
+        XCTAssertEqual(store.withdrawCopiesOfPhotosNotYetHeld(), 1)
+        XCTAssertEqual(store.backlogCount(for: targetID), 0)
+
+        // Re-create the stale entry; the import itself must clear it first.
+        try db.upsertReplicationTask(ReplicationTask(
+            id: UUID(), assetID: indexed.id, targetID: targetID, action: .copy,
+            state: .queued, queuedAt: Date(), completedAt: nil, errorMessage: nil
+        ))
+        store.loadAll()
+        _ = try makeExport(store, still: "original bytes")
+        store.importOriginalsFromApplePhotos()
+        try await waitUntil("the Photos import to finish") { !store.isImportingFromApplePhotos }
+
+        XCTAssertEqual(store.backlogCount(for: targetID), 1)
+    }
+
+    /// A large run earns one quiet summary, not one per photo.
+    func testALargeImportRunPostsOneSummary() async throws {
+        let (store, _) = try makeStore()
+        store.applePhotosSummaryThreshold = 1
+        var posted: [String] = []
+        store.postApplePhotosSummary = { _, body in posted.append(body) }
+        store.mergeLibraryIndex([libraryItem()])
+        _ = try makeExport(store, still: "original bytes")
+
+        store.importOriginalsFromApplePhotos()
+        try await waitUntil("the Photos import to finish") { !store.isImportingFromApplePhotos }
+
+        XCTAssertEqual(posted.count, 1)
+        XCTAssertTrue(try XCTUnwrap(posted.first).contains("1 photo"))
+    }
+
+    /// A small run is not worth interrupting anybody for.
+    func testASmallImportRunPostsNothing() async throws {
+        let (store, _) = try makeStore()
+        var posted = 0
+        store.postApplePhotosSummary = { _, _ in posted += 1 }
+        store.mergeLibraryIndex([libraryItem()])
+        _ = try makeExport(store, still: "original bytes")
+
+        store.importOriginalsFromApplePhotos()
+        try await waitUntil("the Photos import to finish") { !store.isImportingFromApplePhotos }
+
+        XCTAssertEqual(posted, 0)
+    }
+
+    /// Looking again at a library that has not changed must not re-add anything,
+    /// and a partial read (only unseen photos) must not shrink the library count.
+    func testLookingAgainAtAnUnchangedLibraryAddsNothingAndKeepsTheCount() throws {
+        let (store, _) = try makeStore()
+        store.mergeLibraryIndex([libraryItem()])
+
+        store.mergeLibraryIndex([], libraryCount: 1)
+
+        XCTAssertEqual(store.assets.count, 1)
+        XCTAssertEqual(store.applePhotosLibraryCount, 1)
     }
 
     /// If the exported original hashes to something already held, this was the

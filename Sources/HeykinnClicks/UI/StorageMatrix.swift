@@ -836,16 +836,20 @@ struct StorageMatrix: View {
                 .background(tint.opacity(0.1), in: shape)
             } else {
                 // Named but holding nothing is not the same as never asked.
-                // Both are blank; only one of them is waiting for something.
-                Text(named ? "nothing yet" : "—")
+                // Both are blank; only one of them is waiting for something —
+                // and a group with no photos in it is waiting for nothing at
+                // all, so it must not be drawn as work outstanding.
+                let groupHasPhotos = (counts[group.id] ?? 0) > 0
+                let pending = named && groupHasPhotos
+                Text(pending ? "nothing yet" : "—")
                     .font(.caption2)
-                    .foregroundStyle(named ? Color.orange : Color.secondary.opacity(0.5))
+                    .foregroundStyle(pending ? Color.orange : Color.secondary.opacity(0.5))
                     .frame(width: cellWidth, alignment: .leading)
                     .padding(.horizontal, 8)
                     .padding(.vertical, 7)
                     .background {
                         shape.strokeBorder(
-                            Color.secondary.opacity(named ? 0.3 : 0.15),
+                            Color.secondary.opacity(pending ? 0.3 : 0.15),
                             style: StrokeStyle(lineWidth: 1, dash: [3, 3])
                         )
                     }
@@ -1042,6 +1046,10 @@ struct StorageMatrix: View {
 
     private func cellTint(_ entry: AppStore.GroupPlaceCell) -> Color {
         if entry.damaged > 0 { return .red }
+        // Everything here is on its way out. Not a warning — the copies that
+        // replace it are already proven — so it recedes rather than alarms, and
+        // it is deliberately not the colour that means "arriving".
+        if entry.leaving >= entry.photos && entry.leaving > 0 { return .secondary }
         if entry.waiting > 0 { return .orange }
         return .green
     }
@@ -1070,9 +1078,10 @@ struct StorageMatrix: View {
             return "\(place.name) is not set up to hold copies yet."
         }
         guard let entry, !entry.isEmpty else {
-            return named
+            guard named else { return "\(group.label) does not use \(place.name)." }
+            return (counts[group.id] ?? 0) > 0
                 ? "\(group.label) is meant to be kept on \(place.name), and none of it is there yet."
-                : "\(group.label) does not use \(place.name)."
+                : "\(group.label) is meant to be kept on \(place.name), but it has no photos in it yet, so there is nothing to copy."
         }
         let total = counts[group.id] ?? 0
         var parts = ["\(entry.photos.formatted()) of \(group.label)'s \(total.formatted()) photos are on \(place.name)."]
@@ -1082,6 +1091,11 @@ struct StorageMatrix: View {
                 : "\(entry.insideDownload.formatted()) of them are counted inside Google download files rather than copied out.")
         }
         if entry.waiting > 0 { parts.append("\(entry.waiting.formatted()) still to copy.") }
+        if entry.leaving > 0 {
+            parts.append(entry.leaving >= entry.photos
+                ? "All of them are queued to be deleted from here, because \(group.label) no longer keeps its photos on \(place.name). The copies that replace them have been read back and matched."
+                : "\(entry.leaving.formatted()) of them are queued to be deleted from here, now that the copies replacing them have been read back and matched.")
+        }
         if entry.damaged > 0 { parts.append("\(entry.damaged.formatted()) no longer match what was imported.") }
         return parts.joined(separator: " ")
     }
@@ -1090,6 +1104,7 @@ struct StorageMatrix: View {
         HStack(spacing: 12) {
             key(.green, "held and read back")
             key(.orange, "still copying")
+            key(.secondary, "being removed from here")
             key(.red, "no longer matching")
             HStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 3)

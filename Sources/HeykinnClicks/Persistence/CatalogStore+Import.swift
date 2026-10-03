@@ -58,3 +58,33 @@ extension CatalogStore {
         )
     }
 }
+
+/// Library items the app has proven are a second pointer at one archive photo.
+extension CatalogStore {
+
+    func fetchApplePhotosDuplicateIDs() throws -> Set<String> {
+        Set(try database.query("SELECT local_identifier FROM apple_photos_duplicates;") { row in
+            row.text(0)
+        })
+    }
+
+    func recordApplePhotosDuplicate(localIdentifier: String, holder: UUID, at date: Date) throws {
+        try database.run("""
+        INSERT INTO apple_photos_duplicates (local_identifier, holder_asset_id, noticed_at)
+        VALUES (?,?,?)
+        ON CONFLICT(local_identifier) DO UPDATE SET
+            holder_asset_id = excluded.holder_asset_id,
+            noticed_at = excluded.noticed_at;
+        """, [.text(localIdentifier), .text(holder.uuidString), .date(date)])
+    }
+
+    /// Forgets notes about photos the archive no longer holds, so a duplicate
+    /// of something since removed is looked at properly again rather than
+    /// skipped on the strength of a comparison with a photo that is gone.
+    func pruneApplePhotosDuplicates() throws {
+        try database.run("""
+        DELETE FROM apple_photos_duplicates
+         WHERE holder_asset_id NOT IN (SELECT id FROM assets);
+        """)
+    }
+}

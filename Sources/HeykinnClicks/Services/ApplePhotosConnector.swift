@@ -39,6 +39,27 @@ enum ApplePhotosConnectionState: Equatable {
     case connected
 }
 
+/// Hears from macOS when the Photos library changes — a photo taken, imported,
+/// edited, or arriving from iCloud — so the app can look for new ones without
+/// being asked. macOS only tells a running app; what happens while the app is
+/// closed is caught up at the next launch.
+final class PhotosLibraryWatcher: NSObject, PHPhotoLibraryChangeObserver {
+    /// Called on an arbitrary queue, once per change notification.
+    var onChange: (@Sendable () -> Void)?
+
+    func start() {
+        PHPhotoLibrary.shared().register(self)
+    }
+
+    deinit {
+        PHPhotoLibrary.shared().unregisterChangeObserver(self)
+    }
+
+    func photoLibraryDidChange(_ changeInstance: PHChange) {
+        onChange?()
+    }
+}
+
 final class ApplePhotosVerifier: CloudDomainVerifier {
     let domain: ResidencyDomain = .appleCloud
 
@@ -102,12 +123,17 @@ final class ApplePhotosVerifier: CloudDomainVerifier {
 
     /// Enumerates the library from metadata only. Cheap enough to run over a
     /// whole library: no resource is read, so nothing downloads.
-    static func indexLibrary() -> [LibraryItem] {
+    ///
+    /// `known` are identifiers the catalog already holds. Skipping them before
+    /// reading their resources is what makes re-running this on every library
+    /// change affordable: a library of fifty thousand photos costs one
+    /// identifier lookup each, not a resource enumeration each.
+    static func indexLibrary(skipping known: Set<String> = []) -> [LibraryItem] {
         guard connectionState == .connected else { return [] }
         let fetch = PHAsset.fetchAssets(with: nil)
         var items: [LibraryItem] = []
-        items.reserveCapacity(fetch.count)
         fetch.enumerateObjects { asset, _, _ in
+            if known.contains(asset.localIdentifier) { return }
             let resources = PHAssetResource.assetResources(for: asset)
             let primary = resources.first { $0.type == .photo || $0.type == .video }
                 ?? resources.first

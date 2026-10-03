@@ -58,6 +58,10 @@ enum CatalogScope {
         // Explicitly a cache — "losing it costs time and nothing else" — and
         // keyed by local path, which makes it meaningless elsewhere twice over.
         "import_scan_memo",
+        // About *this* Mac's Photos library, whose identifiers mean nothing on
+        // another device. Carrying it would have one Mac skipping photos on the
+        // strength of another Mac's library.
+        "apple_photos_duplicates",
     ]
 
     /// Append-only, and therefore free: the union of two devices' logs is a

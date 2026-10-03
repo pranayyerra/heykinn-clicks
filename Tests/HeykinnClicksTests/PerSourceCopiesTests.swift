@@ -238,6 +238,194 @@ final class PerSourceCopiesTests: XCTestCase {
         )
     }
 
+    /// Releasing the same departed device twice must not queue the removal
+    /// twice. Every sync calls this, so a standing duplicate grew the queue on
+    /// each pass and wrote the same "queued for removal" line into the log
+    /// every ten seconds.
+    func testADepartedDeviceIsOnlyQueuedForRemovalOnce() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let keep = try makeDirectory("keep")
+        store.registerHostDeviceTarget(at: keep, name: "Keeper")
+        let keepID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans",
+            desiredCopies: 1, destinationTargetIDs: [keepID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let subject = try XCTUnwrap(store.assets.first)
+        let group = try XCTUnwrap(store.storageGroups.first { $0.label == "Scans" })
+        store.syncDrive(keepID)
+        try await waitUntil("the sync to drain") { !store.isSyncing }
+
+        // A drive the source no longer names, still holding a copy it was once
+        // given — the state this cleanup exists for.
+        let departed = UUID()
+        let db = try catalog(at: directory)
+        try db.upsertTarget(ReplicationTarget(
+            id: departed, name: "Departed", kind: .externalVolume, volumeUUID: nil,
+            markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
+            lastKnownPath: "/Volumes/Departed", configuredPath: nil,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+        ))
+        try db.upsertReplicaState(TargetReplicaState(
+            assetID: subject.id, targetID: departed,
+            state: .present, relativePath: "ab/photo.jpg", lastVerifiedAt: Date()
+        ))
+        store.loadAll()
+        XCTAssertEqual(store.storageGroupsByID[group.id]?.destinationTargetIDs, [keepID])
+
+        let first = store.releaseDepartedDevices(for: group.id)
+        let second = store.releaseDepartedDevices(for: group.id)
+
+        XCTAssertEqual(first, 1, "the copy on the departed device is queued for removal")
+        XCTAssertEqual(second, 0, "and asking again queues nothing further")
+        XCTAssertEqual(
+            store.replicationTasks.filter {
+                $0.state == .queued && $0.action == .remove && $0.targetID == departed
+            }.count,
+            1,
+            "one instruction, however many times the sync asks"
+        )
+    }
+
+    /// Copies queued for deletion must read as leaving, not arriving. The grid
+    /// tinted them the same colour as work in progress, so a drive the app was
+    /// about to erase photos from looked like a drive still receiving them.
+    func testCopiesQueuedForRemovalAreCountedAsLeavingRatherThanArriving() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let keep = try makeDirectory("keep")
+        store.registerHostDeviceTarget(at: keep, name: "Keeper")
+        let keepID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans",
+            desiredCopies: 1, destinationTargetIDs: [keepID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let subject = try XCTUnwrap(store.assets.first)
+        let group = try XCTUnwrap(store.storageGroups.first { $0.label == "Scans" })
+        store.syncDrive(keepID)
+        try await waitUntil("the sync to drain") { !store.isSyncing }
+
+        let departed = UUID()
+        let db = try catalog(at: directory)
+        try db.upsertTarget(ReplicationTarget(
+            id: departed, name: "Departed", kind: .externalVolume, volumeUUID: nil,
+            markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
+            lastKnownPath: "/Volumes/Departed", configuredPath: nil,
+            replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+        ))
+        try db.upsertReplicaState(TargetReplicaState(
+            assetID: subject.id, targetID: departed,
+            state: .present, relativePath: "ab/photo.jpg", lastVerifiedAt: Date()
+        ))
+        store.loadAll()
+        let before = try XCTUnwrap(store.cell(group: group.id, place: departed))
+        XCTAssertEqual(before.leaving, 0, "nothing is queued for removal yet")
+
+        store.releaseDepartedDevices(for: group.id)
+
+        let after = try XCTUnwrap(store.cell(group: group.id, place: departed))
+        XCTAssertEqual(after.photos, 1, "the copy is still on the drive until the sync runs")
+        XCTAssertEqual(after.leaving, 1, "and it is counted as on its way out")
+        XCTAssertEqual(after.waiting, 0, "never as something still arriving")
+    }
+
+    /// A group holding no photos is not waiting for anything, so its cells must
+    /// not read as work outstanding.
+    func testAGroupWithNoPhotosHasNoCellsWaitingOnIt() throws {
+        let store = try makeStore()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        let group = try XCTUnwrap(store.createStorageGroup(label: "Nothing in here"))
+        store.applyStorageGroupSettings(group, desiredCopies: 1, destinations: [driveID])
+
+        XCTAssertNil(
+            store.cell(group: group.id, place: driveID),
+            "an empty group owes the drive nothing, so there is no cell of work to draw"
+        )
+    }
+
+    /// A Live Photo's movie half must be kept exactly as well as its still.
+    /// Filed into a group of its own it followed that group's copy count, so
+    /// the motion of a photo kept on two drives was being kept on one — and the
+    /// grid could not show it, because motion halves are not counted as photos.
+    func testALivePhotoMotionHalfIsKeptWithItsStill() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans",
+            desiredCopies: 2, destinationTargetIDs: [driveID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let still = try XCTUnwrap(store.assets.first)
+        let keeper = try XCTUnwrap(store.storageGroups.first { $0.label == "Scans" })
+
+        // A movie half filed somewhere else entirely, the way the fallback did.
+        let db = try catalog(at: directory)
+        let stray = try XCTUnwrap(store.createStorageGroup(label: "Somewhere else"))
+        store.applyStorageGroupSettings(stray, desiredCopies: 1, destinations: [driveID])
+        var motion = asset()
+        motion.kind = .video
+        motion.originalFilename = "photo.mov"
+        motion.livePhotoStillID = still.id
+        try db.upsertAsset(motion)
+        try db.assignStorageGroup(stray.id, toAssets: [motion.id])
+        store.loadAll()
+        XCTAssertEqual(store.desiredCopies(forAsset: motion.id), 1, "kept worse than its still")
+
+        XCTAssertEqual(store.reuniteLivePhotoHalves(), 1)
+
+        XCTAssertEqual(store.storageGroupIDByAsset[motion.id], keeper.id)
+        XCTAssertEqual(
+            store.desiredCopies(forAsset: motion.id),
+            store.desiredCopies(forAsset: still.id),
+            "the movie is kept exactly as well as the photograph it belongs to"
+        )
+    }
+
+    /// And it is a no-op once everything already sits with its still, so it can
+    /// run at every launch without churning records.
+    func testReunitingIsANoOpWhenHalvesAlreadySitWithTheirStill() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans", desiredCopies: 2, destinationTargetIDs: [driveID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let still = try XCTUnwrap(store.assets.first)
+
+        var motion = asset()
+        motion.kind = .video
+        motion.originalFilename = "photo.mov"
+        motion.livePhotoStillID = still.id
+        let db = try catalog(at: directory)
+        try db.upsertAsset(motion)
+        try db.assignSource(try XCTUnwrap(store.sourceIDByAsset[still.id]), toAssets: [motion.id])
+        try db.assignStorageGroup(
+            try XCTUnwrap(store.storageGroupIDByAsset[still.id]), toAssets: [motion.id]
+        )
+        store.loadAll()
+
+        XCTAssertEqual(store.reuniteLivePhotoHalves(), 0)
+    }
+
     // MARK: - Fixtures
 
     private func asset() -> Asset {

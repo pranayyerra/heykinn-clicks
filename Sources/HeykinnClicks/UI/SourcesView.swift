@@ -53,12 +53,18 @@ struct SourcesView: View {
         case .unavailable:
             state = .blocked("Not available on this device")
         case .connected:
+            // Duplicates count as in the archive, because they are: each is the
+            // same file as a photo already matched, proven by hashing it.
+            // Leaving them out of this sum left the row reading "4,717 of 4,730"
+            // in orange — the app telling someone 13 photographs were unprotected
+            // when it held every one of them.
+            let accountedFor = indexed + store.applePhotosDuplicateCount
             if library == 0 {
                 state = .nothingFound
-            } else if indexed >= library {
-                state = .allIn(count: indexed)
+            } else if accountedFor >= library {
+                state = .allIn(count: library)
             } else {
-                state = .partlyIn(inArchive: indexed, total: library)
+                state = .partlyIn(inArchive: accountedFor, total: library)
             }
         }
         return PhotoSource(
@@ -373,6 +379,23 @@ struct SourcesView: View {
                 Button("Look through the library") { store.indexApplePhotos() }
                     .buttonStyle(.borderedProminent)
                     .disabled(store.isIndexingApplePhotos)
+            } else if !store.importFromApplePhotos {
+                // With the automation on, new photos are found without being
+                // asked; with it off, this is the only way to look again.
+                Button("Look for new photos") { store.indexApplePhotos() }
+                    .disabled(store.isIndexingApplePhotos)
+            }
+
+            if store.importFromApplePhotos {
+                // The setting that does this lives on another screen, so the
+                // screen showing the work says whether it is still running.
+                Label(
+                    "New photos are brought in on their own, while the app is open.",
+                    systemImage: "sparkles"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             }
 
             if awaiting > 0 {
@@ -418,6 +441,15 @@ struct SourcesView: View {
         }
         if awaiting > 0 {
             return "\(awaiting.formatted()) of \(indexed.formatted()) still to bring into the archive."
+        }
+        // "All N photos from the library" over a header reading "N of M" is the
+        // app contradicting itself on one screen. The remainder is not missing:
+        // each one turned out to be the same photograph as one already matched,
+        // which the archive holds — so it is named rather than left as a gap
+        // the reader has to assume the worst about.
+        let duplicates = store.applePhotosDuplicateCount
+        if duplicates > 0 {
+            return "All \(indexed.formatted()) photos the app matched are in the archive. The other \(duplicates.formatted()) in the library are the same photographs again, which it already holds."
         }
         return "All \(indexed.formatted()) photos from the library are in the archive."
     }
