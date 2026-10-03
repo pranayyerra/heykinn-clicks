@@ -576,6 +576,7 @@ final class AppStore: ObservableObject {
         // destinations from, and before the first placement audit, which needs
         // every asset to know which source it answers to.
         backfillSources()
+        mergeDuplicateSources()
         reuniteLivePhotoHalves()
         // After the backfill, so a source it has just created is linked in the
         // same launch rather than the next one.
@@ -4171,6 +4172,83 @@ final class AppStore: ObservableObject {
         return moves.count
     }
 
+    /// Folds a second source for one place back into the first.
+    ///
+    /// The backfill used to mint a new source every time it met photos with
+    /// none, so one Photos library became two "Photos library" sources — and
+    /// the newer one's copy count was read off wherever the new bytes happened
+    /// to sit rather than from what the user had already chosen for that
+    /// library. Photos were then kept to a standard nobody picked, under a name
+    /// indistinguishable from the one that was.
+    ///
+    /// The oldest source wins, because it is the one the user has actually
+    /// configured. Records only: no file is copied or deleted here, though the
+    /// placement audit afterwards queues whatever the restored policy owes.
+    @discardableResult
+    func mergeDuplicateSources() -> Int {
+        var byKey: [String: [PhotoArchiveSource]] = [:]
+        for source in sources {
+            let identity = source.exportSetID ?? source.originPath ?? source.label
+            byKey["\(source.kind.rawValue)|\(identity)", default: []].append(source)
+        }
+        let duplicated = byKey.values.filter { $0.count > 1 }
+        guard !duplicated.isEmpty else { return 0 }
+
+        var movedAssets = 0
+        var mergedSources = 0
+        var labels: Set<String> = []
+        do {
+            try catalog.transaction {
+                for var group in duplicated {
+                    group.sort { $0.addedAt < $1.addedAt }
+                    let keeper = group[0]
+                    let keeperGroupID = assets.first {
+                        sourceIDByAsset[$0.id] == keeper.id && storageGroupIDByAsset[$0.id] != nil
+                    }.flatMap { storageGroupIDByAsset[$0.id] }
+
+                    for duplicate in group.dropFirst() {
+                        let moving = assets
+                            .filter { sourceIDByAsset[$0.id] == duplicate.id }
+                            .map(\.id)
+                        let strandedGroups = Set(moving.compactMap { storageGroupIDByAsset[$0] })
+                            .subtracting(keeperGroupID.map { [$0] } ?? [])
+
+                        if !moving.isEmpty {
+                            try catalog.assignSource(keeper.id, toAssets: moving)
+                            if let keeperGroupID {
+                                try catalog.assignStorageGroup(keeperGroupID, toAssets: moving)
+                            }
+                            movedAssets += moving.count
+                        }
+                        try catalog.deleteSource(id: duplicate.id)
+                        // Only groups this merge emptied, and only once their
+                        // photos are somewhere else — deleting a group leaves
+                        // its photos pointing at nothing.
+                        for strandedID in strandedGroups where keeperGroupID != nil {
+                            let stillThere = assets.contains {
+                                storageGroupIDByAsset[$0.id] == strandedID && !moving.contains($0.id)
+                            }
+                            if !stillThere { try catalog.deleteStorageGroup(id: strandedID) }
+                        }
+                        mergedSources += 1
+                        labels.insert(keeper.label)
+                    }
+                }
+            }
+        } catch {
+            lastError = "Could not merge the duplicate sources: \(error.localizedDescription)"
+            return 0
+        }
+
+        audit(
+            .policy,
+            "Folded \(Formatters.count(mergedSources, "duplicate source")) back into the one this archive already had (\(labels.sorted().joined(separator: ", "))), and moved \(Formatters.count(movedAssets, "photo")) onto the settings you chose for it. Nothing was copied or deleted; copies the restored settings ask for are queued."
+        )
+        loadAll()
+        auditPlacement()
+        return mergedSources
+    }
+
     func backfillSources() {
         let unassigned: [UUID]
         do {
@@ -4271,11 +4349,44 @@ final class AppStore: ObservableObject {
         guard !groups.isEmpty else { return }
         let fallback = newSourceDefaults
         var created = 0
+        var joined = 0
+
+        // Sources this archive already has, under the key the classification
+        // above would give them. Without this the backfill minted a second
+        // source every time it met photos of a kind it had already recorded —
+        // and photos from one Photos library ended up in two "Photos library"
+        // sources with different copy counts, the newer one set from wherever
+        // the bytes happened to be rather than from what the user had already
+        // asked for that library.
+        var existingByKey: [String: UUID] = [:]
+        for source in sources {
+            let identity = source.exportSetID ?? source.originPath ?? source.label
+            existingByKey["\(source.kind.rawValue)|\(identity)"] = source.id
+        }
+        /// The group an existing source's photos are already kept by.
+        func groupOfSource(_ sourceID: UUID) -> UUID? {
+            for asset in assets where sourceIDByAsset[asset.id] == sourceID {
+                if let groupID = storageGroupIDByAsset[asset.id] { return groupID }
+            }
+            return nil
+        }
 
         do {
             try catalog.transaction {
                 for key in groups.keys.sorted() {
                     guard let group = groups[key] else { continue }
+
+                    // Already known: these photos belong to it, and to whatever
+                    // the user has since set for it. A new source here would
+                    // quietly give them a policy nobody chose.
+                    if let existing = existingByKey[key] {
+                        try catalog.assignSource(existing, toAssets: group.assetIDs)
+                        if let groupID = groupOfSource(existing) {
+                            try catalog.assignStorageGroup(groupID, toAssets: group.assetIDs)
+                        }
+                        joined += group.assetIDs.count
+                        continue
+                    }
 
                     // Where these photos actually are. Present copies only —
                     // a queued copy is an intention, and adopting intentions as
@@ -4319,6 +4430,7 @@ final class AppStore: ObservableObject {
                     try catalog.upsertStorageGroup(storage)
                     try catalog.assignSource(source.id, toAssets: group.assetIDs)
                     try catalog.assignStorageGroup(storage.id, toAssets: group.assetIDs)
+                    existingByKey[key] = source.id
                     created += 1
                 }
             }
@@ -4327,10 +4439,19 @@ final class AppStore: ObservableObject {
             return
         }
 
-        audit(
-            .system,
-            "Recorded \(Formatters.count(created, "source")) for \(Formatters.count(unassigned.count, "photo")) added before the app tracked where they came from. Each is set to keep its photos on the devices already holding them — nothing was moved, and you can change any of it under Keep safe."
-        )
+        var said: [String] = []
+        if created > 0 {
+            said.append("recorded \(Formatters.count(created, "source")) set to keep its photos on the devices already holding them")
+        }
+        if joined > 0 {
+            said.append("filed \(Formatters.count(joined, "photo")) under a source this archive already had, so they are kept exactly as you asked for that source")
+        }
+        if !said.isEmpty {
+            audit(
+                .system,
+                "Placed \(Formatters.count(unassigned.count, "photo")) that had no source recorded: " + said.joined(separator: "; ") + ". Nothing was moved, and you can change any of it under Keep safe."
+            )
+        }
         loadAll()
     }
 
