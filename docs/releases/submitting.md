@@ -4,6 +4,11 @@ Everything here needs an Apple account, which is why it is written down rather
 than scripted. The parts that can be scripted already are:
 `Packaging/bundle.sh --appstore` and `Packaging/make-pkg.sh`.
 
+This document covers production submission specifically. For where a build
+sits before that — dev, TestFlight/pre-release staging, production — see
+[`release-channels.md`](release-channels.md). The build submitted here should
+already be the one that went through staging, not a fresh one.
+
 Work through it in this order; each step needs the one before it.
 
 ---
