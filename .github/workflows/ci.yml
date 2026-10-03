@@ -23,7 +23,11 @@ jobs:
       # Pin to the newest available Xcode on the runner rather than whatever
       # the image defaults to, since this project tracks a recent toolchain.
       - name: Select latest Xcode
-        run: sudo xcode-select -s /Applications/Xcode_$(ls /Applications | grep -oE 'Xcode_[0-9.]+' | sed 's/Xcode_//' | sort -V | tail -1).app
+        run: |
+          set -euo pipefail
+          latest=$(ls -d /Applications/Xcode*.app | sort -V | tail -1)
+          echo "Selecting $latest"
+          sudo xcode-select -s "$latest"
 
       - name: Swift version
         run: swift --version
