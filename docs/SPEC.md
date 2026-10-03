@@ -132,7 +132,7 @@ Where to look:
 |---|---|
 | The formats a second implementation must match | [`SPEC-hashing.md`](SPEC-hashing.md), [`SPEC-format.md`](SPEC-format.md) — normative, with conformance vectors |
 | Why the multi-device design is what it is | [`ARCHITECTURE-DECISIONS.md`](ARCHITECTURE-DECISIONS.md), [`MULTI_DEVICE_STATE.md`](MULTI_DEVICE_STATE.md) |
-| What is still undecided | [`OPEN-DECISIONS.md`](OPEN-DECISIONS.md) |
+| What is still undecided | [`ARCHITECTURE-DECISIONS.md`](ARCHITECTURE-DECISIONS.md) §Still open |
 | Everything already built | The code, and the test named beside each rule below |
 
 **Stack.** SwiftUI, Swift concurrency, raw `sqlite3` — no third-party
