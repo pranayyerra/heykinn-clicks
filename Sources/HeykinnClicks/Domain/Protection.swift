@@ -43,6 +43,20 @@ enum ProtectionState: String, Codable, Hashable {
         }
     }
 
+    /// How bad this is, for picking the worse of two states — the verdict a
+    /// Live Photo takes from whichever of its two files is worse off.
+    var severity: Int {
+        switch self {
+        case .notApplicable: return 0
+        case .fullyReplicated: return 1
+        case .verificationOverdue: return 2
+        case .awaitingFirstCheck: return 3
+        case .replicatedToOneDrive: return 4
+        case .stagedOnly: return 5
+        case .driftDetected: return 6
+        }
+    }
+
     /// Whether the redundancy policy is met. A copy awaiting its first check
     /// still counts — the copies exist; checking confirms they are undamaged.
     var isHealthy: Bool { verdict.isSatisfied || verdict == .notLocal }
