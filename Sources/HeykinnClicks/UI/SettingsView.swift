@@ -36,7 +36,7 @@ private struct AutomationSettings: View {
                 ExplainedToggle(
                     "Bring Photos-library originals into the archive",
                     isOn: $store.importFromApplePhotos,
-                    help: "Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your drives like anything else; ones already held byte-for-byte are merged rather than stored twice. Connect and watch progress under Add photos."
+                    help: "Photos the app has found in the Photos library are visible but protected by nothing until it holds their bytes. With this on, their originals are copied in and queued for your drives like anything else; ones already held byte-for-byte are merged rather than stored twice. New photos are picked up automatically while the app is open, including full-size originals that have to be downloaded from iCloud first. Connect and watch progress under Add photos."
                 )
             }
             Section {

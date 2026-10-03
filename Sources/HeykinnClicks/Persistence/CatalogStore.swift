@@ -421,6 +421,22 @@ final class CatalogStore {
             content_hash TEXT NOT NULL,
             seen_at REAL NOT NULL
         );
+
+        -- Photos-library items proven, by hashing, to be the same file as a
+        -- photo the archive already holds under another library item.
+        --
+        -- One archive photo carries one `provider_local_id`, so the second
+        -- library item pointing at it has nowhere to be recorded. Without this
+        -- it was simply forgotten, and every scan rediscovered it, fetched its
+        -- original from iCloud again, found the bytes already held, dropped it
+        -- again — for ever. Written only after the bytes have been compared,
+        -- never on a guess, because the cost of being wrong is a photograph
+        -- the app decides it need not protect.
+        CREATE TABLE IF NOT EXISTS apple_photos_duplicates (
+            local_identifier TEXT PRIMARY KEY,
+            holder_asset_id TEXT NOT NULL,
+            noticed_at REAL NOT NULL
+        );
         """)
     }
 

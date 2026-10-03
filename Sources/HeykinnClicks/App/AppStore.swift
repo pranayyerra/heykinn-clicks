@@ -576,6 +576,7 @@ final class AppStore: ObservableObject {
         // destinations from, and before the first placement audit, which needs
         // every asset to know which source it answers to.
         backfillSources()
+        reuniteLivePhotoHalves()
         // After the backfill, so a source it has just created is linked in the
         // same launch rather than the next one.
         linkExportSourcesToTheirSets()
@@ -611,13 +612,19 @@ final class AppStore: ObservableObject {
                 // every ten seconds. Nothing here depends on the answer having
                 // already arrived.
                 await self?.rescanTargetsOffMainThread()
+                // Bringing Photos originals in comes before syncing: a sync is
+                // due every tick while anything is queued, so if it went first
+                // it would always be running when the import looked, and the
+                // import — the thing that gives queued photos a file to copy —
+                // would never get a turn.
+                self?.indexApplePhotosIfDue()
+                self?.importFromApplePhotosIfDue()
                 // Content can move under a target that never unmounts, and
                 // connect-time checks never fire for one left plugged in.
                 self?.startDueSyncsIfIdle()
                 self?.checkAnchorsIfDue()
                 self?.runRotPatrolIfDue()
                 self?.checkApplePhotosPresenceIfDue()
-                self?.importFromApplePhotosIfDue()
             }
         }
     }
@@ -1998,13 +2005,26 @@ final class AppStore: ObservableObject {
                 waiting[groupID, default: [:]][replica.targetID, default: 0] += 1
             }
         }
+        // Queued removals, on the same axes. A removal is only ever queued
+        // after the copies that replace it have been read back and matched, so
+        // this is a settled intention rather than a risk — but it is a deletion,
+        // and a screen about keeping photos must not draw one as an arrival.
+        var leaving: [UUID: [UUID: Int]] = [:]
+        for task in replicationTasks
+        where task.state == .queued && task.action == .remove {
+            guard let groupID = storageGroupIDByAsset[task.assetID],
+                  assetsByID[task.assetID]?.isLivePhotoMotion == false
+            else { continue }
+            leaving[groupID, default: [:]][task.targetID, default: 0] += 1
+        }
         groupPlaceCells = storageGroups.reduce(into: [:]) { result, group in
             var row: [UUID: GroupPlaceCell] = [:]
             for (targetID, entry) in perTarget[group.id] ?? [:] {
                 row[targetID] = GroupPlaceCell(
                     photos: entry.0.count, insideDownload: entry.1,
                     waiting: waiting[group.id]?[targetID] ?? 0,
-                    damaged: broken[group.id]?[targetID] ?? 0
+                    damaged: broken[group.id]?[targetID] ?? 0,
+                    leaving: leaving[group.id]?[targetID] ?? 0
                 )
             }
             // A device that is owed photos but holds none of them yet has no
@@ -2123,6 +2143,14 @@ final class AppStore: ObservableObject {
         var insideDownload: Int
         var waiting: Int
         var damaged: Int
+        /// Copies here that are queued to be deleted, because the group no
+        /// longer keeps its photos on this device.
+        ///
+        /// Counted apart from everything else because it is the one number on
+        /// this screen that describes photos going *away*. Folded in with
+        /// `waiting` it drew as "still copying" — the grid telling somebody
+        /// files were arriving on a drive they were about to be erased from.
+        var leaving: Int = 0
 
         var isEmpty: Bool { photos == 0 && waiting == 0 && damaged == 0 }
     }
@@ -4014,6 +4042,11 @@ final class AppStore: ObservableObject {
         guard let group = storageGroupsByID[groupID] else { return 0 }
         let named = Set(group.destinationTargetIDs)
         var queued = 0
+        let alreadyQueuedRemoval = Set(
+            replicationTasks
+                .filter { $0.state == .queued && $0.action == .remove }
+                .map { "\($0.assetID)|\($0.targetID)" }
+        )
 
         do {
             try catalog.transaction {
@@ -4028,6 +4061,10 @@ final class AppStore: ObservableObject {
                     for replica in replicas
                     where !named.contains(replica.targetID) && replica.state == .present {
                         guard !ReplicationService.isArchiveBacked(replica) else { continue }
+                        // A removal already waiting is the same instruction.
+                        // Queuing it again every sync grew the queue and wrote
+                        // the same line into the log each time.
+                        guard !alreadyQueuedRemoval.contains("\(asset.id)|\(replica.targetID)") else { continue }
                         try enqueueTask(
                             assetID: asset.id, targetID: replica.targetID, action: .remove
                         )
@@ -4064,6 +4101,60 @@ final class AppStore: ObservableObject {
     /// copies already are. The archive already answered the question, and the
     /// backfill's only job is to write that answer down. A source whose assets
     /// live nowhere yet gets the defaults, because there is nothing to read.
+    /// Puts every Live Photo's motion half back with its still.
+    ///
+    /// Halves imported before the backfill knew to follow the still were filed
+    /// by the "imported before the app kept records" fallback: a source of
+    /// their own, with its own copy count. That is not a tidiness problem. A
+    /// still kept on two drives whose movie was kept on one is a photograph
+    /// half of which is one drive failure from gone, and the screen that exists
+    /// to show how many copies things have could not show it, because motion
+    /// halves are not counted as photos.
+    ///
+    /// Moves records only. No file is copied or deleted here; the placement
+    /// audit queues whatever the correct group turns out to owe.
+    @discardableResult
+    func reuniteLivePhotoHalves() -> Int {
+        var moves: [(motion: UUID, source: UUID?, group: UUID?)] = []
+        for asset in assets {
+            guard let stillID = asset.livePhotoStillID else { continue }
+            let wantedSource = sourceIDByAsset[stillID]
+            let wantedGroup = storageGroupIDByAsset[stillID]
+            // Nothing to move a half to if the still itself is unplaced; the
+            // backfill will place the pair together.
+            guard wantedSource != nil || wantedGroup != nil else { continue }
+            let sourceWrong = wantedSource != nil && sourceIDByAsset[asset.id] != wantedSource
+            let groupWrong = wantedGroup != nil && storageGroupIDByAsset[asset.id] != wantedGroup
+            guard sourceWrong || groupWrong else { continue }
+            moves.append((asset.id, sourceWrong ? wantedSource : nil, groupWrong ? wantedGroup : nil))
+        }
+        guard !moves.isEmpty else { return 0 }
+
+        do {
+            try catalog.transaction {
+                for move in moves {
+                    if let source = move.source {
+                        try catalog.assignSource(source, toAssets: [move.motion])
+                    }
+                    if let group = move.group {
+                        try catalog.assignStorageGroup(group, toAssets: [move.motion])
+                    }
+                }
+            }
+        } catch {
+            lastError = "Could not put Live Photo motion back with its still: \(error.localizedDescription)"
+            return 0
+        }
+        audit(
+            .policy,
+            "Put \(Formatters.count(moves.count, "Live Photo motion half", "Live Photo motion halves")) back with the photo it belongs to, so each is kept on the devices and to the number of copies that photo asks for. Nothing was copied or deleted."
+        )
+        loadAll()
+        // The movie halves may now owe copies the weaker group never asked for.
+        auditPlacement()
+        return moves.count
+    }
+
     func backfillSources() {
         let unassigned: [UUID]
         do {
@@ -4092,14 +4183,30 @@ final class AppStore: ObservableObject {
         }
 
         var groups: [String: (kind: PhotoArchiveSource.Kind, label: String, path: String?, setID: String?, assetIDs: [UUID])] = [:]
+        /// Motion half → the still it belongs to, for halves whose still has
+        /// already been placed. They take its source and its group.
+        var followTheirStill: [(motion: UUID, still: UUID)] = []
         for asset in assets where pending.contains(asset.id) {
-            let batch = asset.importBatchID.flatMap { batchByID[$0] }
+            // The movie half of a Live Photo is part of the photograph, not a
+            // find of its own. Classified on its own it matched nothing — no
+            // provider id, no import batch — and fell through to the
+            // "imported before the app kept records" fallback, which filed it
+            // apart from its still and under a different copy count. The
+            // motion of a photo kept twice was being kept once.
+            if let stillID = asset.livePhotoStillID, sourceIDByAsset[stillID] != nil {
+                followTheirStill.append((motion: asset.id, still: stillID))
+                continue
+            }
+            // Both halves unplaced: classify by the still, so the pair lands
+            // together rather than the movie falling through on its own.
+            let subject = asset.livePhotoStillID.flatMap { assetsByID[$0] } ?? asset
+            let batch = subject.importBatchID.flatMap { batchByID[$0] }
             let kind: PhotoArchiveSource.Kind
             let label: String
             let path: String?
             var setID: String?
 
-            if asset.providerLocalID != nil {
+            if subject.providerLocalID != nil {
                 kind = .applePhotos
                 label = "Photos library"
                 path = nil
@@ -4125,6 +4232,24 @@ final class AppStore: ObservableObject {
             // source however many batches its parts arrived in.
             let key = "\(kind.rawValue)|\(setID ?? path ?? label)"
             groups[key, default: (kind, label, path, setID, [])].assetIDs.append(asset.id)
+        }
+
+        if !followTheirStill.isEmpty {
+            do {
+                try catalog.transaction {
+                    for pair in followTheirStill {
+                        if let sourceID = sourceIDByAsset[pair.still] {
+                            try catalog.assignSource(sourceID, toAssets: [pair.motion])
+                        }
+                        if let groupID = storageGroupIDByAsset[pair.still] {
+                            try catalog.assignStorageGroup(groupID, toAssets: [pair.motion])
+                        }
+                    }
+                }
+                loadAll()
+            } catch {
+                lastError = "Could not keep Live Photo motion with its still: \(error.localizedDescription)"
+            }
         }
 
         guard !groups.isEmpty else { return }
@@ -6197,7 +6322,7 @@ final class AppStore: ObservableObject {
     /// existing, not on the moment the target appeared.
     func startDueSyncsIfIdle() {
         guard autoSyncOnConnect, !isSyncing, !isImporting, !isTransferringParts else { return }
-        guard takeoutActivity == nil else { return }
+        guard takeoutActivity == nil, !isImportingFromApplePhotos else { return }
         for (targetID, _) in reachablePaths {
             guard !isBusy(targetID), !isQuiescing(targetID) else { continue }
             guard backlogCount(for: targetID) > 0 else { continue }
@@ -7034,7 +7159,10 @@ final class AppStore: ObservableObject {
     /// the devices its source named", and that is answerable exactly from the
     /// replica rows with no tree, no false positives, and no disk access.
     func placementShortfall() -> [PlacementPlanner.Placement] {
-        let localAssets = assets.filter { $0.residency == .local }
+        // A photo only indexed from the Photos library has no file here yet.
+        // Queuing copies of it would queue work with nothing to copy from; it
+        // is queued the moment its original arrives.
+        let localAssets = assets.filter { $0.residency == .local && !$0.isIndexedOnly }
         guard !localAssets.isEmpty, !targets.isEmpty else { return [] }
 
         var holders: [UUID: Set<UUID>] = [:]
@@ -7081,6 +7209,7 @@ final class AppStore: ObservableObject {
         // source is not short of anything, and the rows saying otherwise would
         // otherwise sit there for good.
         withdrawUnnamedPlacements()
+        withdrawCopiesOfPhotosNotYetHeld()
 
         let plans = placementShortfall()
         guard !plans.isEmpty else { return 0 }
@@ -7283,6 +7412,40 @@ final class AppStore: ObservableObject {
         )
         loadAll()
         return staleReplicas.count
+    }
+
+    /// Takes back queued copies of photos the archive only knows about from the
+    /// Photos library and does not yet hold the bytes of.
+    ///
+    /// Such a copy has nothing to copy from, so it can only sit in the queue —
+    /// and used to stop a sync at the first one it met. It is queued again,
+    /// properly, when the original is brought in. Removes no file anywhere.
+    @discardableResult
+    func withdrawCopiesOfPhotosNotYetHeld() -> Int {
+        let unheld = Set(assets.filter(\.isIndexedOnly).map(\.id))
+        guard !unheld.isEmpty else { return 0 }
+        let tasks = replicationTasks.filter {
+            $0.state == .queued && $0.action == .copy && unheld.contains($0.assetID)
+        }
+        let replicas = replicaStates.filter { $0.state == .pending && unheld.contains($0.assetID) }
+        guard !tasks.isEmpty || !replicas.isEmpty else { return 0 }
+        do {
+            try catalog.transaction {
+                for replica in replicas {
+                    try catalog.deleteReplicaState(assetID: replica.assetID, targetID: replica.targetID)
+                }
+                for task in tasks { try catalog.deleteReplicationTask(id: task.id) }
+            }
+        } catch {
+            lastError = "Could not withdraw copies of photos not yet in the archive: \(error.localizedDescription)"
+            return 0
+        }
+        audit(
+            .replication,
+            "Withdrew \(Formatters.count(tasks.count, "queued copy", "queued copies")) of photos still in the Photos library — the archive does not hold their files yet, so there was nothing to copy. They are queued as each original is brought in."
+        )
+        loadAll()
+        return tasks.count
     }
 
     /// How far the archive is from what its sources ask for: how many photos
@@ -7577,10 +7740,12 @@ final class AppStore: ObservableObject {
                     lastError = "Sync persistence failed: \(error.localizedDescription)"
                 }
                 if result.isTransient {
-                    // Every following task needs the same missing source, so
-                    // there is nothing to gain by grinding through them.
+                    // This one has no file to copy from right now. Others may,
+                    // so it is passed over and stays queued rather than ending
+                    // the run: one photo with no source used to stop thousands
+                    // of ready ones behind it.
                     interruptionReason = "no drive holding the source files is connected"
-                    break
+                    continue
                 }
                 if result.task.state == .completed { completed += 1 } else { failed += 1 }
                 syncProgress?.completedTasks = completed
@@ -7790,7 +7955,7 @@ final class AppStore: ObservableObject {
     /// The verifier seam, populated as connectors come alive. Everything that
     /// asks about cloud presence goes through this — never straight to a
     /// provider — so nothing can bypass the refuse-to-guess default.
-    private(set) var cloudVerifiers = CloudVerifierRegistry.unconnected
+    var cloudVerifiers = CloudVerifierRegistry.unconnected
     @Published private(set) var applePhotosState: ApplePhotosConnectionState = .notDetermined
     /// Whether the connected Photos library syncs to iCloud. PhotoKit cannot
     /// report this, so it is asked once and stored as topology — a statement
@@ -7813,6 +7978,12 @@ final class AppStore: ObservableObject {
         didSet { defaults.set(importFromApplePhotos, forKey: "importFromApplePhotos") }
     }
     @Published private(set) var applePhotosLibraryCount = 0
+    /// Library items that are the same photograph as one the app has already
+    /// matched. Counted afresh by every index run — a duplicate never takes a
+    /// provider link, so it is never skipped as already-seen — which is what
+    /// makes it safe to state on screen rather than inferring it from the gap
+    /// between two totals, where a photo taken a second ago looks the same.
+    @Published private(set) var applePhotosDuplicateCount = 0
     @Published private(set) var isCheckingApplePhotos = false
     @Published private(set) var lastApplePhotosCheckSummary: String?
 
@@ -7822,11 +7993,78 @@ final class AppStore: ObservableObject {
     /// fact and must not be dressed up as a cloud one.
     var applePhotosResidency: ResidencyDomain { iCloudPhotosEnabled == true ? .appleCloud : .local }
 
+    /// Reading the library off the main thread, before the catalog merge that
+    /// `isIndexingApplePhotos` covers. Separate so a second request in that gap
+    /// is refused rather than read twice.
+    private var isReadingApplePhotosLibrary = false
+    /// Set by the library watcher and at launch; cleared when a look happens.
+    /// Starts true so a photo added while the app was closed is caught up.
+    private var applePhotosLibraryChanged = true
+    private var lastApplePhotosIndex: Date?
+    private var applePhotosWatcher: PhotosLibraryWatcher?
+    private var applePhotosChangeDebounce: Task<Void, Never>?
+    /// Safety net for a change notification that never arrived.
+    private static let applePhotosIndexFallbackInterval: TimeInterval = 30 * 60
+    /// A burst of changes (an import, iCloud catching up) is one look, after it settles.
+    private static let applePhotosChangeSettleDelay: Duration = .seconds(5)
+
+    /// Photos brought in since the backlog was last empty, across chained
+    /// batches — what the summary notification reports.
+    private var applePhotosRunTotal = 0
+    /// A run at least this big earns one quiet notification when it finishes.
+    var applePhotosSummaryThreshold = 50
+    /// How the summary is delivered. A seam so tests do not post to the real
+    /// notification centre.
+    var postApplePhotosSummary: (String, String) -> Void = { QuietNotifier.post(title: $0, body: $1) }
+
+    private func startWatchingApplePhotos() {
+        guard runsBackgroundWork, applePhotosWatcher == nil else { return }
+        let watcher = PhotosLibraryWatcher()
+        watcher.onChange = { [weak self] in
+            Task { @MainActor in self?.applePhotosLibraryDidChange() }
+        }
+        watcher.start()
+        applePhotosWatcher = watcher
+    }
+
+    private func applePhotosLibraryDidChange() {
+        applePhotosLibraryChanged = true
+        applePhotosChangeDebounce?.cancel()
+        applePhotosChangeDebounce = Task { [weak self] in
+            try? await Task.sleep(for: Self.applePhotosChangeSettleDelay)
+            guard !Task.isCancelled else { return }
+            self?.indexApplePhotosIfDue()
+        }
+    }
+
+    /// Looks for photos the archive has not seen, when the user has asked for
+    /// Photos originals to be brought in and nothing else is busy. A change
+    /// notification, a launch, or the slow fallback makes a look due; a busy
+    /// moment only postpones it, because the flag stays set until one happens.
+    ///
+    /// Waits for the iCloud Photos answer: it decides how every new row is
+    /// labelled, and a guess would be recorded as fact.
+    func indexApplePhotosIfDue(now: Date = Date()) {
+        guard importFromApplePhotos, applePhotosState == .connected else { return }
+        guard iCloudPhotosEnabled != nil else { return }
+        guard !isSyncing, !isImporting, !isTransferringParts, takeoutActivity == nil else { return }
+        guard !isIndexingApplePhotos, !isReadingApplePhotosLibrary, !isImportingFromApplePhotos else { return }
+        let fallbackDue = lastApplePhotosIndex.map {
+            now.timeIntervalSince($0) >= Self.applePhotosIndexFallbackInterval
+        } ?? true
+        guard applePhotosLibraryChanged || fallbackDue else { return }
+        applePhotosLibraryChanged = false
+        lastApplePhotosIndex = now
+        indexApplePhotos()
+    }
+
     func refreshApplePhotosState() {
         applePhotosState = ApplePhotosVerifier.connectionState
         applePhotosLibraryCount = ApplePhotosVerifier.libraryAssetCount
+        applePhotosDuplicateCount = ((try? catalog.fetchApplePhotosDuplicateIDs()) ?? []).count
         if applePhotosState == .connected {
             cloudVerifiers.verifiers[.appleCloud] = ApplePhotosVerifier()
+            startWatchingApplePhotos()
         } else {
             cloudVerifiers.verifiers[.appleCloud] = UnconnectedCloudVerifier(domain: .appleCloud)
         }
@@ -7964,52 +8202,125 @@ final class AppStore: ObservableObject {
     /// never seen become rows of their own, carrying the provider's identifier
     /// so re-indexing updates them instead of duplicating them.
     func indexApplePhotos() {
-        guard applePhotosState == .connected, !isIndexingApplePhotos else { return }
-        mergeLibraryIndex(ApplePhotosVerifier.indexLibrary())
+        guard applePhotosState == .connected, !isIndexingApplePhotos, !isReadingApplePhotosLibrary else { return }
+        isReadingApplePhotosLibrary = true
+        // Photos already in the catalog are skipped while reading, and the
+        // read happens off the main thread: this now runs unprompted, and a
+        // large library must not stutter the window each time it changes.
+        // Items already matched, plus ones proven to be a second pointer at a
+        // photo already held. Both are answered questions; re-reading them is
+        // how the app ended up fetching the same originals from iCloud on
+        // every scan.
+        let known = Set(assets.compactMap(\.providerLocalID))
+            .union((try? catalog.fetchApplePhotosDuplicateIDs()) ?? [])
+        Task { [weak self] in
+            let (items, total) = await Task.detached {
+                (ApplePhotosVerifier.indexLibrary(skipping: known), ApplePhotosVerifier.libraryAssetCount)
+            }.value
+            guard let self else { return }
+            self.isReadingApplePhotosLibrary = false
+            self.mergeLibraryIndex(items, libraryCount: total)
+        }
     }
 
     /// The catalog side of indexing, kept apart from PhotoKit so the
     /// link-or-add decision can be exercised against a library that does not
     /// exist on this device.
-    func mergeLibraryIndex(_ items: [ApplePhotosVerifier.LibraryItem]) {
+    ///
+    /// `libraryCount` is how many photos the library holds, when `items` is
+    /// only the ones not seen before; omitted, `items` is taken to be all of it.
+    func mergeLibraryIndex(_ items: [ApplePhotosVerifier.LibraryItem], libraryCount: Int? = nil) {
         guard !isIndexingApplePhotos else { return }
-        applePhotosLibraryCount = items.count
+        let total = libraryCount ?? items.count
+        applePhotosLibraryCount = total
+        // Ahead of the early return below. Once every duplicate is written down
+        // a scan finds nothing new — which is the settled state, and the state
+        // in which the screen most needs this number to explain the difference
+        // between the library's total and the matched one.
+        applePhotosDuplicateCount = ((try? catalog.fetchApplePhotosDuplicateIDs()) ?? []).count
         guard !items.isEmpty else {
-            lastApplePhotosCheckSummary = CloudVerificationError.libraryUnavailable(.appleCloud).localizedDescription
+            // Nothing new is the ordinary result of looking again; only an
+            // empty library is worth saying anything about.
+            if total == 0 {
+                lastApplePhotosCheckSummary = CloudVerificationError.libraryUnavailable(.appleCloud).localizedDescription
+            }
             return
         }
         isIndexingApplePhotos = true
 
         // Index the archive by capture second so matching is a lookup rather
         // than a scan of everything for every library item.
+        //
+        // Photos already linked to a library item are indexed too, separately.
+        // Leaving them out is what made a second library item of the same
+        // photograph look like a photograph the archive had never seen: it was
+        // added as a row of its own, the import then found its bytes were
+        // already held and deleted it again, and the next scan added it back.
         var localByInstant: [Int: [Asset]] = [:]
-        for asset in assets where asset.providerLocalID == nil {
+        var matchedByInstant: [Int: [Asset]] = [:]
+        for asset in assets {
             guard let date = asset.captureDate else { continue }
-            localByInstant[Int(date.timeIntervalSince1970), default: []].append(asset)
+            let instant = Int(date.timeIntervalSince1970)
+            if asset.providerLocalID == nil {
+                localByInstant[instant, default: []].append(asset)
+            } else {
+                matchedByInstant[instant, default: []].append(asset)
+            }
         }
-        let alreadyIndexed = Set(assets.compactMap(\.providerLocalID))
+        // Matched already, or proven by hashing to be a second pointer at a
+        // photo already held. Checked here as well as when the library is read,
+        // so the decision holds however this is reached.
+        // A note about a photo the archive no longer holds would suppress a
+        // library item whose twin is gone — the one way this record could cost
+        // somebody a photograph rather than save a download.
+        try? catalog.pruneApplePhotosDuplicates()
+        let provenDuplicates = (try? catalog.fetchApplePhotosDuplicateIDs()) ?? []
+        let alreadyIndexed = Set(assets.compactMap(\.providerLocalID)).union(provenDuplicates)
 
         var linked = 0
         var added = 0
+        /// Library items that turned out to be the same photograph as one
+        /// already matched. The archive holds the picture; what it cannot hold
+        /// is two provider links on one row, so these are counted and reported
+        /// rather than silently overwriting the first link — which is how the
+        /// library count and the matched count drifted apart with nothing on
+        /// screen admitting it.
+        var sameAsAlreadyMatched = 0
+        /// Assets claimed during this run. `assets` is a snapshot taken before
+        /// the transaction, so without this a second item matching the same
+        /// archive photo would read it as unclaimed and take the link.
+        var claimed: Set<UUID> = []
         let residency = applePhotosResidency
         let now = Date()
         do {
             try catalog.transaction {
                 for item in items where !alreadyIndexed.contains(item.localIdentifier) {
                     var nearby: [Asset] = []
+                    var nearbyMatched: [Asset] = []
                     if let captureDate = item.captureDate {
                         let instant = Int(captureDate.timeIntervalSince1970)
                         for offset in -1...1 {
                             nearby.append(contentsOf: localByInstant[instant + offset] ?? [])
+                            nearbyMatched.append(contentsOf: matchedByInstant[instant + offset] ?? [])
                         }
                     }
-                    let unclaimed = nearby.filter { $0.providerLocalID == nil }
+                    let unclaimed = nearby.filter { $0.providerLocalID == nil && !claimed.contains($0.id) }
                     if var match = ApplePhotosVerifier.counterpart(for: item, among: unclaimed) {
                         // Same photograph, different file. A link, not presence.
                         match.providerLocalID = item.localIdentifier
                         match.updatedDate = now
                         try catalog.upsertAsset(match)
+                        claimed.insert(match.id)
                         linked += 1
+                        continue
+                    }
+                    // Its counterpart is already spoken for — by an earlier item
+                    // in this run, or by one from a previous run — so this is the
+                    // same photograph a second time. The archive holds it.
+                    // Adding a row would claim it is short a photo it is not.
+                    let spokenFor = nearbyMatched + nearby.filter { claimed.contains($0.id) }
+                    if ApplePhotosVerifier.counterpart(for: item, among: spokenFor) != nil {
+                        sameAsAlreadyMatched += 1
                         continue
                     }
                     try catalog.upsertAsset(Asset(
@@ -8050,10 +8361,18 @@ final class AppStore: ObservableObject {
             return
         }
         let label = residency == .appleCloud ? "Apple Cloud" : "this device's Photos library"
-        audit(.system, "Apple Photos index: \(Formatters.count(items.count, "item")) in the library — \(added) added as \(label), \(linked) linked to photos the archive already holds.")
+        applePhotosDuplicateCount = sameAsAlreadyMatched + provenDuplicates.count
+        var indexParts = ["\(added) added as \(label)", "\(linked) linked to photos the archive already holds"]
+        if sameAsAlreadyMatched > 0 {
+            indexParts.append("\(sameAsAlreadyMatched) the same photograph as one already matched, so not counted twice")
+        }
+        audit(.system, "Apple Photos index: \(Formatters.count(total, "item")) in the library, \(Formatters.count(items.count, "item")) new to the archive — " + indexParts.joined(separator: ", ") + ".")
         lastApplePhotosCheckSummary = "\(added.formatted()) added · \(linked.formatted()) linked"
         isIndexingApplePhotos = false
         loadAll()
+        // Straight on to copying what was just found, rather than waiting for
+        // the next tick: the point is that a new photo needs no attention.
+        importFromApplePhotosIfDue()
     }
 
     /// How much of the archive no longer needs its iCloud copy, on the evidence
@@ -8144,6 +8463,9 @@ final class AppStore: ObservableObject {
     /// to stop depending on.
     func importOriginalsFromApplePhotos(limit: Int = 25) {
         guard !isImportingFromApplePhotos else { return }
+        // Copies queued earlier for photos whose files are only now arriving
+        // would be duplicated by the queuing below.
+        withdrawCopiesOfPhotosNotYetHeld()
         let batch = Array(applePhotosAwaitingImport.prefix(limit))
         guard !batch.isEmpty else { return }
         isImportingFromApplePhotos = true
@@ -8211,6 +8533,7 @@ final class AppStore: ObservableObject {
         var stagedCount = 0
         var mergedCount = 0
         var pairedCount = 0
+        var duplicatesProven = 0
         let now = Date()
         do {
             try catalog.transaction {
@@ -8239,7 +8562,21 @@ final class AppStore: ObservableObject {
                             existing.presence.appleCloud = iCloudPhotosEnabled == true
                             existing.cloudPresenceEvidence = iCloudPhotosEnabled == true ? .verified : .none
                             existing.cloudPresenceCheckedAt = now
-                            existing.providerLocalID = outcome.indexed.providerLocalID
+                            // Only if nothing has claimed it. Overwriting would
+                            // drop the first library item's link without trace
+                            // and leave the matched count quietly short.
+                            if existing.providerLocalID == nil {
+                                existing.providerLocalID = outcome.indexed.providerLocalID
+                            } else if let duplicate = outcome.indexed.providerLocalID,
+                                      duplicate != existing.providerLocalID {
+                                // Two library items, one file, proven by its
+                                // bytes. Written down so the next scan knows
+                                // without fetching the original again.
+                                try catalog.recordApplePhotosDuplicate(
+                                    localIdentifier: duplicate, holder: existing.id, at: now
+                                )
+                                duplicatesProven += 1
+                            }
                             existing.updatedDate = now
                             try catalog.upsertAsset(existing)
                             stillAsset = existing
@@ -8306,6 +8643,9 @@ final class AppStore: ObservableObject {
         var parts: [String] = []
         if stagedCount > 0 { parts.append("\(stagedCount) copied in and queued for replication") }
         if mergedCount > 0 { parts.append("\(mergedCount) already held byte-for-byte, merged") }
+        if duplicatesProven > 0 {
+            parts.append("\(duplicatesProven) the same file as a photo already matched, noted so they are not fetched again")
+        }
         if pairedCount > 0 { parts.append("\(Formatters.count(pairedCount, "Live Photo motion half", "Live Photo motion halves")) kept with their still") }
         if failures > 0 { parts.append("\(Formatters.count(failures, "original")) could not be exported") }
         if !parts.isEmpty {
@@ -8316,10 +8656,29 @@ final class AppStore: ObservableObject {
             ? "\(remaining.formatted()) still to bring in"
             : "all indexed photos are in the archive"
         isImportingFromApplePhotos = false
+        if duplicatesProven > 0 {
+            applePhotosDuplicateCount += duplicatesProven
+        }
         loadAll()
-        // Straight on to the next batch while there is a backlog: the job is
-        // finite and the user is waiting for it, not for a schedule.
-        if remaining > 0 { importFromApplePhotosIfDue() }
+        applePhotosRunTotal += stagedCount + mergedCount
+        // A batch that moved nothing means what is left keeps failing; going
+        // straight round again would only spin. The periodic tick retries.
+        let madeProgress = stagedCount + mergedCount > 0
+        if remaining > 0 && madeProgress {
+            // Straight on to the next batch while there is a backlog: the job
+            // is finite and the user is waiting for it, not for a schedule.
+            importFromApplePhotosIfDue()
+        } else {
+            // The run is over. Somebody who was not watching a large one
+            // finish gets told once, quietly, rather than per photo.
+            if applePhotosRunTotal >= applePhotosSummaryThreshold {
+                postApplePhotosSummary(
+                    "Photos brought into your archive",
+                    "\(Formatters.count(applePhotosRunTotal, "photo")) from your Photos library are now in the archive and queued for your drives."
+                )
+            }
+            applePhotosRunTotal = 0
+        }
     }
 
     /// Content the archive has just taken on owes `desiredCopies` copies, on
@@ -8414,12 +8773,21 @@ final class AppStore: ObservableObject {
     private func recordApplePhotosResults(_ results: [UUID: Bool], requested: Int) {
         var found = 0
         var absent = 0
+        /// Photos whose answer is different from the one already recorded.
+        /// The scan runs every ten minutes for as long as the app is open, so
+        /// logging each pass regardless wrote the same sentence into the log
+        /// six times an hour for ever and buried everything that mattered.
+        var changed = 0
         do {
             try catalog.transaction {
                 for (id, present) in results {
                     guard var asset = assetsByID[id] else { continue }
+                    let evidence: CloudPresenceEvidence = present ? .verified : .none
+                    if asset.presence.appleCloud != present || asset.cloudPresenceEvidence != evidence {
+                        changed += 1
+                    }
                     asset.presence.appleCloud = present
-                    asset.cloudPresenceEvidence = present ? .verified : .none
+                    asset.cloudPresenceEvidence = evidence
                     asset.cloudPresenceCheckedAt = Date()
                     asset.updatedDate = Date()
                     try catalog.upsertAsset(asset)
@@ -8440,7 +8808,10 @@ final class AppStore: ObservableObject {
             line += " — recorded as verified presence; the Local coexistence is listed under Keep safe until migrated or reclaimed"
         }
         if unsearchable > 0 { line += "; \(unsearchable) had no capture date to search by" }
-        audit(.system, line + ".")
+        // The log is a record of what changed, not a heartbeat. A pass that
+        // confirmed what was already known says so in the status line below,
+        // where somebody looking for it will find it.
+        if changed > 0 { audit(.system, line + ".") }
         lastApplePhotosCheckSummary = results.isEmpty && unsearchable > 0
             ? "originals not on this device — nothing could be compared"
             : "\(found) found · \(absent) not found"
