@@ -570,6 +570,50 @@ final class PerSourceCopiesTests: XCTestCase {
         XCTAssertEqual(store.mergeDuplicateSources(), 0, "and running again finds nothing to do")
     }
 
+    /// The row subtitle on Keep safe reads "N photos · M short of two copies".
+    /// Both numbers must count the same thing. They did not: the total excluded
+    /// Live Photo movie halves and the shortfall counted them, so a group whose
+    /// every photograph was where it belonged still announced "25 short" — 25
+    /// movie halves, against a total of 21,117 that did not include one of them.
+    func testAGroupWhoseEveryPhotographIsKeptReportsNothingShort() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans", desiredCopies: 1, destinationTargetIDs: [driveID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let still = try XCTUnwrap(store.assets.first)
+        store.syncDrive(driveID)
+        try await waitUntil("the sync to drain") { !store.isSyncing }
+        let group = try XCTUnwrap(store.storageGroups.first { $0.label == "Scans" })
+
+        // Its movie half, held nowhere yet — the shape that produced the 25.
+        var motion = asset()
+        motion.kind = .video
+        motion.originalFilename = "photo.mov"
+        motion.livePhotoStillID = still.id
+        let db = try catalog(at: directory)
+        try db.upsertAsset(motion)
+        try db.assignSource(try XCTUnwrap(store.sourceIDByAsset[still.id]), toAssets: [motion.id])
+        try db.assignStorageGroup(group.id, toAssets: [motion.id])
+        store.loadAll()
+
+        XCTAssertEqual(store.photoCountByStorageGroup[group.id], 1, "one photograph in the group")
+        XCTAssertEqual(
+            store.photosShortByGroup[group.id] ?? 0, 1,
+            "and it is short, because the movie that belongs to it is — counted once, not twice"
+        )
+        XCTAssertLessThanOrEqual(
+            store.photosShortByGroup[group.id] ?? 0,
+            store.photoCountByStorageGroup[group.id] ?? 0,
+            "the two numbers on one row are drawn from one population"
+        )
+    }
+
     // MARK: - Fixtures
 
     private func asset() -> Asset {

@@ -169,25 +169,25 @@ final class ProjectionParityTests: XCTestCase {
         }
     }
 
-    // MARK: - Where they deliberately differ
+    // MARK: - The divergence that stage two closed
 
-    /// `photosShortByGroup` counts rows, not photographs, so a Live Photo whose
-    /// movie is short is counted twice — and a group can report more short than
-    /// it holds. The projection counts photographs, so it cannot. Pinned here
-    /// because stage two moves `StorageMatrix` onto the projection and this is
-    /// the number that will visibly change when it does.
-    func testPerGroupShortfallDivergesAndTheProjectionIsTheSaneOne() throws {
+    /// `photosShortByGroup` used to count rows, so a Live Photo short in both
+    /// halves was counted twice and a group could report more short than it
+    /// held — which is what put "25 short of two copies" beside a total of
+    /// 21,117 when not one photograph in that group was short. It counts
+    /// photographs now, so the row's two numbers are drawn from one population.
+    func testAGroupsShortfallCountsPhotographsAndNeverExceedsItsOwnTotal() throws {
         let store = try awkwardStore()
         let group = try XCTUnwrap(store.storageGroups.first)
 
-        let old = store.photosShortByGroup[group.id] ?? 0
-        let new = store.projection.shortByGroup[group.id] ?? 0
-        let total = store.projection.countByGroup[group.id] ?? 0
+        let short = store.photosShortByGroup[group.id] ?? 0
+        let total = store.photoCountByStorageGroup[group.id] ?? 0
 
-        XCTAssertLessThanOrEqual(new, total, "the projection never reports more short than held")
-        XCTAssertGreaterThan(
-            old, new,
-            "the row-counted number is the larger one, because halves are counted on their own"
+        XCTAssertEqual(short, store.projection.shortByGroup[group.id] ?? 0)
+        XCTAssertLessThanOrEqual(short, total, "a group cannot be short more than it holds")
+        XCTAssertEqual(
+            short, 3,
+            "the misplaced one, the one held nowhere, and the Live Photo — counted once"
         )
     }
 

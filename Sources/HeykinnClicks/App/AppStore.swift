@@ -2062,16 +2062,13 @@ final class AppStore: ObservableObject {
         let failures: [ArchiveLoss] = targets.map { .device($0.id) }
         lossByFailure = LossProjection.projectAll(failures, in: lossInput)
 
-        photoCountByStorageGroup = assets.reduce(into: [:]) { counts, asset in
-            guard !asset.isLivePhotoMotion, let groupID = storageGroupIDByAsset[asset.id] else { return }
-            counts[groupID, default: 0] += 1
-        }
-        photosShortByGroup = protectionStates.reduce(into: [:]) { counts, entry in
-            guard entry.value.verdict == .shortOfPolicy,
-                  let groupID = storageGroupIDByAsset[entry.key]
-            else { return }
-            counts[groupID, default: 0] += 1
-        }
+        photoCountByStorageGroup = projection.countByGroup
+        // Counted per photograph, not per row. Counting rows put Live Photo
+        // movie halves in the numerator of a row whose total excludes them, so
+        // "21,117 photos · 25 short of two copies" was 25 movie halves and no
+        // photographs at all — the same fault as the headline that read
+        // "25 of 23,121", in the one place it had not been fixed.
+        photosShortByGroup = projection.shortByGroup
 
         storageFormByGroup = storageGroups.reduce(into: [:]) { result, group in
             let within = inside[group.id] ?? []
@@ -2648,48 +2645,11 @@ final class AppStore: ObservableObject {
             destinations: { [self] in placementPolicy(forAsset: $0).destinations }
         )
 
-        // Off the verdicts just computed, in the one pass that has them.
-        // Residency is judged over every row, motion halves included: the
-        // question is whether the archive holds anything anywhere else, and a
-        // half that had wandered would still be somewhere else.
-        var counted = 0
-        var verdictCounts: [ProtectionState: Int] = [:]
-        var seenResidency: ResidencyDomain?
-        var uniformResidency = true
-        var indexedFromProvider = 0
-        // A Live Photo is one photograph made of two files, and it is only as
-        // safe as the worse-off half. Counting the still alone reported a
-        // photograph as fully kept while the movie that belongs to it was one
-        // copy short — which is the same under-reporting that let those halves
-        // drift onto a weaker policy unnoticed in the first place.
-        var worstHalfByStill: [UUID: ProtectionState] = [:]
-        for asset in assets where asset.isLivePhotoMotion {
-            guard let stillID = asset.livePhotoStillID,
-                  let state = protectionStates[asset.id], state != .notApplicable
-            else { continue }
-            if let seen = worstHalfByStill[stillID], seen.severity >= state.severity { continue }
-            worstHalfByStill[stillID] = state
-        }
-        for asset in assets {
-            if let seenResidency, seenResidency != asset.residency { uniformResidency = false }
-            if seenResidency == nil { seenResidency = asset.residency }
-            if asset.providerLocalID != nil { indexedFromProvider += 1 }
-            guard !asset.isLivePhotoMotion else { continue }
-            counted += 1
-            guard let own = protectionStates[asset.id], own != .notApplicable else { continue }
-            let half = worstHalfByStill[asset.id]
-            let state = (half?.severity ?? -1) > own.severity ? (half ?? own) : own
-            verdictCounts[state, default: 0] += 1
-        }
-        countedPhotoTotal = counted
-        protectionCountsByState = verdictCounts
-        residencyIsUniform = uniformResidency
-        applePhotosIndexedCount = indexedFromProvider
-
-        // D17, stage one: derived once, published, and read by nothing yet.
-        // The properties above keep their own implementations so the two can be
-        // compared — `ProjectionParityTests` asserts they agree, which is what
-        // makes "no number may change" checkable when the screens move over.
+        // D17, stage two: the counts below are read off the projection rather
+        // than worked out a second time here. What was a pair of loads-bearing
+        // loops — one folding each Live Photo's worse half into its still, one
+        // tallying verdicts against a total that excluded motion halves — is now
+        // a definition that lives in one place and is tested without a database.
         //
         // The policy is resolved per group here rather than per asset: reaching
         // it through `placementPolicy(forAsset:)` rebuilt a dictionary of every
@@ -2709,6 +2669,24 @@ final class AppStore: ObservableObject {
                 wants: fallback.desiredCopies, named: Set(fallback.destinationTargetIDs)
             )
         ))
+        countedPhotoTotal = projection.counted
+        protectionCountsByState = projection.verdictCounts
+
+        // Residency uniformity and the provider-indexed tally are judged over
+        // every row, motion halves included — the question is whether the
+        // archive holds anything anywhere else, and a half that had wandered
+        // would still be somewhere else. They are not facts about photographs,
+        // so they are not the projection's to answer.
+        var seenResidency: ResidencyDomain?
+        var uniformResidency = true
+        var indexedFromProvider = 0
+        for asset in assets {
+            if let seenResidency, seenResidency != asset.residency { uniformResidency = false }
+            if seenResidency == nil { seenResidency = asset.residency }
+            if asset.providerLocalID != nil { indexedFromProvider += 1 }
+        }
+        residencyIsUniform = uniformResidency
+        applePhotosIndexedCount = indexedFromProvider
 
         var breakdowns: [UUID: DriveContentBreakdown] = [:]
         for replica in replicaStates {
@@ -2781,7 +2759,7 @@ final class AppStore: ObservableObject {
                 outsideAnArchive.insert(replica.assetID)
             }
         }
-        copyCoverage = placesHolding.values.reduce(into: [:]) { $0[$1.count, default: 0] += 1 }
+        copyCoverage = projection.copyCoverage
         archiveBackedOnlyCount = placesHolding.keys.filter { !outsideAnArchive.contains($0) }.count
         // Off the same pass: a photo held by exactly one place is a photo that
         // place would take with it.
@@ -7626,16 +7604,15 @@ final class AppStore: ObservableObject {
     var safetyFacts: SafetyAnswer.Facts {
         let fewest = leastCopiesAnywhere
         return SafetyAnswer.Facts(
-            photos: countedPhotoTotal,
+            // Every field counts photographs, and the projection is where a
+            // photograph is defined — so the numerator cannot be drawn from a
+            // different population than the total it is quoted against, which
+            // is how "25 of 23,121 photos" came to be said about 25 things the
+            // same sentence does not call photos.
+            photos: projection.counted,
             places: targets.count,
-            // From the per-photograph counts, not the raw per-row states: those
-            // include Live Photo movie halves, which are not counted in
-            // `photos` — so the sentence read "25 of 23,121 photos" about 25
-            // things the same sentence does not call photos.
-            damaged: protectionCountsByState[.driftDetected] ?? 0,
-            short: protectionCountsByState
-                .filter { $0.key.verdict == .shortOfPolicy }
-                .values.reduce(0, +),
+            damaged: projection.damaged,
+            short: projection.short,
             copiesShort: placementShortfallSummary.copiesShort,
             fewestPlaces: fewest,
             photosAtFewest: fewest.flatMap { copyCoverage[$0] } ?? 0,
