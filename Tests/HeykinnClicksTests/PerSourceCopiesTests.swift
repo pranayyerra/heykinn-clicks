@@ -614,6 +614,58 @@ final class PerSourceCopiesTests: XCTestCase {
         )
     }
 
+    /// The mark beside the headline on Keep safe is drawn from `damaged`, and
+    /// the sentence from the same facts — so they must count the same thing.
+    /// Counting rows, a Live Photo with both halves rotting was two; the
+    /// sentence beside it called it one, and the panel contradicted itself.
+    func testABothHalvesRottenLivePhotoIsOneDamagedPhotograph() async throws {
+        let (store, directory) = try makeStoreReturningDirectory()
+        let mount = try makeDirectory("target")
+        store.registerHostDeviceTarget(at: mount, name: "Drive")
+        let driveID = try XCTUnwrap(store.targets.first?.id, store.lastError ?? "")
+        let folder = try makeDirectory("scans")
+        try Data("a photo".utf8).write(to: folder.appendingPathComponent("photo.jpg"))
+        store.confirmAddingSource(AppStore.PendingSourceSetup(
+            urls: [folder], label: "Scans", desiredCopies: 1, destinationTargetIDs: [driveID]
+        ))
+        try await waitUntil("the import") { !store.isImporting && store.assets.count == 1 }
+        let still = try XCTUnwrap(store.assets.first)
+        let group = try XCTUnwrap(store.storageGroupIDByAsset[still.id])
+        let source = try XCTUnwrap(store.sourceIDByAsset[still.id])
+
+        var motion = asset()
+        motion.kind = .video
+        motion.originalFilename = "photo.mov"
+        motion.livePhotoStillID = still.id
+        let db = try catalog(at: directory)
+        try db.upsertAsset(motion)
+        try db.assignSource(source, toAssets: [motion.id])
+        try db.assignStorageGroup(group, toAssets: [motion.id])
+        // Both files on the drive, both no longer matching what was imported.
+        for one in [still.id, motion.id] {
+            try db.upsertReplicaState(TargetReplicaState(
+                assetID: one, targetID: driveID, state: .drift,
+                relativePath: "Buckets/aa/\(one).jpg", lastVerifiedAt: nil
+            ))
+        }
+        store.loadAll()
+
+        XCTAssertEqual(store.countedPhotoTotal, 1, "one photograph, two files")
+        XCTAssertEqual(
+            store.safetyFacts.damaged, 1,
+            "and one damaged photograph — not two rotting rows"
+        )
+        XCTAssertLessThanOrEqual(store.safetyFacts.damaged, store.safetyFacts.photos)
+        // The trap this is here to document. A view-local `let` is not reachable
+        // from a test, so this cannot guard `DrivesView` directly — what it can
+        // do is show what counting rows gives, and that it is not the answer the
+        // sentence beside the mark is built from.
+        XCTAssertEqual(
+            store.protectionStates.values.filter { $0 == .driftDetected }.count, 2,
+            "counting rows says two, which is why nothing on screen may count rows"
+        )
+    }
+
     // MARK: - Fixtures
 
     private func asset() -> Asset {
