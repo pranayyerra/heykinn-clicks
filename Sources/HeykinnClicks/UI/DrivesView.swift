@@ -32,12 +32,18 @@ struct DrivesView: View {
     /// separate block underneath it read as a second, unrelated alarm.
     @ViewBuilder
     private var verdict: some View {
-        let damaged = store.protectionStates.values.filter { $0 == .driftDetected }.count
-        let short = store.protectionStates.values.filter { $0.verdict == .shortOfPolicy }.count
+        // The mark has to agree with the sentence beside it: whatever the
+        // headline reports as short, this is not green for. So it is read from
+        // the same facts the headline is built from, rather than counted again
+        // here — counting again is how it came to disagree, because the rows it
+        // counted included Live Photo movie halves and the sentence's did not.
+        // Bound once: `safetyFacts` is not free, and this used to reach it
+        // three times to draw one panel.
+        let facts = store.safetyFacts
+        let damaged = facts.damaged
+        let short = facts.short
         let holders = store.targets.count
         let reachable = store.targets.filter { store.reachablePaths[$0.id] != nil }.count
-        // The mark has to agree with the sentence beside it: whatever the
-        // headline reports as short, this is not green for.
         let thin = (store.leastCopiesAnywhere ?? 2) < 2
         let tint: Color = damaged > 0 ? .red : (short > 0 || thin) ? .orange : .green
 
@@ -48,7 +54,7 @@ struct DrivesView: View {
                     .font(.largeTitle)
                     .foregroundStyle(tint)
                 VStack(alignment: .leading, spacing: 3) {
-                    Text(SafetyAnswer.headline(store.safetyFacts))
+                    Text(SafetyAnswer.headline(facts))
                         .font(.title2.weight(.medium))
                         .fixedSize(horizontal: false, vertical: true)
                     Text(verdictDetail(reachable: reachable, holders: holders))
@@ -462,7 +468,9 @@ struct DrivesView: View {
     /// A holding area with nothing in it is not news.
     @ViewBuilder
     private var stagingFooter: some View {
-        let stagedOnly = store.protectionStates.values.filter { $0 == .stagedOnly }.count
+        // The per-photograph tally, not a fresh count of the rows: a Live Photo
+        // waiting in staging is one photograph, not two.
+        let stagedOnly = store.protectionCountsByState[.stagedOnly] ?? 0
         let reclaimable = store.stagingReclaimPlan
         if store.staging.totalBytes > 0 || stagedOnly > 0 {
         VStack(alignment: .leading, spacing: 4) {
