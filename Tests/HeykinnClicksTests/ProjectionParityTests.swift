@@ -191,6 +191,55 @@ final class ProjectionParityTests: XCTestCase {
         )
     }
 
+    /// How long one `loadAll` takes on an archive the size of a real one.
+    /// Not a budget — a number to look at while the projection is being wired
+    /// in, because it is rebuilt on every load and the easiest way to pay for
+    /// one derivation is to leave the old one running beside it.
+    func testLoadAllCostOnALargeArchive() throws {
+        let directory = try makeDirectory()
+        let catalog = try CatalogStore(
+            databasePath: directory.appendingPathComponent("catalog.sqlite").path
+        )
+        let drive = UUID(), other = UUID()
+        for (id, name) in [(drive, "A"), (other, "B")] {
+            try catalog.upsertTarget(ReplicationTarget(
+                id: id, name: name, kind: .externalVolume, volumeUUID: nil,
+                markerToken: UUID().uuidString, registeredAt: Date(), lastSeenAt: nil,
+                lastKnownPath: "/Volumes/\(name)", configuredPath: nil,
+                replicaRootComponent: ReplicationTarget.defaultReplicaRoot
+            ))
+        }
+        let group = StorageGroup(
+            id: UUID(), label: "Everything", desiredCopies: 2,
+            destinationTargetIDs: [drive, other], createdAt: Date()
+        )
+        try catalog.upsertStorageGroup(group)
+        var ids: [UUID] = []
+        try catalog.transaction {
+            for index in 0..<20_000 {
+                let one = asset("IMG_\(index).jpg")
+                try catalog.upsertAsset(one)
+                ids.append(one.id)
+                for target in [drive, other] {
+                    try catalog.upsertReplicaState(TargetReplicaState(
+                        assetID: one.id, targetID: target, state: .present,
+                        relativePath: "Buckets/aa/\(index).jpg", lastVerifiedAt: Date()
+                    ))
+                }
+            }
+        }
+        try catalog.assignStorageGroup(group.id, toAssets: ids)
+
+        let store = makeStore(in: directory)
+        store.loadAll()
+        let start = Date()
+        store.loadAll()
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertEqual(store.projection.counted, 20_000)
+        print("### loadAll over 20,000 photographs: \(String(format: "%.2f", elapsed))s")
+    }
+
     // MARK: - Invariants
 
     func testTheInvariantsHold() throws {

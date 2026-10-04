@@ -196,6 +196,64 @@ final class ArchiveProjectionTests: XCTestCase {
         XCTAssertEqual(drifted.verdict, .driftDetected)
     }
 
+    /// A movie half whose still has been deleted still needs keeping. Reaching
+    /// it only through its still dropped it from the derivation entirely — the
+    /// one file in the archive nothing would have been watching. The catalog
+    /// does not enforce referential integrity, so this is reachable.
+    func testAMovieHalfWhoseStillIsGoneIsStillJudged() {
+        var orphan = photo("widow.mov", kind: .video)
+        orphan.livePhotoStillID = UUID()          // a still this archive does not hold
+        let input = ArchiveProjection.Input(
+            assets: [orphan],
+            replicaStates: [],
+            groupOfAsset: [orphan.id: group],
+            policyOfGroup: [group: policy(2, [named, alsoNamed])],
+            fallbackPolicy: policy(2, [])
+        )
+
+        let result = ArchiveProjection.project(input)
+
+        XCTAssertEqual(result.counted, 0, "it is not a photograph")
+        XCTAssertEqual(
+            result.verdictByAsset[orphan.id], .stagedOnly,
+            "but it is judged, rather than silently dropped"
+        )
+        XCTAssertEqual(result.copiesShort, 2, "and the copies it owes are counted")
+    }
+
+    /// Copies owed counts files, not photographs — a Live Photo missing both
+    /// halves owes two — and a copy already queued counts as made, because the
+    /// sentence this feeds is about work outstanding.
+    func testCopiesOwedCountsFilesAndDiscountsWorkAlreadyQueued() throws {
+        let (input, byName) = awkwardArchive()
+        let result = ArchiveProjection.project(input)
+
+        // onlyOne: held on `named`, owes one more. misplaced: two copies, both
+        // on drives nobody named, so it owes two. staged/indexed: owe two each.
+        XCTAssertGreaterThan(result.copiesShort, result.short, "copies owed exceed photographs short")
+
+        let queued = photo("arriving.heic")
+        let withPending = ArchiveProjection.Input(
+            assets: [queued],
+            replicaStates: [
+                replica(queued, on: named),
+                TargetReplicaState(
+                    assetID: queued.id, targetID: alsoNamed, state: .pending,
+                    relativePath: nil, lastVerifiedAt: nil
+                ),
+            ],
+            groupOfAsset: [queued.id: group],
+            policyOfGroup: [group: policy(2, [named, alsoNamed])],
+            fallbackPolicy: policy(2, [])
+        )
+
+        XCTAssertEqual(
+            ArchiveProjection.project(withPending).copiesShort, 0,
+            "a copy already on its way is not work still to do"
+        )
+        _ = byName
+    }
+
     // MARK: - Aggregates
 
     func testCoverageCountsPlacesHoldingAPhotographAndSkipsThoseHeldNowhere() throws {
