@@ -2638,14 +2638,7 @@ final class AppStore: ObservableObject {
             targetsByID: targetsByID,
             takeoutArchives: takeoutArchives
         )
-        protectionStates = ProtectionEvaluator.protectionStates(
-            for: assets,
-            replicaStates: replicaStates,
-            desiredCopies: { [self] in desiredCopies(forAsset: $0) },
-            destinations: { [self] in placementPolicy(forAsset: $0).destinations }
-        )
-
-        // D17, stage two: the counts below are read off the projection rather
+        // D17: the counts below are read off the projection rather
         // than worked out a second time here. What was a pair of loads-bearing
         // loops — one folding each Live Photo's worse half into its still, one
         // tallying verdicts against a total that excluded motion halves — is now
@@ -2669,6 +2662,13 @@ final class AppStore: ObservableObject {
                 wants: fallback.desiredCopies, named: Set(fallback.destinationTargetIDs)
             )
         ))
+        // One producer for the verdict. It was computed here and then again
+        // inside the projection — agreeing only because both delegated to
+        // `ProtectionEvaluator`, which is a coincidence of implementation and
+        // not a guarantee. The projection resolves each group's policy once;
+        // this pass reached `placementPolicy(forAsset:)` per asset, and that
+        // rebuilt a dictionary of every group on each call.
+        protectionStates = projection.verdictByAsset
         countedPhotoTotal = projection.counted
         protectionCountsByState = projection.verdictCounts
 
@@ -7613,34 +7613,11 @@ final class AppStore: ObservableObject {
             places: targets.count,
             damaged: projection.damaged,
             short: projection.short,
-            copiesShort: placementShortfallSummary.copiesShort,
+            copiesShort: projection.copiesShort,
             fewestPlaces: fewest,
             photosAtFewest: fewest.flatMap { copyCoverage[$0] } ?? 0,
             unsatisfiable: storageGroups.filter { !$0.isSatisfiable }.map(\.label)
         )
-    }
-
-    var placementShortfallSummary: (assetsShort: Int, copiesShort: Int) {
-        var assetsShort = 0
-        var copiesShort = 0
-        for asset in assets where asset.residency == .local {
-            let policy = placementPolicy(forAsset: asset.id)
-            // Only copies on the devices the source actually named count.
-            // Counting any copy anywhere would report a photo as satisfied
-            // because it happens to sit on a drive nobody asked it to be on.
-            let held = (replicasByAssetID[asset.id] ?? [])
-                .filter {
-                    ($0.state == .present || $0.state == .pending || $0.state == .copying)
-                        && policy.destinations.contains($0.targetID)
-                }
-                .count
-            let missing = policy.copies - held
-            if missing > 0 {
-                assetsShort += 1
-                copiesShort += missing
-            }
-        }
-        return (assetsShort, copiesShort)
     }
 
     func backlogCount(for targetID: UUID) -> Int {

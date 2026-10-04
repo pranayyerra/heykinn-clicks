@@ -44,6 +44,14 @@ enum ArchiveProjection {
         var photographs: [Asset]
         /// Motion halves, keyed by the still they belong to.
         var motionByStill: [UUID: Asset]
+        /// Movie halves pointing at a still this archive no longer holds.
+        ///
+        /// The catalog does not enforce referential integrity (D14), so deleting
+        /// a still leaves its movie behind with a dangling pointer. Such a half
+        /// is real content that still needs keeping, and reaching it only
+        /// through its still would drop it from the derivation entirely — the
+        /// one file in the archive nothing would be watching.
+        var orphanedMotion: [Asset]
         var replicasByAsset: [UUID: [TargetReplicaState]]
         /// Queued removals, as (asset, target) pairs.
         var removalsByAsset: [UUID: Set<UUID>]
@@ -75,21 +83,28 @@ enum ArchiveProjection {
         ) {
             var stills: [Asset] = []
             var motion: [UUID: Asset] = [:]
+            var spare: [Asset] = []
             stills.reserveCapacity(assets.count)
+            var stillIDs: Set<UUID> = []
+            for asset in assets where !asset.isLivePhotoMotion { stillIDs.insert(asset.id) }
             for asset in assets {
-                if asset.isLivePhotoMotion {
-                    // First wins, matching `livePhotoMotionByStillID`: a still
-                    // holds one movie, and a second claiming the same still is a
-                    // pairing fault, not a second photograph.
-                    if let stillID = asset.livePhotoStillID, motion[stillID] == nil {
-                        motion[stillID] = asset
-                    }
-                } else {
+                guard asset.isLivePhotoMotion else {
                     stills.append(asset)
+                    continue
                 }
+                guard let stillID = asset.livePhotoStillID, stillIDs.contains(stillID) else {
+                    spare.append(asset)
+                    continue
+                }
+                // First wins, matching `livePhotoMotionByStillID`: a still holds
+                // one movie, and a second claiming the same still is a pairing
+                // fault, not a second photograph — but it is still a file, so it
+                // is kept rather than discarded.
+                if motion[stillID] == nil { motion[stillID] = asset } else { spare.append(asset) }
             }
             photographs = stills
             motionByStill = motion
+            orphanedMotion = spare
             replicasByAsset = Dictionary(grouping: replicaStates, by: \.assetID)
             removalsByAsset = replicationTasks.reduce(into: [:]) { out, task in
                 guard task.state == .queued, task.action == .remove else { return }
@@ -179,6 +194,15 @@ enum ArchiveProjection {
         /// Photographs in each group that are short, counted per photograph —
         /// so this can never exceed `countByGroup` for the same group.
         var shortByGroup: [UUID: Int] = [:]
+        /// The verdict for every row, stills and movie halves alike, including
+        /// halves whose still is gone. Per row rather than per photograph,
+        /// because a screen showing one file wants that file's own answer.
+        var verdictByAsset: [UUID: ProtectionState] = [:]
+        /// Copies still to make, counting files rather than photographs: a Live
+        /// Photo missing both halves owes two copies. A copy already queued or
+        /// in flight counts as made, because the sentence this feeds is about
+        /// work outstanding, not work finished.
+        var copiesShort: Int = 0
 
         func photograph(_ id: UUID) -> Photograph? {
             indexByID[id].map { photographs[$0] }
@@ -212,10 +236,16 @@ enum ArchiveProjection {
             }
 
             let ownVerdict = verdict(for: still, policy: policy, in: input, now: now)
+            result.verdictByAsset[still.id] = ownVerdict
+            result.copiesShort += copiesOwed(placement)
+
             let halfVerdict = motion.map { half -> ProtectionState in
                 let halfGroup = input.groupOfAsset[half.id]
                 let halfPolicy = halfGroup.flatMap { input.policyOfGroup[$0] } ?? policy
-                return verdict(for: half, policy: halfPolicy, in: input, now: now)
+                let state = verdict(for: half, policy: halfPolicy, in: input, now: now)
+                result.verdictByAsset[half.id] = state
+                if let motionPlacement { result.copiesShort += copiesOwed(motionPlacement) }
+                return state
             }
             let worst = (halfVerdict?.severity ?? -1) > ownVerdict.severity
                 ? (halfVerdict ?? ownVerdict)
@@ -245,7 +275,24 @@ enum ArchiveProjection {
             let held = placement.presentAnywhere.count
             if held > 0 { result.copyCoverage[held, default: 0] += 1 }
         }
+
+        // Halves whose still is gone are judged on their own, so nothing in the
+        // archive goes unwatched because a pointer dangles.
+        for spare in input.orphanedMotion {
+            let policy = input.groupOfAsset[spare.id].flatMap { input.policyOfGroup[$0] }
+                ?? input.fallbackPolicy
+            result.verdictByAsset[spare.id] = verdict(for: spare, policy: policy, in: input, now: now)
+            result.copiesShort += copiesOwed(place(spare, policy: policy, in: input))
+        }
         return result
+    }
+
+    /// Copies this file still owes, counting one already queued or in flight as
+    /// made. The question is what work is outstanding, not what has landed.
+    private static func copiesOwed(_ placement: Placement) -> Int {
+        guard !placement.named.isEmpty else { return 0 }
+        let onTheWay = placement.pending.intersection(placement.named)
+        return max(0, placement.wants - placement.presentOnNamed.count - onTheWay.count)
     }
 
     /// Sorts one file's replica rows onto the axes above.
